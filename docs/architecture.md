@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：M5′（`#` 会话引用）+ 多会话 / cwd / 重试 + 便携 bash / R0+
+> **当前版本**：v0.2.0 — M1′–M5′ + 便携 bash + Claude 对标缺口；M6′ 维持 Android Option C
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -43,7 +43,7 @@
 │  覆盖: PI_LIGHT_PI_BIN                                               │
 └─────────────────────────────────────────────────────────────────────┘
 
-android/   Kotlin Compose（Option C：debug 占位 APK，不内嵌 Pi）
+android/   Kotlin Compose（Option C：debug 占位 APK，不内嵌 Pi；M6′ 维持 C，见下文）
 desktop/   旧 Tauri 树（已标 deprecated，不是文档/实现主路径）
 ```
 
@@ -179,10 +179,27 @@ pi-light-windows-x64/
 | **M4′+** | 管理面全量落地：Skills 开关/状态推导、MCP enabled 字段、记忆内联编辑、模型写回+重启 | ✅ 已合入 |
 | **M5′** | `#` 会话引用最小可用（ZCode 风格引用、chip UI、键盘导航） | ✅ 已合入 |
 | **便携 bash / R0+** | 单 exe 便携包：内嵌 MinGit bash；`bash_path` 模块；PATH 注入；signing.md 完善 | ✅ 已合入 |
-| **Claude 对标缺口** | 多会话列表、工具卡片、停止/重试、设置可达、cwd 切换 | ✅ 本 PR |
-| **M6′** | Android Host 真连或同构嵌入（Option A stretch） | 后续 |
-| **Android C** | `android/` debug 占位 APK | ✅ 已合入 |
-| **R0** | Release（Win 便携 zip + 签名策略） | 已合入（流水线） |
+| **Claude 对标缺口** | 多会话列表、工具卡片、停止/重试、设置可达、cwd 切换 | ✅ 已合入（#11） |
+| **M6′** | Android：仅当 Host 已自然长出共享面时升 Option A | **维持 C**（见下节） |
+| **Android C** | `android/` debug 占位 APK（`assembleDebug`） | ✅ 已合入；v0.2.0 仍为此路径 |
+| **R0 / v0.1.0** | Release（Win 便携 zip + 签名策略） | ✅ 已发布 |
+| **v0.2.0** | 文档换轨 + 便携 bash + Claude 对标缺口合入后的发版 | 本发版 |
+
+---
+
+## M6′ 决策：维持 Android Option C
+
+桌面 Host（`desktop-rust` egui + Pi RPC）**没有**长出 Android 真 Host 所需的共享面，因此 **不升 Option A**。
+
+Option A 需要的最小面（LAN / HTTP 配对、可被手机连上的 Host API、非本机 stdin/stdout 的会话通道）在 tip 上均不存在：
+
+- `pi_rpc` 只做 `std::process::Command` 拉起本机 `pi --mode rpc`，JSONL 走 stdin/stdout
+- 仓库内无 HTTP 服务、无 WebSocket、无配对协议、无 Android 可调用的 Host crate
+- 正式 sidecar 是 Windows x64 的 `pi-windows-x64.zip`，不能原样塞进 APK
+
+按 StayNing：零大改则跳过。强行做 A 等于新写一层 Host 协议 + 手机联网，超出「接线」。
+
+**Android 继续 Option C**：`android/` 为 Kotlin Compose debug 占位壳，CI / Release 只跑 `assembleDebug`，不内嵌 Pi、不连桌面。完整会话以 Windows `desktop-rust/` 为准。
 
 ---
 
@@ -247,4 +264,4 @@ do_send():
 
 ---
 
-*最后更新：便携 bash / R0+（Pi + MinGit bash 便携包）*
+*最后更新：v0.2.0（M6′ 维持 Android Option C；README 产品向重写）*

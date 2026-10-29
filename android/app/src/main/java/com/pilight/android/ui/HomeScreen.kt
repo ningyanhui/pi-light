@@ -52,8 +52,8 @@ fun HomeScreen() {
                 )
                 Text(
                     text =
-                        "本 APK 是 pi-light 的 Android 占位客户端：用于证明可安装、可构建，" +
-                            "不包含 Pi runtime，也不连接本机 Host。",
+                        "本 APK 是 pi-light 的 Android 占位客户端（M6′ 维持 Option C）：" +
+                            "用于证明可安装、可构建，不包含 Pi runtime，也不连接本机 Host。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }

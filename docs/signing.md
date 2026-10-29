@@ -123,7 +123,7 @@ CI 未注入时步骤自动跳过，**不影响无签名发布**。
 ## 明确不上架商店（本策略约束）
 
 - **Windows Store（MSIX）**：本里程碑范围外；不打包 MSIX，不提交 Partner Center
-- **Google Play**：Android 侧为 debug 占位壳；release 签名与 Play 分发属 M6′ 及以后
+- **Google Play**：Android 侧为 Option C debug 占位壳（M6′ 维持 C）；release 签名与 Play 分发不在本版本范围
 - **Apple Mac App Store**：macOS 目前为可开发调试平台，未列入正式发布计划
 
 ---

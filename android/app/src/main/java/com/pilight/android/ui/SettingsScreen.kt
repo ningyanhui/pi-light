@@ -64,8 +64,8 @@ fun SettingsScreen() {
 
         Text(
             text =
-                "若你需要在手机上与 Pi 对话，请关注后续 M6′ 里程碑（例如连本机 Host）。" +
-                    "当前请以 Windows 正式路径为准。",
+                "M6′ 维持 Option C：桌面 Host 未提供可配对的共享面，本页不接入 Host。" +
+                    "完整会话请用 Windows desktop-rust 客户端。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.secondary,
         )
