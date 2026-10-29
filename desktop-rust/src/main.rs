@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// pi-light — 内嵌 Pi 的轻量 Rust Shell (M2′ 聊天 + M3′ Trace/Token)
+// pi-light — 内嵌 Pi 的轻量 Rust Shell (M2′ 聊天 + M3′ Trace/Token + M4′ 管理面)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui;
 use pi_light::{
+    admin_panel::{AdminPanelState, SetModelRequest},
     chat::{ChatMessage, ChatState},
     pi_path::{self, PiProbe},
     pi_rpc::{PiRpcClient, PiRpcEvent},
@@ -35,6 +36,8 @@ struct PiLightApp {
     chat: ChatState,
     spawn_error: Option<String>,
     egui_ctx: egui::Context,
+    /// M4′ 管理面状态。
+    admin: AdminPanelState,
 }
 
 impl PiLightApp {
@@ -47,6 +50,7 @@ impl PiLightApp {
             chat: ChatState::default(),
             spawn_error: None,
             egui_ctx,
+            admin: AdminPanelState::default(),
         };
         // Auto-spawn Pi RPC if ready at startup.
         app.try_spawn_rpc();
@@ -63,7 +67,10 @@ impl PiLightApp {
         if let Some(path) = self.pi_probe.path() {
             let ctx = self.egui_ctx.clone();
             match PiRpcClient::spawn(path, move || ctx.request_repaint()) {
-                Ok(client) => {
+                Ok(mut client) => {
+                    // M4′: 启动后立即查询模型状态和可用模型列表
+                    let _ = client.request_get_state();
+                    let _ = client.request_available_models();
                     self.rpc_client = Some(client);
                 }
                 Err(e) => {
@@ -104,13 +111,29 @@ impl PiLightApp {
         }
     }
 
-    /// Drain RPC events and apply them to chat state.
+    /// Drain RPC events and apply them to chat state and admin panel.
     fn drain_rpc_events(&mut self) {
         if let Some(client) = &mut self.rpc_client {
             let events = client.drain_events();
             for event in events {
                 let is_exit = matches!(&event, PiRpcEvent::ProcessExited { .. });
                 let request_stats = matches!(&event, PiRpcEvent::AgentSettled { aborted: false });
+
+                // M4′: 将模型信息更新到管理面
+                match &event {
+                    PiRpcEvent::StateInfo { model } => {
+                        self.admin.update_live_model(model.clone(), Vec::new());
+                    }
+                    PiRpcEvent::AvailableModels(models) => {
+                        self.admin.update_live_model(None, models.clone());
+                    }
+                    PiRpcEvent::ModelChanged(model) => {
+                        self.admin
+                            .update_live_model(Some(model.clone()), Vec::new());
+                    }
+                    _ => {}
+                }
+
                 self.chat.handle_rpc_event(event);
                 if request_stats {
                     self.request_session_stats();
@@ -120,6 +143,18 @@ impl PiLightApp {
                     break;
                 }
             }
+        }
+    }
+
+    /// M4′: 向 Pi 发送 set_model 命令。
+    fn handle_set_model_request(&mut self, req: SetModelRequest) {
+        if let Some(client) = &mut self.rpc_client {
+            if let Err(e) = client.send_set_model(&req.provider, &req.model_id) {
+                self.admin.last_error = Some(format!("set_model 发送失败：{e}"));
+            }
+        } else {
+            self.admin.last_error =
+                Some("Pi 未就绪，无法通过 RPC 切换模型。请使用「写入 settings.json」。".to_owned());
         }
     }
 
@@ -163,9 +198,28 @@ impl eframe::App for PiLightApp {
                     {
                         self.reprobe();
                     }
+
+                    // M4′ 管理面切换按钮
+                    let admin_label = if self.admin.open {
+                        "⚙ 关闭管理面"
+                    } else {
+                        "⚙ 管理面"
+                    };
+                    if ui
+                        .selectable_label(self.admin.open, admin_label)
+                        .on_hover_text("打开 / 关闭 Skills / MCP / 插件 / 记忆管理面板")
+                        .clicked()
+                    {
+                        self.admin.open = !self.admin.open;
+                    }
                 });
             });
         });
+
+        // ── M4′ 管理面（右侧面板，始终可见，无需 Pi 就绪）─────────────────
+        if let Some(req) = self.admin.show_panel(ctx, None) {
+            self.handle_set_model_request(req);
+        }
 
         // ── Dispatch: chat UI vs. not-ready info screen ───────────────────
         if self.pi_probe.is_ready() && self.rpc_client.is_some() {

@@ -112,6 +112,15 @@ pub enum PiRpcEvent {
     ProcessExited { code: Option<i32> },
     /// A command returned `success: false`.
     CommandError { command: String, error: String },
+    /// M4′: `get_state` response — current model info.
+    StateInfo {
+        /// "{provider}/{modelId}" 格式，如 "anthropic/claude-sonnet-4-20250514"。
+        model: Option<String>,
+    },
+    /// M4′: `get_available_models` response — list of "{provider}/{modelId}".
+    AvailableModels(Vec<String>),
+    /// M4′: `set_model` succeeded; new model in "{provider}/{modelId}" format.
+    ModelChanged(String),
 }
 
 // ── Client ────────────────────────────────────────────────────────────────
@@ -195,6 +204,38 @@ impl PiRpcClient {
         self.write_command(json!({
             "id": id.to_string(),
             "type": "get_session_stats",
+        }))
+    }
+
+    /// M4′: Query current state (model, session name, etc.) via `get_state`.
+    pub fn request_get_state(&mut self) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "get_state",
+        }))
+    }
+
+    /// M4′: Query all available models via `get_available_models`.
+    pub fn request_available_models(&mut self) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "get_available_models",
+        }))
+    }
+
+    /// M4′: Switch to a specific model via `set_model`.
+    pub fn send_set_model(&mut self, provider: &str, model_id: &str) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "set_model",
+            "provider": provider,
+            "modelId": model_id,
         }))
     }
 
@@ -393,6 +434,30 @@ fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
                 } else {
                     Vec::new()
                 }
+            } else if command == "get_state" {
+                // M4′: parse current model from get_state response
+                let model = val
+                    .get("data")
+                    .and_then(|d| d.get("model"))
+                    .and_then(format_model_str);
+                vec![PiRpcEvent::StateInfo { model }]
+            } else if command == "get_available_models" {
+                // M4′: list of model objects
+                let models = val
+                    .get("data")
+                    .and_then(|d| d.get("models"))
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(format_model_str).collect())
+                    .unwrap_or_default();
+                vec![PiRpcEvent::AvailableModels(models)]
+            } else if command == "set_model" {
+                // M4′: model was switched
+                let model = val
+                    .get("data")
+                    .and_then(|d| d.get("model"))
+                    .and_then(format_model_str)
+                    .unwrap_or_default();
+                vec![PiRpcEvent::ModelChanged(model)]
             } else {
                 Vec::new()
             }
@@ -404,6 +469,13 @@ fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
 
 fn as_u64(v: &Value) -> Option<u64> {
     v.as_u64().or_else(|| v.as_f64().map(|f| f as u64))
+}
+
+/// M4′: 将 model 对象序列化为 "{provider}/{modelId}" 字符串。
+fn format_model_str(model: &Value) -> Option<String> {
+    let provider = model.get("provider").and_then(Value::as_str)?;
+    let model_id = model.get("modelId").and_then(Value::as_str)?;
+    Some(format!("{provider}/{model_id}"))
 }
 
 fn as_f64(v: &Value) -> Option<f64> {

@@ -56,6 +56,9 @@ fn main() {
             "prompt" => handle_prompt(&mut out, cmd_id),
             "abort" => handle_abort(&mut out, cmd_id),
             "get_session_stats" => handle_get_session_stats(&mut out, cmd_id),
+            "get_state" => handle_get_state(&mut out, cmd_id),
+            "get_available_models" => handle_get_available_models(&mut out, cmd_id),
+            "set_model" => handle_set_model(&mut out, cmd_id, &cmd),
             _ => handle_generic(&mut out, cmd_id, cmd_type),
         }
     }
@@ -216,6 +219,72 @@ fn handle_generic(out: &mut impl Write, id: Option<String>, cmd_type: &str) {
             "type": "response",
             "command": cmd_type,
             "success": true
+        }),
+    );
+}
+
+// ── M4′ Model management handlers ─────────────────────────────────────────
+
+fn handle_get_state(out: &mut impl Write, id: Option<String>) {
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": "get_state",
+            "success": true,
+            "data": {
+                "model": {
+                    "provider": "mock",
+                    "modelId": "mock-model-1",
+                    "name": "Mock Model"
+                }
+            }
+        }),
+    );
+}
+
+fn handle_get_available_models(out: &mut impl Write, id: Option<String>) {
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": "get_available_models",
+            "success": true,
+            "data": {
+                "models": [
+                    {"provider": "mock", "modelId": "mock-model-1", "name": "Mock Model 1"},
+                    {"provider": "mock", "modelId": "mock-model-2", "name": "Mock Model 2"}
+                ]
+            }
+        }),
+    );
+}
+
+fn handle_set_model(out: &mut impl Write, id: Option<String>, cmd: &serde_json::Value) {
+    let provider = cmd
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("mock");
+    let model_id = cmd
+        .get("modelId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": "set_model",
+            "success": true,
+            "data": {
+                "model": {
+                    "provider": provider,
+                    "modelId": model_id,
+                    "name": format!("{provider}/{model_id}")
+                }
+            }
         }),
     );
 }
