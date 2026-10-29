@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// pi-light — 内嵌 Pi 的轻量 Rust Shell (M2′ 聊天 + M3′ Trace/Token + M4′+ 管理面)
+// pi-light — 内嵌 Pi 的轻量 Rust Shell
+// M2′ 聊天 + M3′ Trace/Token + M4′+ 管理面 + M5′ # 会话引用
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -10,6 +11,7 @@ use pi_light::{
     pi_path::{self, PiProbe},
     pi_rpc::{PiRpcClient, PiRpcEvent},
     session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
+    session_ref::{self, RefCandidate, RefChip, RefChooserState},
 };
 
 fn main() -> eframe::Result<()> {
@@ -38,6 +40,12 @@ struct PiLightApp {
     egui_ctx: egui::Context,
     /// M4′ 管理面状态。
     admin: AdminPanelState,
+    /// M5′ `#` 引用选择器状态。
+    ref_chooser: RefChooserState,
+    /// M5′ 已确认待附带发送的引用 chips。
+    ref_chips: Vec<RefChip>,
+    /// M5′ 候选缓存（在 # 触发时构建，每次触发刷新）。
+    ref_candidates_cache: Vec<RefCandidate>,
 }
 
 impl PiLightApp {
@@ -51,14 +59,14 @@ impl PiLightApp {
             spawn_error: None,
             egui_ctx,
             admin: AdminPanelState::default(),
+            ref_chooser: RefChooserState::default(),
+            ref_chips: Vec::new(),
+            ref_candidates_cache: Vec::new(),
         };
-        // Auto-spawn Pi RPC if ready at startup.
         app.try_spawn_rpc();
         app
     }
 
-    /// Try to spawn the Pi RPC client if Pi is ready.
-    /// Sets `spawn_error` on failure.
     fn try_spawn_rpc(&mut self) {
         self.rpc_client = None;
         self.spawn_error = None;
@@ -68,7 +76,6 @@ impl PiLightApp {
             let ctx = self.egui_ctx.clone();
             match PiRpcClient::spawn(path, move || ctx.request_repaint()) {
                 Ok(mut client) => {
-                    // M4′: 启动后立即查询模型状态和可用模型列表
                     let _ = client.request_get_state();
                     let _ = client.request_available_models();
                     self.rpc_client = Some(client);
@@ -96,30 +103,40 @@ impl PiLightApp {
         self.admin.rediscover();
     }
 
-    /// Send the current input as a prompt to Pi.
+    /// 发送当前输入（含 chips 引用上下文）给 Pi。
     fn do_send(&mut self) {
-        let text = self.chat.input.trim().to_owned();
-        if text.is_empty() {
+        let user_text = self.chat.input.trim().to_owned();
+        if user_text.is_empty() && self.ref_chips.is_empty() {
             return;
         }
         if let Some(client) = &mut self.rpc_client {
-            self.chat.push_user(text.clone());
+            let chips = std::mem::take(&mut self.ref_chips);
+            let effective_prompt = session_ref::build_prompt_text(&chips, &user_text);
+
+            // 聊天历史中显示：引用标签 + 用户文字
+            let display_text = if chips.is_empty() {
+                user_text.clone()
+            } else {
+                let labels: Vec<&str> = chips.iter().map(|c| c.display.as_str()).collect();
+                format!("[引用: {}]\n{}", labels.join(", "), user_text)
+            };
+
+            self.chat.push_user(display_text);
             self.chat.input.clear();
+            self.ref_chooser.close();
             self.chat.begin_streaming();
-            if let Err(e) = client.send_prompt(&text) {
+            if let Err(e) = client.send_prompt(&effective_prompt) {
                 self.chat.set_error(format!("发送失败：{e}"));
             }
         }
     }
 
-    /// Abort the current in-flight turn.
     fn do_abort(&mut self) {
         if let Some(client) = &mut self.rpc_client {
             let _ = client.send_abort();
         }
     }
 
-    /// Drain RPC events and apply them to chat state and admin panel.
     fn drain_rpc_events(&mut self) {
         if let Some(client) = &mut self.rpc_client {
             let events = client.drain_events();
@@ -127,7 +144,6 @@ impl PiLightApp {
                 let is_exit = matches!(&event, PiRpcEvent::ProcessExited { .. });
                 let request_stats = matches!(&event, PiRpcEvent::AgentSettled { aborted: false });
 
-                // M4′: 将模型信息更新到管理面
                 match &event {
                     PiRpcEvent::StateInfo { model } => {
                         self.admin.update_live_model(model.clone(), Vec::new());
@@ -174,14 +190,71 @@ impl PiLightApp {
             }
         }
     }
+
+    /// M5′: 根据当前输入检测 `#` 触发词，刷新选择器候选。
+    /// 每帧调用一次（非常廉价：仅字符串扫描 + 列表过滤）。
+    fn update_ref_chooser(&mut self) {
+        let trigger = session_ref::find_hash_trigger(&self.chat.input);
+        let was_active = self.ref_chooser.active;
+
+        match trigger {
+            Some(hash_pos) => {
+                // 刚刚激活：刷新候选缓存（含当前会话消息 + Pi 本地会话文件）
+                if !was_active {
+                    let mut cands = session_ref::candidates_from_messages(&self.chat.messages);
+                    cands.extend(session_ref::candidates_from_pi_sessions());
+                    self.ref_candidates_cache = cands;
+                }
+                let query = session_ref::extract_query(&self.chat.input, hash_pos).to_owned();
+                // 分开借用：先取 hash_pos，再调用方法
+                let all = self.ref_candidates_cache.as_slice();
+                self.ref_chooser.activate(all, &query, hash_pos);
+            }
+            None => {
+                if was_active {
+                    self.ref_chooser.close();
+                }
+            }
+        }
+    }
 }
 
 // ── eframe::App ───────────────────────────────────────────────────────────
 
 impl eframe::App for PiLightApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Drain pending RPC events each frame.
         self.drain_rpc_events();
+        self.update_ref_chooser();
+
+        // M5′: 键盘导航（在面板渲染前消费按键，避免被 TextEdit 截获）
+        if self.ref_chooser.active {
+            let mut up = false;
+            let mut down = false;
+            let mut confirmed = false;
+            let mut closed = false;
+            ctx.input_mut(|i| {
+                up = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+                down = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+                confirmed = i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+                closed = i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            });
+            if up {
+                self.ref_chooser.move_up();
+            }
+            if down {
+                self.ref_chooser.move_down();
+            }
+            if confirmed {
+                let hash_pos = self.ref_chooser.hash_byte_offset;
+                if let Some(chip) = self.ref_chooser.confirm() {
+                    self.ref_chips.push(chip);
+                    session_ref::remove_hash_trigger(&mut self.chat.input, hash_pos);
+                }
+            } else if closed {
+                self.ref_chooser.close();
+            }
+        }
 
         // ── Header ────────────────────────────────────────────────────────
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
@@ -189,11 +262,9 @@ impl eframe::App for PiLightApp {
                 ui.heading("pi-light");
                 ui.weak("— 内嵌 Pi 的轻量 Rust Shell");
 
-                // Pi state dot
                 let (dot_color, dot_tip) = pi_dot_color(&self.pi_probe, self.rpc_client.is_some());
                 ui.colored_label(dot_color, "●").on_hover_text(dot_tip);
 
-                // RPC streaming indicator
                 if self.chat.is_streaming {
                     ui.weak("● 生成中…");
                 }
@@ -207,7 +278,6 @@ impl eframe::App for PiLightApp {
                         self.reprobe();
                     }
 
-                    // M4′ 管理面切换按钮
                     let admin_label = if self.admin.open {
                         "⚙ 关闭管理面"
                     } else {
@@ -260,29 +330,55 @@ impl PiLightApp {
             .min_height(56.0)
             .show(ctx, |ui| {
                 ui.add_space(8.0);
+
+                // ── M5′ Chips row ─────────────────────────────────────────
+                let mut chip_to_remove: Option<usize> = None;
+                if !self.ref_chips.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, chip) in self.ref_chips.iter().enumerate() {
+                            // chip 显示为高亮小按钮，点击可移除
+                            let label = format!("# {}  ×", truncate_display(&chip.display, 40));
+                            let btn = egui::Button::new(
+                                egui::RichText::new(label)
+                                    .size(12.0)
+                                    .color(egui::Color32::from_rgb(180, 220, 255)),
+                            )
+                            .fill(egui::Color32::from_rgb(30, 60, 100))
+                            .rounding(egui::Rounding::same(10.0));
+                            if ui.add(btn).on_hover_text("点击移除此引用").clicked() {
+                                chip_to_remove = Some(i);
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
+                if let Some(idx) = chip_to_remove {
+                    self.ref_chips.remove(idx);
+                }
+
+                // ── Input row ─────────────────────────────────────────────
                 ui.horizontal(|ui| {
-                    let can_send = !self.chat.is_streaming && !self.chat.input.trim().is_empty();
+                    let can_send = !self.chat.is_streaming
+                        && (!self.chat.input.trim().is_empty() || !self.ref_chips.is_empty());
                     let can_stop = self.chat.is_streaming;
 
-                    // Input field — takes remaining width
                     let input_response = ui.add_sized(
                         [ui.available_width() - 140.0, 32.0],
                         egui::TextEdit::singleline(&mut self.chat.input)
-                            .hint_text("输入消息，按 Enter 发送…")
+                            .hint_text("输入消息，按 Enter 发送；输入 # 引用会话…")
                             .interactive(!self.chat.is_streaming),
                     );
 
-                    // Enter key to send
+                    // Enter 发送（选择器未激活时）
                     if input_response.lost_focus()
                         && ctx.input(|i| i.key_pressed(egui::Key::Enter))
                         && can_send
+                        && !self.ref_chooser.active
                     {
                         self.do_send();
-                        // Re-focus input after send
                         input_response.request_focus();
                     }
 
-                    // Send button
                     if ui
                         .add_enabled(
                             can_send,
@@ -294,7 +390,6 @@ impl PiLightApp {
                         input_response.request_focus();
                     }
 
-                    // Stop button
                     let stop_btn = ui.add_enabled(
                         can_stop,
                         egui::Button::new("■ 停止").min_size([60.0, 32.0].into()),
@@ -307,6 +402,11 @@ impl PiLightApp {
                 ui.add_space(4.0);
             });
 
+        // ── M5′ 引用选择器 popup ──────────────────────────────────────────
+        if self.ref_chooser.active {
+            self.show_ref_chooser_popup(ctx);
+        }
+
         // Central message list
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.chat.messages.is_empty() && !self.chat.is_streaming {
@@ -314,7 +414,6 @@ impl PiLightApp {
                 return;
             }
 
-            // Show error banner if any
             if let Some(err) = &self.chat.error.clone() {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -347,7 +446,6 @@ impl PiLightApp {
                         ui.add_space(6.0);
                     }
 
-                    // Streaming assistant message (in-progress)
                     if self.chat.is_streaming {
                         show_assistant_message(ui, &self.chat.streaming_buf, true);
                         ui.add_space(6.0);
@@ -360,6 +458,89 @@ impl PiLightApp {
                     show_trace_section(ui, &self.chat);
                 });
         });
+    }
+
+    /// M5′: 渲染引用选择器浮动面板（定位在屏幕底部输入区上方）。
+    fn show_ref_chooser_popup(&mut self, ctx: &egui::Context) {
+        let screen_rect = ctx.screen_rect();
+        // 估算 chips 行高（有 chips 时加一行）
+        let chips_extra = if self.ref_chips.is_empty() { 0.0 } else { 36.0 };
+        // 输入面板高度 ≈ 70px（含内边距），insights_bar ≈ 30px
+        let bottom_offset = 70.0 + 30.0 + chips_extra + 8.0;
+        let popup_height = 180.0f32;
+        let popup_width = (screen_rect.width() - 160.0).clamp(280.0, 600.0);
+        let pos = egui::pos2(16.0, screen_rect.bottom() - bottom_offset - popup_height);
+
+        // 收集鼠标点击事件（避免在 Area show 闭包中同时借用 self.ref_chooser 和 self.ref_chips）
+        let mut click_confirm_idx: Option<usize> = None;
+
+        egui::Area::new(egui::Id::new("ref_chooser_popup"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(popup_width);
+                    ui.set_max_width(popup_width);
+
+                    // 标题栏
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("# 引用会话消息").strong().size(12.0));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new("↑↓ 选择  Enter/Tab 确认  Esc 关闭")
+                                    .weak()
+                                    .size(10.0),
+                            );
+                        });
+                    });
+                    ui.separator();
+
+                    if self.ref_chooser.filtered.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new("暂无引用 — 本会话尚无可引用的消息")
+                                .weak()
+                                .italics()
+                                .size(12.0),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("提示：开始对话后，历史消息将出现在此列表")
+                                .weak()
+                                .size(11.0),
+                        );
+                        ui.add_space(6.0);
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .max_height(popup_height - 55.0)
+                            .show(ui, |ui| {
+                                let cursor = self.ref_chooser.cursor;
+                                for (i, candidate) in self.ref_chooser.filtered.iter().enumerate() {
+                                    let is_selected = i == cursor;
+                                    let text = egui::RichText::new(&candidate.display).size(12.5);
+                                    let text = if is_selected { text.strong() } else { text };
+                                    let resp = ui.selectable_label(is_selected, text);
+                                    if resp.clicked() {
+                                        click_confirm_idx = Some(i);
+                                    }
+                                    if is_selected {
+                                        resp.scroll_to_me(None);
+                                    }
+                                }
+                            });
+                    }
+                });
+            });
+
+        // 处理鼠标点击确认
+        if let Some(idx) = click_confirm_idx {
+            self.ref_chooser.cursor = idx;
+            let hash_pos = self.ref_chooser.hash_byte_offset;
+            if let Some(chip) = self.ref_chooser.confirm() {
+                self.ref_chips.push(chip);
+                session_ref::remove_hash_trigger(&mut self.chat.input, hash_pos);
+            }
+        }
     }
 
     fn show_chat_welcome(&self, ui: &mut egui::Ui) {
@@ -390,6 +571,12 @@ impl PiLightApp {
                     .weak()
                     .italics()
                     .size(13.0),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("输入 # 可引用历史会话消息，附带上下文发送")
+                    .weak()
+                    .size(12.0),
             );
         });
     }
@@ -629,7 +816,6 @@ fn show_assistant_message(ui: &mut egui::Ui, text: &str, streaming: bool) {
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.75);
                 if streaming {
-                    // Show a blinking cursor while streaming
                     ui.label(egui::RichText::new(format!("{text}▌")).size(14.0));
                 } else {
                     ui.label(egui::RichText::new(text).size(14.0));
@@ -664,6 +850,18 @@ fn pi_dot_color(probe: &PiProbe, rpc_alive: bool) -> (egui::Color32, &'static st
             egui::Color32::from_rgb(210, 150, 50),
             "Pi 路径已找到但 RPC 尚未启动",
         )
+    }
+}
+
+// ── M5′ 辅助函数 ──────────────────────────────────────────────────────────
+
+/// 截断显示文本到指定字符数（超出则追加 "…"）。
+fn truncate_display(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_owned()
+    } else {
+        format!("{}…", chars[..max_chars].iter().collect::<String>())
     }
 }
 
