@@ -175,27 +175,33 @@ Pi 就绪后，主区自动切换为聊天界面。如果 Pi 需要 API Key，�
 
 ## 6. 能做什么 / 不能做什么
 
-### 当前（M2′ 阶段）
+### 当前（M3′ 阶段）
 
 | 能做 | 不能做 |
 |------|--------|
 | 显示三态 Pi 就绪 UI（Bundled / Detected / Not Ready） | 商店签名 / Play 正式包（见 [docs/signing.md](./docs/signing.md)） |
 | 从 [Releases](https://github.com/ningyanhui/pi-light/releases) 下载 **Windows 便携 zip**（含 SHA-256 校验后的 Pi v1.4.0） | — |
-| Pi 就绪时自动启动 `pi --mode rpc --no-session` | Trace / Token 用量条（M3′） |
-| 流式聊天：输入 → Enter/发送 → 流式文本 → `agent_settled` | skill / MCP 管理面板（M4′） |
-| **■ 停止**按钮：发送 `abort` 命令，中止当前生成 | 完整 IDE（文件树 + 多终端 + Git） |
-| 路径探测（env → sidecar → PATH），「⟳ 重新探测」无需重启 | 双后端（Pi + Harness）切换 |
-| 关窗时关闭 stdin → 等待 → kill，无孤儿/僵尸进程 | 内嵌 Taskboard / CDP 注入 |
-| `cargo check` + `cargo test`（24 测试）+ `clippy` + `fmt` 全绿 | 捆绑 dsh / deepseek-harness |
-| Android **debug 占位 APK**（Option C：首页 + 设置 stub，无 Pi） | Android 上与 Pi 对话 / Host 配对 |
+| Pi 就绪时自动启动 `pi --mode rpc --no-session` | skill / MCP 管理面板（M4′） |
+| 流式聊天：输入 → Enter/发送 → 流式文本 → `agent_settled` | 完整 IDE（文件树 + 多终端 + Git） |
+| **■ 停止**按钮：发送 `abort` 命令，中止当前生成 | 双后端（Pi + Harness）切换 |
+| **Trace / Token**：`message_update.usage`、`tool_execution_*`、`get_session_stats`（有字段则显示；缺字段三态降级） | 内嵌 Taskboard / CDP 注入 |
+| 路径探测（env → sidecar → PATH），「⟳ 重新探测」无需重启 | 捆绑 dsh / deepseek-harness |
+| 关窗时关闭 stdin → 等待 → kill，无孤儿/僵尸进程 | Android 上与 Pi 对话 / Host 配对 |
+| `cargo check` + `cargo test` + `clippy` + `fmt` 全绿 | 把未校验 Pi 二进制打进 git |
+| Android **debug 占位 APK**（Option C：首页 + 设置 stub，无 Pi） | — |
+
+### 上一阶段（M2′，已包含在 M3′ 基线中）
+
+| 能做 | 不能做 |
+|------|--------|
+| 同上聊天与三态 Pi 就绪 | Trace / Token 用量条（已在 M3′ 提供） |
 
 ### 计划中（里程碑交付后）
 
 | 能做 | 不能做（明确不在范围） |
 |------|----------------------|
 | 与 Pi 流式对话（M2′，桌面） | 内嵌 Taskboard / CDP 注入 |
-| 显示 Trace / Token 用量（M3′） | 双后端（Pi + Harness）切换 |
-| skill / MCP 列表开关（M4′） | 捆绑 dsh / deepseek-harness |
+| skill / MCP 列表开关（M4′） | 双后端（Pi + Harness）切换 |
 | Android Host 或同构真连（M6′ stretch） | 完整 IDE（文件树 + 多终端 + Git） |
 
 ---
@@ -298,7 +304,7 @@ Pi sidecar (pi.exe --mode rpc, MIT)
 - **无会话持久化**：M2′ 使用 `--no-session`，每次启动为全新会话；持久化为后续里程碑
 - **Android（Option C）**：[`android/`](./android/) 提供可安装 **debug 占位 APK**（首页 + 设置 stub）；**不内嵌 Pi、不连 Host**；与 Pi 的完整流式会话请使用 Windows `desktop-rust/`
 - **无官方商店分发**：R0 提供 GitHub Release 便携 zip 与 Android debug APK；签名策略见 [docs/signing.md](./docs/signing.md)
-- **Trace / Token 用量**：M2′ 不显示 token 用量与执行轨迹，见 M3′
+- **Trace / Token 用量（M3′）**：聊天区底部显示 Token 摘要；可折叠 Trace 列表来自 Pi 的 `tool_execution_*` 事件。用量来自 `message_update.usage` 与回合结束后的 `get_session_stats`。**无字段时不臆造数据**（显示「用量未知 / 暂无 Trace / 不支持」）。`--no-session` 下 stats 可能为空或不可用，属 Pi 行为限制。
 - **CI 测试用 mock-pi**：集成烟测使用内置 `mock-pi` 二进制，无需真实 Pi；实机测试设 `PI_LIGHT_PI_BIN`
 
 ---

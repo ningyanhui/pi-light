@@ -119,7 +119,7 @@ pi-light/
 | **M0′** | 仓骨架、README 换轨、egui 窗、pi_path stub | ✅ 已合入 |
 | **M1′** | 三态 UI（捆绑就绪 / 探测到本机 / 未就绪）、进程契约完整 | ✅ 已合入 |
 | **M2′** | pi_rpc 模块（JSONL RPC 真连）、流式聊天、停止、进程生命周期、mock-pi 测试 | ✅ 本 PR |
-| **M3′** | Trace/Token on Pi（`get_session_stats` + usage 事件） | Stretch |
+| **M3′** | Trace/Token on Pi（`get_session_stats` + usage 事件） | **当前** |
 | **M4′** | 管理面（skill/MCP/记忆列表开关） | 后续 |
 | **M5′** | `#` 会话引用 + 可选 Taskboard 布局 | 后续 |
 | **M6′** | Android Host 真连或同构嵌入（Option A stretch） | 后续 |

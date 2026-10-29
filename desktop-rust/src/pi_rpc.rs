@@ -25,11 +25,87 @@ use serde_json::{json, Value};
 
 // ── Public event type ─────────────────────────────────────────────────────
 
+/// Token fields we understand from Pi `usage` / `get_session_stats.data.tokens`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TokenUsage {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    pub total: Option<u64>,
+    pub cache_read: Option<u64>,
+    pub cache_write: Option<u64>,
+}
+
+impl TokenUsage {
+    pub fn is_empty(&self) -> bool {
+        self.input.is_none()
+            && self.output.is_none()
+            && self.total.is_none()
+            && self.cache_read.is_none()
+            && self.cache_write.is_none()
+    }
+
+    /// Merge only keys present in `other` (does not clear existing fields).
+    pub fn merge(&mut self, other: &TokenUsage) {
+        if other.input.is_some() {
+            self.input = other.input;
+        }
+        if other.output.is_some() {
+            self.output = other.output;
+        }
+        if other.total.is_some() {
+            self.total = other.total;
+        }
+        if other.cache_read.is_some() {
+            self.cache_read = other.cache_read;
+        }
+        if other.cache_write.is_some() {
+            self.cache_write = other.cache_write;
+        }
+    }
+}
+
+/// Subset of `get_session_stats` `data` we surface in the UI.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionStats {
+    pub tokens: TokenUsage,
+    pub cost: Option<f64>,
+    pub tool_calls: Option<u64>,
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
+    pub context_percent: Option<f64>,
+}
+
+/// One tool invocation step for the trace list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceStep {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub running: bool,
+    pub is_error: bool,
+    pub duration_ms: Option<u64>,
+}
+
 /// Events delivered from the Pi stdout reader to the UI thread.
 #[derive(Debug)]
 pub enum PiRpcEvent {
     /// A text fragment to append to the current streaming assistant message.
     TextDelta(String),
+    /// Cumulative usage from a `message_update` record (when Pi sends numeric fields).
+    UsageUpdate(TokenUsage),
+    /// Successful `get_session_stats` response payload.
+    SessionStats(SessionStats),
+    /// Tool execution started (`tool_execution_start`).
+    ToolTraceStart {
+        tool_call_id: String,
+        tool_name: String,
+    },
+    /// Tool execution finished (`tool_execution_end`).
+    ToolTraceEnd {
+        tool_call_id: String,
+        tool_name: String,
+        is_error: bool,
+        duration_ms: Option<u64>,
+    },
     /// The current session-level run has fully settled; Pi will not continue.
     AgentSettled { aborted: bool },
     /// The Pi process exited (normal or abnormal).
@@ -112,6 +188,16 @@ impl PiRpcClient {
         self.write_command(json!({"type": "abort"}))
     }
 
+    /// Request session-level token / cost stats (`get_session_stats`).
+    pub fn request_session_stats(&mut self) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "get_session_stats",
+        }))
+    }
+
     /// Non-blocking drain of all pending events.
     pub fn drain_events(&mut self) -> Vec<PiRpcEvent> {
         let mut out = Vec::new();
@@ -185,8 +271,8 @@ where
         }
         match serde_json::from_str::<Value>(trimmed) {
             Ok(val) => {
-                if let Some(event) = parse_event(&val) {
-                    // Capture exit code hint if Pi reports it
+                let events = parse_events(&val);
+                for event in events {
                     if let PiRpcEvent::ProcessExited { code } = &event {
                         exit_code = *code;
                     }
@@ -209,59 +295,173 @@ where
 
 // ── JSONL event parser ────────────────────────────────────────────────────
 
-/// Convert a raw stdout JSONL record into a typed `PiRpcEvent`, if relevant.
-///
-/// Records that the UI does not need (e.g. `agent_start`, `turn_start`,
-/// `tool_execution_*`, compaction events, etc.) return `None` and are
-/// silently discarded — the client only tracks what matters for the chat UI.
-fn parse_event(val: &Value) -> Option<PiRpcEvent> {
-    let event_type = val.get("type")?.as_str()?;
+/// Convert a raw stdout JSONL record into typed `PiRpcEvent` values.
+fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
+    let Some(event_type) = val.get("type").and_then(Value::as_str) else {
+        return Vec::new();
+    };
 
     match event_type {
-        // ── Streaming text ─────────────────────────────────────────────
+        // ── Streaming text + usage ─────────────────────────────────────
         "message_update" => {
-            let ae = val.get("assistantMessageEvent")?;
-            let ae_type = ae.get("type")?.as_str()?;
-            if ae_type == "text_delta" {
-                let delta = ae.get("delta")?.as_str()?;
-                if delta.is_empty() {
-                    return None;
+            let mut out = Vec::new();
+            if let Some(usage) = parse_usage_object(val.get("usage")) {
+                if !usage.is_empty() {
+                    out.push(PiRpcEvent::UsageUpdate(usage));
                 }
-                Some(PiRpcEvent::TextDelta(delta.to_owned()))
+            }
+            if let Some(ae) = val.get("assistantMessageEvent") {
+                if ae.get("type").and_then(Value::as_str) == Some("text_delta") {
+                    if let Some(delta) = ae.get("delta").and_then(Value::as_str) {
+                        if !delta.is_empty() {
+                            out.push(PiRpcEvent::TextDelta(delta.to_owned()));
+                        }
+                    }
+                }
+            }
+            out
+        }
+
+        "tool_execution_start" => {
+            let tool_call_id = val
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let tool_name = val
+                .get("toolName")
+                .and_then(Value::as_str)
+                .unwrap_or("tool")
+                .to_owned();
+            if tool_call_id.is_empty() {
+                Vec::new()
             } else {
-                None
+                vec![PiRpcEvent::ToolTraceStart {
+                    tool_call_id,
+                    tool_name,
+                }]
+            }
+        }
+
+        "tool_execution_end" => {
+            let tool_call_id = val
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let tool_name = val
+                .get("toolName")
+                .and_then(Value::as_str)
+                .unwrap_or("tool")
+                .to_owned();
+            if tool_call_id.is_empty() {
+                Vec::new()
+            } else {
+                vec![PiRpcEvent::ToolTraceEnd {
+                    tool_call_id,
+                    tool_name,
+                    is_error: val.get("isError").and_then(Value::as_bool).unwrap_or(false),
+                    duration_ms: val.get("durationMs").and_then(as_u64),
+                }]
             }
         }
 
         // ── Turn completion ────────────────────────────────────────────
         "agent_settled" => {
             let aborted = val.get("aborted").and_then(Value::as_bool).unwrap_or(false);
-            Some(PiRpcEvent::AgentSettled { aborted })
+            vec![PiRpcEvent::AgentSettled { aborted }]
         }
 
-        // ── Command errors ─────────────────────────────────────────────
+        // ── Command responses ──────────────────────────────────────────
         "response" => {
             let success = val.get("success").and_then(Value::as_bool).unwrap_or(true);
+            let command = val
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned();
             if !success {
-                let command = val
-                    .get("command")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_owned();
                 let error = val
                     .get("error")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown error")
                     .to_owned();
-                Some(PiRpcEvent::CommandError { command, error })
+                vec![PiRpcEvent::CommandError { command, error }]
+            } else if command == "get_session_stats" {
+                if let Some(data) = val.get("data") {
+                    vec![PiRpcEvent::SessionStats(parse_session_stats(data))]
+                } else {
+                    Vec::new()
+                }
             } else {
-                None // successful responses are not surfaced to the UI
+                Vec::new()
             }
         }
 
-        // ── All other events (agent_start, turn_*, tool_*, etc.) ───────
-        _ => None,
+        _ => Vec::new(),
     }
+}
+
+fn as_u64(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| v.as_f64().map(|f| f as u64))
+}
+
+fn as_f64(v: &Value) -> Option<f64> {
+    v.as_f64().or_else(|| v.as_u64().map(|u| u as f64))
+}
+
+fn parse_usage_object(usage: Option<&Value>) -> Option<TokenUsage> {
+    let usage = usage?;
+    if !usage.is_object() {
+        return None;
+    }
+    let mut tokens = TokenUsage::default();
+    if usage.get("input").is_some() {
+        tokens.input = usage.get("input").and_then(as_u64);
+    }
+    if usage.get("output").is_some() {
+        tokens.output = usage.get("output").and_then(as_u64);
+    }
+    if usage.get("total").is_some() {
+        tokens.total = usage.get("total").and_then(as_u64);
+    }
+    if usage.get("totalTokens").is_some() {
+        tokens.total = usage.get("totalTokens").and_then(as_u64);
+    }
+    if usage.get("cacheRead").is_some() {
+        tokens.cache_read = usage.get("cacheRead").and_then(as_u64);
+    }
+    if usage.get("cacheWrite").is_some() {
+        tokens.cache_write = usage.get("cacheWrite").and_then(as_u64);
+    }
+    Some(tokens)
+}
+
+fn parse_session_stats(data: &Value) -> SessionStats {
+    let mut stats = SessionStats::default();
+    if let Some(tokens_val) = data.get("tokens") {
+        if let Some(parsed) = parse_usage_object(Some(tokens_val)) {
+            stats.tokens = parsed;
+        }
+    }
+    if data.get("cost").is_some() {
+        stats.cost = data.get("cost").and_then(as_f64);
+    }
+    if data.get("toolCalls").is_some() {
+        stats.tool_calls = data.get("toolCalls").and_then(as_u64);
+    }
+    if let Some(ctx) = data.get("contextUsage") {
+        if ctx.get("tokens").is_some() {
+            stats.context_tokens = ctx.get("tokens").and_then(as_u64);
+        }
+        if ctx.get("contextWindow").is_some() {
+            stats.context_window = ctx.get("contextWindow").and_then(as_u64);
+        }
+        if ctx.get("percent").is_some() {
+            stats.context_percent = ctx.get("percent").and_then(as_f64);
+        }
+    }
+    stats
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────
@@ -274,85 +474,144 @@ mod tests {
         serde_json::from_str(json_str).unwrap()
     }
 
+    fn parse_one(json_str: &str) -> Vec<PiRpcEvent> {
+        parse_events(&make_val(json_str))
+    }
+
     #[test]
     fn parse_text_delta() {
-        let val = make_val(
+        let events = parse_one(
             r#"{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}"#,
         );
-        let ev = parse_event(&val);
-        assert!(matches!(ev, Some(PiRpcEvent::TextDelta(d)) if d == "Hello"));
+        assert!(events
+            .iter()
+            .any(|ev| { matches!(ev, PiRpcEvent::TextDelta(d) if d == "Hello") }));
+    }
+
+    #[test]
+    fn parse_usage_update_from_message_update() {
+        let events = parse_one(
+            r#"{"type":"message_update","usage":{"input":10,"output":5,"totalTokens":15},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"x"}}"#,
+        );
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            PiRpcEvent::UsageUpdate(ref u) if u.input == Some(10) && u.output == Some(5) && u.total == Some(15)
+        ));
+    }
+
+    #[test]
+    fn parse_empty_usage_object_emits_nothing() {
+        let events = parse_one(
+            r#"{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hi"}}"#,
+        );
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], PiRpcEvent::TextDelta(_)));
+    }
+
+    #[test]
+    fn parse_session_stats_response() {
+        let events = parse_one(
+            r#"{"type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"input":1,"output":2,"total":3},"cost":0.01,"toolCalls":4,"contextUsage":{"tokens":100,"contextWindow":200000,"percent":0.05}}}"#,
+        );
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            PiRpcEvent::SessionStats(s) => {
+                assert_eq!(s.tokens.input, Some(1));
+                assert_eq!(s.cost, Some(0.01));
+                assert_eq!(s.tool_calls, Some(4));
+                assert_eq!(s.context_percent, Some(0.05));
+            }
+            other => panic!("expected SessionStats, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_trace_lifecycle() {
+        let start = parse_one(
+            r#"{"type":"tool_execution_start","toolCallId":"x","toolName":"bash","args":{}}"#,
+        );
+        assert!(matches!(
+            start[0],
+            PiRpcEvent::ToolTraceStart { ref tool_name, .. } if tool_name == "bash"
+        ));
+        let end = parse_one(
+            r#"{"type":"tool_execution_end","toolCallId":"x","toolName":"bash","isError":false,"durationMs":99}"#,
+        );
+        assert!(matches!(
+            end[0],
+            PiRpcEvent::ToolTraceEnd {
+                duration_ms: Some(99),
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parse_agent_settled_normal() {
-        let val = make_val(r#"{"type":"agent_settled","aborted":false}"#);
-        let ev = parse_event(&val);
+        let events = parse_one(r#"{"type":"agent_settled","aborted":false}"#);
         assert!(
-            matches!(ev, Some(PiRpcEvent::AgentSettled { aborted: false })),
-            "expected AgentSettled{{aborted:false}}, got {ev:?}"
+            matches!(events[0], PiRpcEvent::AgentSettled { aborted: false }),
+            "expected AgentSettled{{aborted:false}}, got {events:?}"
         );
     }
 
     #[test]
     fn parse_agent_settled_aborted() {
-        let val = make_val(r#"{"type":"agent_settled","aborted":true}"#);
-        let ev = parse_event(&val);
+        let events = parse_one(r#"{"type":"agent_settled","aborted":true}"#);
         assert!(matches!(
-            ev,
-            Some(PiRpcEvent::AgentSettled { aborted: true })
+            events[0],
+            PiRpcEvent::AgentSettled { aborted: true }
         ));
     }
 
     #[test]
     fn parse_command_error() {
-        let val = make_val(
+        let events = parse_one(
             r#"{"type":"response","command":"prompt","success":false,"error":"model not configured"}"#,
         );
-        let ev = parse_event(&val);
         assert!(
-            matches!(ev, Some(PiRpcEvent::CommandError { ref command, ref error })
+            matches!(events[0], PiRpcEvent::CommandError { ref command, ref error }
                 if command == "prompt" && error == "model not configured"
             )
         );
     }
 
     #[test]
-    fn parse_successful_response_returns_none() {
-        let val = make_val(
+    fn parse_successful_prompt_response_returns_empty() {
+        let events = parse_one(
             r#"{"id":"1","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}"#,
         );
-        assert!(parse_event(&val).is_none());
+        assert!(events.is_empty());
     }
 
     #[test]
-    fn parse_irrelevant_event_returns_none() {
+    fn parse_irrelevant_event_returns_empty() {
         for raw in &[
             r#"{"type":"agent_start"}"#,
             r#"{"type":"turn_start"}"#,
             r#"{"type":"agent_end","messages":[],"willRetry":false}"#,
-            r#"{"type":"tool_execution_start","toolCallId":"x","toolName":"bash","args":{}}"#,
         ] {
-            let val = make_val(raw);
             assert!(
-                parse_event(&val).is_none(),
-                "expected None for {raw}, but got Some"
+                parse_one(raw).is_empty(),
+                "expected empty for {raw}, but got events"
             );
         }
     }
 
     #[test]
     fn parse_empty_delta_returns_none() {
-        let val = make_val(
+        let events = parse_one(
             r#"{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":""}}"#,
         );
-        assert!(parse_event(&val).is_none());
+        assert!(events.is_empty());
     }
 
     #[test]
     fn parse_non_delta_message_update_returns_none() {
-        let val = make_val(
+        let events = parse_one(
             r#"{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello"}}"#,
         );
-        assert!(parse_event(&val).is_none());
+        assert!(events.is_empty());
     }
 }

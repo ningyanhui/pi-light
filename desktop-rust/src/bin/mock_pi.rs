@@ -55,6 +55,7 @@ fn main() {
         match cmd_type {
             "prompt" => handle_prompt(&mut out, cmd_id),
             "abort" => handle_abort(&mut out, cmd_id),
+            "get_session_stats" => handle_get_session_stats(&mut out, cmd_id),
             _ => handle_generic(&mut out, cmd_id, cmd_type),
         }
     }
@@ -78,6 +79,27 @@ fn handle_prompt(out: &mut impl Write, id: Option<String>) {
     // 2. Stream fake session events (minimal, realistic shape)
     emit(out, serde_json::json!({"type": "agent_start"}));
     emit(out, serde_json::json!({"type": "turn_start"}));
+
+    emit(
+        out,
+        serde_json::json!({
+            "type": "tool_execution_start",
+            "toolCallId": "mock-call-1",
+            "toolName": "bash",
+            "args": { "command": "echo mock" }
+        }),
+    );
+    emit(
+        out,
+        serde_json::json!({
+            "type": "tool_execution_end",
+            "toolCallId": "mock-call-1",
+            "toolName": "bash",
+            "result": { "content": [{ "type": "text", "text": "mock output" }], "details": {} },
+            "isError": false,
+            "durationMs": 12
+        }),
+    );
 
     let chunks = ["Hello from ", "mock Pi! ", "This is a ", "test response."];
     for chunk in &chunks {
@@ -120,6 +142,53 @@ fn handle_prompt(out: &mut impl Write, id: Option<String>) {
     emit(
         out,
         serde_json::json!({"type": "agent_settled", "aborted": false}),
+    );
+}
+
+fn handle_get_session_stats(out: &mut impl Write, id: Option<String>) {
+    let no_stats = std::env::var("PI_LIGHT_MOCK_NO_STATS").is_ok();
+    let data = if no_stats {
+        serde_json::json!({
+            "sessionId": "mock-session",
+            "userMessages": 0,
+            "assistantMessages": 0,
+            "toolCalls": 0,
+            "toolResults": 0,
+            "totalMessages": 0,
+            "tokens": {}
+        })
+    } else {
+        serde_json::json!({
+            "sessionId": "mock-session",
+            "userMessages": 1,
+            "assistantMessages": 1,
+            "toolCalls": 1,
+            "toolResults": 1,
+            "totalMessages": 3,
+            "tokens": {
+                "input": 100,
+                "output": 50,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 150
+            },
+            "cost": 0.0025,
+            "contextUsage": {
+                "tokens": 120,
+                "contextWindow": 200000,
+                "percent": 0.06
+            }
+        })
+    };
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": "get_session_stats",
+            "success": true,
+            "data": data
+        }),
     );
 }
 

@@ -122,6 +122,78 @@ fn smoke_shutdown_does_not_orphan_process() {
 }
 
 #[test]
+fn smoke_session_stats_and_trace_after_prompt() {
+    let bin = pi_bin();
+    let mut client = PiRpcClient::spawn(&bin, || {}).expect("failed to spawn Pi / mock-pi binary");
+
+    client.send_prompt("Hello").expect("send_prompt failed");
+
+    let events = drain_until(&mut client, Duration::from_secs(10), |ev| {
+        matches!(ev, PiRpcEvent::AgentSettled { .. })
+    });
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, PiRpcEvent::UsageUpdate(_))),
+        "expected UsageUpdate from message_update.usage"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, PiRpcEvent::ToolTraceStart { .. })),
+        "expected tool_execution_start trace event"
+    );
+
+    client
+        .request_session_stats()
+        .expect("request_session_stats failed");
+    let stats_events = drain_until(&mut client, Duration::from_secs(5), |ev| {
+        matches!(ev, PiRpcEvent::SessionStats(_))
+    });
+    assert!(
+        stats_events
+            .iter()
+            .any(|ev| matches!(ev, PiRpcEvent::SessionStats(_))),
+        "expected SessionStats from get_session_stats"
+    );
+
+    client.shutdown(Duration::from_secs(3));
+}
+
+#[test]
+fn smoke_session_stats_empty_tokens_when_mock_no_stats() {
+    let bin = pi_bin();
+    std::env::set_var("PI_LIGHT_MOCK_NO_STATS", "1");
+    let mut client = PiRpcClient::spawn(&bin, || {}).expect("spawn mock-pi");
+    client
+        .request_session_stats()
+        .expect("request_session_stats failed");
+    let stats_events = drain_until(&mut client, Duration::from_secs(5), |ev| {
+        matches!(ev, PiRpcEvent::SessionStats(_))
+    });
+    std::env::remove_var("PI_LIGHT_MOCK_NO_STATS");
+
+    match stats_events
+        .iter()
+        .find(|ev| matches!(ev, PiRpcEvent::SessionStats(_)))
+    {
+        Some(PiRpcEvent::SessionStats(s)) => assert!(s.tokens.is_empty()),
+        _ => panic!("expected SessionStats with empty tokens"),
+    }
+
+    client.shutdown(Duration::from_secs(3));
+}
+
+#[test]
+fn unit_session_insights_unknown_without_fields() {
+    use pi_light::session_insights::{SessionInsights, UsageDisplayState};
+
+    let ins = SessionInsights::default();
+    assert_eq!(ins.usage_display_state(), UsageDisplayState::Unknown);
+}
+
+#[test]
 fn unit_chat_state_full_turn() {
     use pi_light::chat::ChatState;
 
