@@ -35,27 +35,68 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
+      # Workspace target dir is repo-root `target/` (see root Cargo.toml), not desktop-rust/target/.
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            desktop-rust/target
-          key: release-win-cargo-${{ hashFiles('desktop-rust/Cargo.toml') }}
+          key: release-win-registry-${{ hashFiles('Cargo.toml', 'desktop-rust/Cargo.toml') }}
 
-      - name: cargo build --release
-        working-directory: desktop-rust
-        run: cargo build --release
+      - name: cargo build --release (pi-light bin)
+        run: cargo build --release -p pi-light --bin pi-light
+
+      - name: List release binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          foreach ($dir in @("target/release", "desktop-rust/target/release")) {
+            if (Test-Path -LiteralPath $dir) {
+              Write-Host "=== $dir ==="
+              Get-ChildItem -LiteralPath $dir -Filter *.exe | ForEach-Object { Write-Host $_.FullName }
+            } else {
+              Write-Host "=== (missing) $dir ==="
+            }
+          }
 
       - name: Stage portable directory
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          function Resolve-PiLightExe {
+            param([string[]] $ReleaseDirs)
+            foreach ($dir in $ReleaseDirs) {
+              if (-not (Test-Path -LiteralPath $dir)) { continue }
+              $preferred = Join-Path $dir "pi-light.exe"
+              if (Test-Path -LiteralPath $preferred) { return $preferred }
+              $candidates = Get-ChildItem -LiteralPath $dir -Filter *.exe |
+                Where-Object { $_.Name -ne "mock-pi.exe" } |
+                Sort-Object Name
+              if ($candidates.Count -eq 1) { return $candidates[0].FullName }
+              if ($candidates.Count -gt 1) {
+                $named = $candidates | Where-Object { $_.BaseName -eq "pi-light" }
+                if ($named) { return $named[0].FullName }
+              }
+            }
+            Write-Host "error: could not locate pi-light.exe; listing release dirs:" -ForegroundColor Red
+            foreach ($dir in $ReleaseDirs) {
+              if (Test-Path -LiteralPath $dir) {
+                Write-Host "--- $dir ---"
+                Get-ChildItem -LiteralPath $dir | ForEach-Object { Write-Host $_.Name }
+              }
+            }
+            exit 1
+          }
+
+          $piLightExe = Resolve-PiLightExe @("target/release", "desktop-rust/target/release")
+          Write-Host "Using pi-light binary: $piLightExe"
+
           $root = "pi-light-windows-x64"
           if (Test-Path $root) { Remove-Item -Recurse -Force $root }
           New-Item -ItemType Directory -Path "$root/sidecar/pi" -Force | Out-Null
-          Copy-Item "desktop-rust/target/release/pi-light.exe" "$root/pi-light.exe"
+          Copy-Item -LiteralPath $piLightExe -Destination "$root/pi-light.exe"
           Copy-Item "NOTICE" "$root/NOTICE"
           Copy-Item "LICENSE" "$root/LICENSE"
           & ./scripts/fetch-pi-sidecar.ps1 -DestDir "$root/sidecar/pi"
