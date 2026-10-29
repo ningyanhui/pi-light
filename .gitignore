@@ -24,3 +24,11 @@ desktop.ini
 # Environment
 .env
 .env.local
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.iml
+.idea/

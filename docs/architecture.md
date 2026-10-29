@@ -43,14 +43,14 @@ Harness/dsh 仅 UX 借鉴，不作第二后端。
 │  覆盖: PI_LIGHT_PI_BIN                                               │
 └─────────────────────────────────────────────────────────────────────┘
 
-android/       Kotlin Compose（M6′ 移动端，两周内为弱功能占位）
-host/          可选本机桥（过渡期可保留，终态以壳内直管 Pi 为准）
+android/       Kotlin Compose（Option C：debug 占位 APK，不内嵌 Pi / 不连 Host）
+host/          可选本机桥（stretch；Option C 不依赖）
 desktop/       旧 Tauri 树（已标 deprecated，不是文档/实现主路径）
 ```
 
 ---
 
-## 目录结构（M2′）
+## 目录结构（M2′ + Android Option C）
 
 ```
 pi-light/
@@ -58,31 +58,28 @@ pi-light/
 ├── desktop-rust/                 # 主桌面客户端（egui/eframe）
 │   ├── Cargo.toml
 │   ├── src/
-│   │   ├── lib.rs                # 库根（供集成测试导入）
-│   │   ├── main.rs               # 入口 + eframe App + 聊天 UI
-│   │   ├── pi_path.rs            # Pi 路径解析（三态探测）
-│   │   ├── pi_rpc.rs             # Pi RPC 客户端（M2′）
-│   │   ├── chat.rs               # 会话状态机（M2′）
-│   │   └── bin/
-│   │       └── mock_pi.rs        # 测试用 mock Pi RPC 服务端
-│   ├── tests/
-│   │   └── rpc_smoke.rs          # 集成烟测（mock-pi / 真实 Pi）
-│   └── sidecar/
-│       └── pi/
-│           ├── .gitkeep          # 目录占位
-│           └── README.md         # sidecar 放置说明
-├── docs/
-│   └── architecture.md          # 本文件
-├── .github/
-│   └── workflows/
-│       └── ci.yml               # CI（check / test / clippy / fmt）
-├── LICENSE                      # Apache-2.0
-├── NOTICE                       # Pi MIT 版权声明
-├── ACKNOWLEDGEMENTS.md          # 致谢（pi-flash 灵感、earendil-works/pi 等）
-├── AGENTS.md                    # 洁净室规则与 AI 协作指南
-├── CONTRIBUTING.md              # 贡献指南
-├── THIRD-PARTY-NOTICES          # 第三方依赖许可清单（起步版）
-└── README.md                    # 主 README（中文）
+│   │   ├── lib.rs
+│   │   ├── main.rs
+│   │   ├── pi_path.rs
+│   │   ├── pi_rpc.rs
+│   │   ├── chat.rs
+│   │   └── bin/mock_pi.rs
+│   ├── tests/rpc_smoke.rs
+│   └── sidecar/pi/
+├── android/                      # Option C 占位壳（Compose）
+│   ├── app/
+│   └── README.md
+├── docs/architecture.md
+├── .github/workflows/
+│   ├── ci.yml
+│   └── android-apk.yml
+├── LICENSE
+├── NOTICE
+├── ACKNOWLEDGEMENTS.md
+├── AGENTS.md
+├── CONTRIBUTING.md
+├── THIRD-PARTY-NOTICES
+└── README.md
 ```
 
 ---
@@ -125,7 +122,8 @@ pi-light/
 | **M3′** | Trace/Token on Pi（`get_session_stats` + usage 事件） | Stretch |
 | **M4′** | 管理面（skill/MCP/记忆列表开关） | 后续 |
 | **M5′** | `#` 会话引用 + 可选 Taskboard 布局 | 后续 |
-| **M6′** | Android APK（Kotlin Compose，弱功能 → 连 Host） | 并行 |
+| **M6′** | Android Host 真连或同构嵌入（Option A stretch） | 后续 |
+| **Android C** | `android/` debug 占位 APK（首页 + 设置 stub，CI artifact） | ✅ 本里程碑 |
 | **R0** | Release（Win 便携 zip + 签名策略文档） | 后续 |
 
 ---

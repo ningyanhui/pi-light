@@ -1,0 +1,64 @@
+name: Android debug APK
+
+on:
+  push:
+    branches: ["main", "cursor/**"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: android-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assemble-debug:
+    name: assembleDebug
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK packages
+        working-directory: .
+        run: |
+          set -euo pipefail
+          CM="${ANDROID_HOME}/cmdline-tools"
+          if [ ! -x "${CM}/latest/bin/sdkmanager" ]; then
+            mkdir -p "${CM}"
+            curl -fsSL -o /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp
+            rm -rf "${CM}/latest"
+            mv /tmp/cmdline-tools "${CM}/latest"
+          fi
+          SDKMAN="${CM}/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "${SDKMAN}" --licenses >/dev/null || true
+          set -o pipefail
+          "${SDKMAN}" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-light-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
