@@ -97,7 +97,10 @@ impl ChatState {
             PiRpcEvent::UsageUpdate(_)
             | PiRpcEvent::SessionStats(_)
             | PiRpcEvent::ToolTraceStart { .. }
-            | PiRpcEvent::ToolTraceEnd { .. } => {}
+            | PiRpcEvent::ToolTraceEnd { .. }
+            | PiRpcEvent::StateInfo { .. }
+            | PiRpcEvent::AvailableModels(_)
+            | PiRpcEvent::ModelChanged(_) => {}
         }
     }
 }

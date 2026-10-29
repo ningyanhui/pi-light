@@ -1,6 +1,6 @@
 # 致谢 / Acknowledgements
 
-pi-light 在 Apache-2.0 许可下洁净室编写，未复制任何第三方代码。以下仓库提供了行为、信息架构或技术参考，在此诚挚致谢。
+pi-light 在 Apache-2.0 许可下洁净室编写，未复制任何第三方代码。以下项目提供了技术或设计参考，在此诚挚致谢。
 
 ---
 
@@ -16,17 +16,6 @@ pi-light 在 Apache-2.0 许可下洁净室编写，未复制任何第三方代�
 
 ---
 
-## pi-flash — 行为与信息架构灵感
-
-- **仓库**：[danielbill/pi-flash](https://github.com/danielbill/pi-flash)
-- **许可**：GPL-3.0-or-later（**pi-light 未使用其代码，仅参考行为**）
-- **用途**：会话优先布局、sidecar 捆绑行为、Pi 进程生命周期管理的 **UX 灵感来源**。
-  pi-light 是独立的洁净室重写，不是 pi-flash 的 fork，亦无官方关联。
-  pi-flash 使用 GPUI/Zed 技术栈（GPL），pi-light 使用 egui/eframe（Apache-2.0），
-  两者在代码层面没有任何共享。
-
----
-
 ## egui / eframe — UI 框架
 
 - **仓库**：[emilk/egui](https://github.com/emilk/egui)
@@ -36,34 +25,24 @@ pi-light 在 Apache-2.0 许可下洁净室编写，未复制任何第三方代�
 
 ---
 
+## Agent Skills 规范 — Skills 发现路径约定
+
+- **规范站点**：[agentskills.io](https://agentskills.io)
+- **用途**：pi-light M4′ 管理面的 Skills 发现路径（`~/.agents/skills/`、`.agents/skills/`、`<name>/SKILL.md` 目录约定）遵循此规范。
+
+---
+
+## pi-flash — 洁净室灵感（一句点名）
+
+- **仓库**：[danielbill/pi-flash](https://github.com/danielbill/pi-flash)（GPL-3.0-or-later）
+- **用途**：pi-light 的桌面 Agent Shell 定位受其启发。pi-light 不包含 pi-flash 任何代码，不链接其 crate，许可证完全独立。
+
+---
+
 ## bwoc-chat — egui + 子进程先例
 
 - **仓库**：[bemindlabs/bwoc-chat](https://github.com/bemindlabs/bwoc-chat)
 - **用途**：egui 窗口 + 子进程 stdin/stdout 通信模式的工程参考（仅学机制，不拷代码）。
-
----
-
-## pi-mobile-android — Android 端 README 风格灵感
-
-- **仓库**：[LiuChen19960902/pi-mobile-android](https://github.com/LiuChen19960902/pi-mobile-android)
-- **用途**：Android 移动端客户端设计与 README 文档风格参考（定位清晰、诚实限制）。
-  pi-light 未使用其代码，未摘抄其 README 正文。
-
----
-
-## deepseek-harness / dsh-mobile — UX 借鉴
-
-- **仓库**：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)、[Clarklevis1995/dsh-mobile](https://github.com/Clarklevis1995/dsh-mobile)
-- **用途**：Trace/Token 展示、插件/技能管理面板的 **视觉呈现思路借鉴**（映射到 Pi 事件与
-  `get_session_stats`）。pi-light 不捆绑 dsh，不做双后端切换。
-
----
-
-## 旧 desktop/ Tauri 实现（已标 deprecated）
-
-本仓库历史提交中曾存在基于 Tauri 的 `desktop/` 原型（旧 M0/M1 阶段）。
-该路径已不再是产品主路径；文档与实现主干为 `desktop-rust/`（egui/eframe）。
-旧树保留仅作历史记录，不作宣传。
 
 ---
 
