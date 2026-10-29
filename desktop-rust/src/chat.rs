@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Chat state machine for the pi-light chat UI (M2′).
+// Chat state machine for the pi-light chat UI (M2′ + 多会话 / 重试).
 
 use crate::pi_rpc::PiRpcEvent;
 use crate::session_insights::SessionInsights;
@@ -32,6 +32,8 @@ pub struct ChatState {
     pub scroll_to_bottom: bool,
     /// M3′: token usage + tool trace derived from Pi RPC.
     pub insights: SessionInsights,
+    /// Last prompt actually sent to Pi (includes `#` 引用拼合). Used by retry.
+    pub last_sent_prompt: Option<String>,
 }
 
 impl ChatState {
@@ -75,6 +77,20 @@ impl ChatState {
         self.error = Some(error);
     }
 
+    /// Retry is available when idle and a previous prompt exists.
+    pub fn can_retry(&self) -> bool {
+        !self.is_streaming && self.last_sent_prompt.is_some()
+    }
+
+    /// Drop a trailing assistant message so retry can regenerate it.
+    pub fn drop_trailing_assistant(&mut self) {
+        if matches!(self.messages.last(), Some(ChatMessage::Assistant(_))) {
+            self.messages.pop();
+        }
+        self.streaming_buf.clear();
+        self.error = None;
+    }
+
     /// Process a single `PiRpcEvent` from the RPC client.
     pub fn handle_rpc_event(&mut self, event: PiRpcEvent) {
         self.insights.handle_rpc_event(&event);
@@ -100,8 +116,142 @@ impl ChatState {
             | PiRpcEvent::ToolTraceEnd { .. }
             | PiRpcEvent::StateInfo { .. }
             | PiRpcEvent::AvailableModels(_)
-            | PiRpcEvent::ModelChanged(_) => {}
+            | PiRpcEvent::ModelChanged(_)
+            | PiRpcEvent::SessionCommandDone { .. } => {}
         }
+    }
+}
+
+// ── Multi-session hub ─────────────────────────────────────────────────────
+
+/// One conversation slot in the shell (this-run live session).
+///
+/// Historical Pi session *files* remain `#` 引用 candidates (`session_ref`);
+/// this hub does not re-scan those files.
+#[derive(Debug, Clone)]
+pub struct ChatSession {
+    pub id: u64,
+    pub title: String,
+    pub session_file: Option<String>,
+    pub session_id: Option<String>,
+}
+
+impl ChatSession {
+    fn new(id: u64) -> Self {
+        Self {
+            id,
+            title: format!("会话 {id}"),
+            session_file: None,
+            session_id: None,
+        }
+    }
+}
+
+/// Live session list + per-slot chat state.
+pub struct SessionHub {
+    sessions: Vec<ChatSession>,
+    chats: Vec<ChatState>,
+    active: usize,
+    next_id: u64,
+}
+
+impl Default for SessionHub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionHub {
+    pub fn new() -> Self {
+        Self {
+            sessions: vec![ChatSession::new(1)],
+            chats: vec![ChatState::default()],
+            active: 0,
+            next_id: 2,
+        }
+    }
+
+    pub fn list(&self) -> &[ChatSession] {
+        &self.sessions
+    }
+
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    pub fn active(&self) -> &ChatSession {
+        &self.sessions[self.active]
+    }
+
+    pub fn active_chat(&self) -> &ChatState {
+        &self.chats[self.active]
+    }
+
+    pub fn active_chat_mut(&mut self) -> &mut ChatState {
+        &mut self.chats[self.active]
+    }
+
+    /// Copy streaming flag before taking a mutable borrow of `input`.
+    pub fn active_is_streaming(&self) -> bool {
+        self.chats[self.active].is_streaming
+    }
+
+    pub fn any_streaming(&self) -> bool {
+        self.chats.iter().any(|c| c.is_streaming)
+    }
+
+    /// Create a new empty slot and make it active. Returns its index.
+    pub fn create_new(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.sessions.push(ChatSession::new(id));
+        self.chats.push(ChatState::default());
+        self.active = self.sessions.len() - 1;
+        self.active
+    }
+
+    /// Switch the active slot. Returns false if `index` is out of range.
+    pub fn switch_to(&mut self, index: usize) -> bool {
+        if index >= self.sessions.len() {
+            return false;
+        }
+        self.active = index;
+        true
+    }
+
+    pub fn set_active_session_file(&mut self, file: Option<String>, id: Option<String>) {
+        let s = &mut self.sessions[self.active];
+        if let Some(f) = file {
+            s.session_file = Some(f);
+        }
+        if let Some(id) = id {
+            s.session_id = Some(id);
+        }
+    }
+
+    pub fn set_active_title_from_user(&mut self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let s = &mut self.sessions[self.active];
+        if s.title.starts_with("会话 ") {
+            s.title = truncate_title(trimmed, 24);
+        }
+    }
+
+    /// After Pi respawn / cwd change: one fresh slot.
+    pub fn reset_all(&mut self) {
+        *self = Self::new();
+    }
+}
+
+fn truncate_title(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_owned()
+    } else {
+        format!("{}…", chars[..max_chars].iter().collect::<String>())
     }
 }
 
@@ -118,7 +268,6 @@ mod tests {
         assert_eq!(chat.messages.len(), 1);
         assert!(!chat.is_streaming);
 
-        // Simulate Pi streaming
         chat.handle_rpc_event(PiRpcEvent::TextDelta("Hi ".to_owned()));
         assert!(chat.is_streaming);
         chat.handle_rpc_event(PiRpcEvent::TextDelta("there!".to_owned()));
@@ -172,5 +321,50 @@ mod tests {
         chat.handle_rpc_event(PiRpcEvent::TextDelta("Hello".to_owned()));
         assert!(chat.is_streaming);
         assert_eq!(chat.streaming_buf, "Hello");
+    }
+
+    #[test]
+    fn retry_drops_trailing_assistant_and_keeps_prompt() {
+        let mut chat = ChatState::default();
+        chat.push_user("Hi".to_owned());
+        chat.last_sent_prompt = Some("Hi".to_owned());
+        chat.messages.push(ChatMessage::Assistant("old".to_owned()));
+        assert!(chat.can_retry());
+        chat.drop_trailing_assistant();
+        assert_eq!(chat.messages.len(), 1);
+        assert!(matches!(chat.messages[0], ChatMessage::User(_)));
+        assert_eq!(chat.last_sent_prompt.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn hub_create_and_switch_keeps_per_slot_history() {
+        let mut hub = SessionHub::new();
+        hub.active_chat_mut().push_user("in first".to_owned());
+        hub.set_active_title_from_user("in first");
+        let idx = hub.create_new();
+        assert_eq!(idx, 1);
+        assert_eq!(hub.active_index(), 1);
+        assert!(hub.active_chat().messages.is_empty());
+        hub.active_chat_mut().push_user("in second".to_owned());
+        assert!(hub.switch_to(0));
+        assert_eq!(hub.active_chat().messages.len(), 1);
+        if let ChatMessage::User(t) = &hub.active_chat().messages[0] {
+            assert_eq!(t, "in first");
+        } else {
+            panic!("expected first session user message");
+        }
+        assert_eq!(hub.active().title, "in first");
+        assert_eq!(hub.list().len(), 2);
+    }
+
+    #[test]
+    fn hub_reset_all_returns_single_empty_slot() {
+        let mut hub = SessionHub::new();
+        hub.create_new();
+        hub.create_new();
+        hub.reset_all();
+        assert_eq!(hub.list().len(), 1);
+        assert!(hub.active_chat().messages.is_empty());
+        assert_eq!(hub.active_index(), 0);
     }
 }

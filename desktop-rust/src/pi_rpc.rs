@@ -6,7 +6,7 @@
 //                     rpc-commands.md, json.md
 //
 // Design:
-//   - Spawn `pi --mode rpc --no-session` with piped stdin/stdout.
+//   - Spawn `pi --mode rpc` with piped stdin/stdout (optional cwd).
 //   - Background thread reads stdout JSONL and sends PiRpcEvent via mpsc.
 //   - UI thread drains the channel each frame via drain_events().
 //   - Writing commands to stdin is mutex-free (single UI thread owner).
@@ -14,7 +14,7 @@
 
 use std::{
     io::{self, BufRead, BufReader, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -83,6 +83,8 @@ pub struct TraceStep {
     pub running: bool,
     pub is_error: bool,
     pub duration_ms: Option<u64>,
+    /// Compact JSON of `args` from `tool_execution_start` (truncated).
+    pub args_preview: Option<String>,
 }
 
 /// Events delivered from the Pi stdout reader to the UI thread.
@@ -98,6 +100,7 @@ pub enum PiRpcEvent {
     ToolTraceStart {
         tool_call_id: String,
         tool_name: String,
+        args_preview: Option<String>,
     },
     /// Tool execution finished (`tool_execution_end`).
     ToolTraceEnd {
@@ -116,11 +119,16 @@ pub enum PiRpcEvent {
     StateInfo {
         /// "{provider}/{modelId}" 格式，如 "anthropic/claude-sonnet-4-20250514"。
         model: Option<String>,
+        session_file: Option<String>,
+        session_id: Option<String>,
+        session_name: Option<String>,
     },
     /// M4′: `get_available_models` response — list of "{provider}/{modelId}".
     AvailableModels(Vec<String>),
     /// M4′: `set_model` succeeded; new model in "{provider}/{modelId}" format.
     ModelChanged(String),
+    /// `new_session` / `switch_session` completed (`data.cancelled`).
+    SessionCommandDone { command: String, cancelled: bool },
 }
 
 // ── Bash PATH injection ───────────────────────────────────────────────────
@@ -160,21 +168,45 @@ pub struct PiRpcClient {
     next_id: u64,
 }
 
+/// 入口单次校验：路径存在且为目录。只在用户点击「应用」时调用，spawn 不再重复检查。
+pub fn validate_cwd(raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("工作目录不能为空".to_owned());
+    }
+    let path = PathBuf::from(trimmed);
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| format!("路径不存在或无法访问：{trimmed}"))?;
+    if !canonical.is_dir() {
+        return Err(format!("不是目录：{trimmed}"));
+    }
+    Ok(canonical)
+}
+
 impl PiRpcClient {
-    /// Spawn `pi --mode rpc --no-session` at `bin_path`.
+    /// Spawn `pi --mode rpc` at `bin_path`.
+    ///
+    /// `cwd` is the child process working directory (Pi session cwd). `None`
+    /// keeps the parent process cwd. Caller validates `cwd` once at the UI
+    /// apply entry via [`validate_cwd`]; this function does not re-check.
     ///
     /// `on_event` is called from the background reader thread whenever a
     /// new event is queued (use it to call `egui::Context::request_repaint`
     /// or a test wake-up hook).
-    pub fn spawn<F>(bin_path: &Path, on_event: F) -> io::Result<Self>
+    pub fn spawn<F>(bin_path: &Path, cwd: Option<&Path>, on_event: F) -> io::Result<Self>
     where
         F: Fn() + Send + 'static,
     {
         let mut cmd = Command::new(bin_path);
-        cmd.args(["--mode", "rpc", "--no-session"])
+        cmd.args(["--mode", "rpc"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null()); // stderr carries diagnostics, not protocol data
+
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
 
         // Inject bundled bash/MSYS dirs (sidecar/bash/) into the child's PATH so Pi can
         // locate bash for shell commands.  Detection and injection happen once per spawn —
@@ -223,6 +255,27 @@ impl PiRpcClient {
     /// with `aborted: true` once the abort is honoured.
     pub fn send_abort(&mut self) -> io::Result<()> {
         self.write_command(json!({"type": "abort"}))
+    }
+
+    /// Start a fresh Pi session (`new_session`).
+    pub fn send_new_session(&mut self) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "new_session",
+        }))
+    }
+
+    /// Load a different Pi session file (`switch_session`).
+    pub fn send_switch_session(&mut self, session_path: &str) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "switch_session",
+            "sessionPath": session_path,
+        }))
     }
 
     /// Request session-level token / cost stats (`get_session_stats`).
@@ -408,6 +461,7 @@ fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
                 vec![PiRpcEvent::ToolTraceStart {
                     tool_call_id,
                     tool_name,
+                    args_preview: preview_tool_args(val.get("args")),
                 }]
             }
         }
@@ -463,12 +517,33 @@ fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
                     Vec::new()
                 }
             } else if command == "get_state" {
-                // M4′: parse current model from get_state response
-                let model = val
+                let data = val.get("data");
+                let model = data.and_then(|d| d.get("model")).and_then(format_model_str);
+                let session_file = data
+                    .and_then(|d| d.get("sessionFile"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let session_id = data
+                    .and_then(|d| d.get("sessionId"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let session_name = data
+                    .and_then(|d| d.get("sessionName"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                vec![PiRpcEvent::StateInfo {
+                    model,
+                    session_file,
+                    session_id,
+                    session_name,
+                }]
+            } else if command == "new_session" || command == "switch_session" {
+                let cancelled = val
                     .get("data")
-                    .and_then(|d| d.get("model"))
-                    .and_then(format_model_str);
-                vec![PiRpcEvent::StateInfo { model }]
+                    .and_then(|d| d.get("cancelled"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                vec![PiRpcEvent::SessionCommandDone { command, cancelled }]
             } else if command == "get_available_models" {
                 // M4′: list of model objects
                 let models = val
@@ -497,6 +572,30 @@ fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
 
 fn as_u64(v: &Value) -> Option<u64> {
     v.as_u64().or_else(|| v.as_f64().map(|f| f as u64))
+}
+
+/// Compact one-line preview of a tool `args` object. Empty / missing → None.
+fn preview_tool_args(args: Option<&Value>) -> Option<String> {
+    let args = args?;
+    if args.is_null() {
+        return None;
+    }
+    if let Some(obj) = args.as_object() {
+        if obj.is_empty() {
+            return None;
+        }
+    }
+    let raw = serde_json::to_string(args).ok()?;
+    Some(truncate_chars(&raw, 80))
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_owned()
+    } else {
+        format!("{}…", chars[..max_chars].iter().collect::<String>())
+    }
 }
 
 /// M4′: 将 model 对象序列化为 "{provider}/{modelId}" 字符串。
@@ -629,11 +728,12 @@ mod tests {
     #[test]
     fn parse_tool_trace_lifecycle() {
         let start = parse_one(
-            r#"{"type":"tool_execution_start","toolCallId":"x","toolName":"bash","args":{}}"#,
+            r#"{"type":"tool_execution_start","toolCallId":"x","toolName":"bash","args":{"command":"echo hi"}}"#,
         );
         assert!(matches!(
             start[0],
-            PiRpcEvent::ToolTraceStart { ref tool_name, .. } if tool_name == "bash"
+            PiRpcEvent::ToolTraceStart { ref tool_name, ref args_preview, .. }
+                if tool_name == "bash" && args_preview.as_deref() == Some("{\"command\":\"echo hi\"}")
         ));
         let end = parse_one(
             r#"{"type":"tool_execution_end","toolCallId":"x","toolName":"bash","isError":false,"durationMs":99}"#,
@@ -713,5 +813,46 @@ mod tests {
             r#"{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello"}}"#,
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn parse_get_state_session_fields() {
+        let events = parse_one(
+            r#"{"type":"response","command":"get_state","success":true,"data":{"model":{"provider":"mock","modelId":"m1"},"sessionFile":"/tmp/s.jsonl","sessionId":"abc","sessionName":"demo"}}"#,
+        );
+        assert!(matches!(
+            &events[0],
+            PiRpcEvent::StateInfo {
+                model: Some(m),
+                session_file: Some(f),
+                session_id: Some(id),
+                session_name: Some(n),
+            } if m == "mock/m1" && f == "/tmp/s.jsonl" && id == "abc" && n == "demo"
+        ));
+    }
+
+    #[test]
+    fn parse_new_session_cancelled() {
+        let events = parse_one(
+            r#"{"type":"response","command":"new_session","success":true,"data":{"cancelled":true}}"#,
+        );
+        assert!(matches!(
+            &events[0],
+            PiRpcEvent::SessionCommandDone { command, cancelled: true } if command == "new_session"
+        ));
+    }
+
+    #[test]
+    fn validate_cwd_rejects_empty_and_missing() {
+        assert!(validate_cwd("").is_err());
+        assert!(validate_cwd("   ").is_err());
+        assert!(validate_cwd("/definitely/not/a/real/pi-light-cwd-xyz").is_err());
+    }
+
+    #[test]
+    fn validate_cwd_accepts_existing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let got = validate_cwd(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(got, dir.path().canonicalize().unwrap());
     }
 }

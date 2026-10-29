@@ -433,7 +433,7 @@ impl AdminPanelState {
             .show(ctx, |ui| {
                 // 标题栏
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("⚙ 管理面").strong().size(15.0));
+                    ui.label(egui::RichText::new("⚙ 设置").strong().size(15.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("✕").on_hover_text("关闭面板").clicked() {
                             self.open = false;

@@ -36,24 +36,28 @@ pi-light 是一个**通用桌面 Agent Shell**：把官方 [Pi coding agent](htt
 
 ## 2. 能做什么 / 不能做什么
 
-### 当前可用（M1′–M4′+）
+### 当前可用（M1′–M5′ + Claude Desktop 对标缺口）
 
 | 功能 | 说明 |
 |------|------|
 | **三态启动屏** | Bundled Ready / Detected Local / Not Ready，引导用户放置 Pi 二进制 |
-| **流式聊天** | 官方 JSONL RPC 真连 Pi，流式文字 + 停止按钮 + 进程生命周期管理 |
-| **Token / Trace** | 底部 Token 摘要条（M3′）；可折叠 Trace 列表来自 `tool_execution_*` 事件 |
-| **管理面（M4′+）** | 右侧面板：四个 tab，壳侧全量落地 |
+| **流式聊天** | 官方 JSONL RPC 真连 Pi，流式文字 + 停止 / 重试 + 进程生命周期管理 |
+| **多会话** | 左侧列表 / 新建 / 切换；Pi `new_session` / `switch_session`；历史会话文件仍用 `#` 引用，不重复造列表 |
+| **`#` 会话引用** | 输入 `#` 引用当前会话消息或本机历史会话文件，chip 拼入 prompt |
+| **Token / Trace** | 底部 Token 摘要条（M3′）；工具调用卡片（名称 / 状态 / 参数预览）来自 `tool_execution_*` |
+| **设置面（M4′+）** | 标题栏「⚙ 设置」打开右侧面板：四个 tab，壳侧全量落地 |
 | ↳ Skills | 本机发现；读写 `settings.json` `skills` 数组（`-id` 排除 / `+id` 加回）；UI checkbox 写回；改后重启 sidecar 生效 |
 | ↳ MCP | 发现 `mcp.json`（`~/.pi/agent/mcp.json`、`.pi/mcp.json`）；官方 `enabled` 字段读写（兼容旧 `disabled`）；UI 开关写回；改后重启 sidecar |
 | ↳ 记忆 | Project / User / Session 三层；内联文本编辑器，修改后保存写回文件；列表自动刷新 |
 | ↳ 模型 | 读写 `settings.json`；Pi 就绪时 RPC `set_model` 即时切换；写入 settings 后可重启 Pi 生效；API 密钥状态（不展示明文） |
+| **工作目录** | 会话栏查看 / 切换 cwd；入口单次校验后 `pi --mode rpc` 以该目录 spawn |
 | **Android APK** | `android/` debug 占位壳（Compose；首页 + 设置 stub；不内嵌 Pi） |
 
 ### 诚实限制
 
 - **API Key 编辑**：不在 UI 中存储或显示明文 key；请使用环境变量或 Pi 的 `/login` 命令
-- **会话持久化**：使用 `--no-session`，每次启动为全新会话；多会话为后续里程碑
+- **会话范围**：多会话是本进程活动槽；历史 json/jsonl 文件只通过 `#` 引用，不做会话树 / fork / Taskboard
+- **生成中**：新建 / 切换会话在流式生成时禁用，请先停止
 - **Token 用量**：依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」
 
 ---
@@ -130,10 +134,10 @@ desktop-rust/
 │   ├── lib.rs               # 库入口（供集成测试用）
 │   ├── bash_path.rs         # 便携 bash 路径探测 + PATH 注入（便携 bash / R0+）
 │   ├── pi_path.rs           # Pi 二进制路径探测（三态）
-│   ├── pi_rpc.rs            # JSONL RPC 客户端（M2′+M4′ 模型命令；spawn 注入 bash PATH）
-│   ├── chat.rs              # 聊天状态机（M2′）
+│   ├── pi_rpc.rs            # JSONL RPC 客户端（spawn 可带 cwd；new_session / switch_session）
+│   ├── chat.rs              # 聊天状态机 + 多会话 SessionHub
 │   ├── session_insights.rs  # Token / Trace（M3′）
-│   ├── admin_panel.rs       # 管理面（M4′）
+│   ├── admin_panel.rs       # 设置面（M4′）
 │   └── bin/mock_pi.rs       # 集成测试用 Pi 替身
 └── tests/rpc_smoke.rs       # 集成烟测
 ```
@@ -144,7 +148,7 @@ desktop-rust/
 
 - **API Key**：不在 UI 中存储或展示明文 key。管理面仅检测环境变量是否存在、auth.json 是否存在，展示"已配置/未配置"。
 - **Pi SHA-256**：Release 流水线校验 Pi sidecar 的 SHA-256（`scripts/verify_pi_sha256.sh`），不合格不打包。
-- **洁净室**：不引入 GPUI / Zed vendor 代码；不使用 pi-flash crate；不捆绑 dsh；不做双后端切换 UI。
+- **洁净室**：不引入 GPUI / Zed vendor 代码；不捆绑 dsh；不做双后端切换 UI。完整禁令见 `AGENTS.md`。
 
 ---
 

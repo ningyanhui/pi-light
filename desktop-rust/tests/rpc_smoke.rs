@@ -67,7 +67,8 @@ where
 #[test]
 fn smoke_prompt_streams_deltas_then_settled() {
     let bin = pi_bin();
-    let mut client = PiRpcClient::spawn(&bin, || {}).expect("failed to spawn Pi / mock-pi binary");
+    let mut client =
+        PiRpcClient::spawn(&bin, None, || {}).expect("failed to spawn Pi / mock-pi binary");
 
     client.send_prompt("Hello").expect("send_prompt failed");
 
@@ -91,7 +92,8 @@ fn smoke_prompt_streams_deltas_then_settled() {
 #[test]
 fn smoke_abort_yields_settled_aborted() {
     let bin = pi_bin();
-    let mut client = PiRpcClient::spawn(&bin, || {}).expect("failed to spawn Pi / mock-pi binary");
+    let mut client =
+        PiRpcClient::spawn(&bin, None, || {}).expect("failed to spawn Pi / mock-pi binary");
 
     // Send a prompt to put Pi in streaming mode, then immediately abort.
     client.send_prompt("Long task").expect("send_prompt failed");
@@ -116,7 +118,8 @@ fn smoke_abort_yields_settled_aborted() {
 #[test]
 fn smoke_shutdown_does_not_orphan_process() {
     let bin = pi_bin();
-    let mut client = PiRpcClient::spawn(&bin, || {}).expect("failed to spawn Pi / mock-pi binary");
+    let mut client =
+        PiRpcClient::spawn(&bin, None, || {}).expect("failed to spawn Pi / mock-pi binary");
 
     client.send_prompt("Hi").expect("send_prompt failed");
     // Shut down immediately without waiting for settled — verifies that
@@ -128,7 +131,8 @@ fn smoke_shutdown_does_not_orphan_process() {
 #[test]
 fn smoke_session_stats_and_trace_after_prompt() {
     let bin = pi_bin();
-    let mut client = PiRpcClient::spawn(&bin, || {}).expect("failed to spawn Pi / mock-pi binary");
+    let mut client =
+        PiRpcClient::spawn(&bin, None, || {}).expect("failed to spawn Pi / mock-pi binary");
 
     client.send_prompt("Hello").expect("send_prompt failed");
 
@@ -169,7 +173,7 @@ fn smoke_session_stats_and_trace_after_prompt() {
 fn smoke_session_stats_empty_tokens_when_mock_no_stats() {
     let bin = pi_bin();
     std::env::set_var("PI_LIGHT_MOCK_NO_STATS", "1");
-    let mut client = PiRpcClient::spawn(&bin, || {}).expect("spawn mock-pi");
+    let mut client = PiRpcClient::spawn(&bin, None, || {}).expect("spawn mock-pi");
     client
         .request_session_stats()
         .expect("request_session_stats failed");
@@ -299,7 +303,8 @@ fn smoke_prompt_with_reference_context() {
 
     // 通过 mock-pi 发送
     let bin = pi_bin();
-    let mut client = PiRpcClient::spawn(&bin, || {}).expect("failed to spawn Pi / mock-pi binary");
+    let mut client =
+        PiRpcClient::spawn(&bin, None, || {}).expect("failed to spawn Pi / mock-pi binary");
     client.send_prompt(&effective).expect("send_prompt failed");
 
     let events = drain_until(&mut client, Duration::from_secs(10), |ev| {
@@ -339,4 +344,49 @@ fn unit_hash_space_not_a_trigger() {
     assert!(session_ref::find_hash_trigger("test # comment").is_none());
     // 末尾 # 无后续字符 → 允许触发（刚按下 #）
     assert!(session_ref::find_hash_trigger("test #").is_some());
+}
+
+#[test]
+fn smoke_spawn_with_cwd() {
+    let bin = pi_bin();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut client = PiRpcClient::spawn(&bin, Some(dir.path()), || {})
+        .expect("spawn with existing cwd should succeed");
+    client.send_prompt("cwd").expect("prompt");
+    let events = drain_until(&mut client, Duration::from_secs(10), |ev| {
+        matches!(ev, PiRpcEvent::AgentSettled { .. })
+    });
+    assert!(events
+        .iter()
+        .any(|ev| matches!(ev, PiRpcEvent::AgentSettled { .. })));
+    client.shutdown(Duration::from_secs(3));
+}
+
+#[test]
+fn smoke_spawn_rejects_missing_cwd() {
+    let bin = pi_bin();
+    let missing = std::env::temp_dir().join("pi-light-missing-cwd-does-not-exist");
+    let result = PiRpcClient::spawn(&bin, Some(&missing), || {});
+    assert!(result.is_err(), "missing cwd should fail at spawn");
+}
+
+#[test]
+fn smoke_new_session_command() {
+    let bin = pi_bin();
+    let mut client = PiRpcClient::spawn(&bin, None, || {}).expect("spawn");
+    client.send_new_session().expect("new_session");
+    let events = drain_until(&mut client, Duration::from_secs(5), |ev| {
+        matches!(ev, PiRpcEvent::SessionCommandDone { .. })
+    });
+    assert!(
+        events.iter().any(|ev| matches!(
+            ev,
+            PiRpcEvent::SessionCommandDone {
+                command,
+                cancelled: false
+            } if command == "new_session"
+        )),
+        "expected new_session SessionCommandDone, got {events:?}"
+    );
+    client.shutdown(Duration::from_secs(3));
 }
