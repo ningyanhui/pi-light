@@ -36,30 +36,25 @@ pi-light 是一个**通用桌面 Agent Shell**：把官方 [Pi coding agent](htt
 
 ## 2. 能做什么 / 不能做什么
 
-### 当前可用（M1′–M4′）
+### 当前可用（M1′–M4′+）
 
 | 功能 | 说明 |
 |------|------|
 | **三态启动屏** | Bundled Ready / Detected Local / Not Ready，引导用户放置 Pi 二进制 |
 | **流式聊天** | 官方 JSONL RPC 真连 Pi，流式文字 + 停止按钮 + 进程生命周期管理 |
 | **Token / Trace** | 底部 Token 摘要条（M3′）；可折叠 Trace 列表来自 `tool_execution_*` 事件 |
-| **管理面（M4′）** | 右侧面板：五个 tab，各有诚实的空态降级文案 |
-| ↳ Skills | 本机发现（`~/.pi/agent/skills/`、`.pi/skills/`、`~/.agents/skills/`）；列表只读展示 |
-| ↳ MCP | 发现 `mcp.json`（`~/.pi/agent/mcp.json`、`.pi/mcp.json`）；支持 UI 开关并写回文件 |
-| ↳ 插件 | 诚实空态：Pi v1.4.0 暂无独立插件体系 |
-| ↳ 记忆 | Project / User / Session 三层；读取 CLAUDE.md / AGENTS.md / `~/.pi/agent/AGENTS.md`；只读展示 |
-| ↳ 模型 | 读取 `settings.json`；显示默认提供商/模型；支持写入 settings.json 或通过 RPC `set_model` 切换（需 Pi 就绪）；API 密钥状态（环境变量或 auth.json 存在性，不展示明文） |
+| **管理面（M4′+）** | 右侧面板：四个 tab，壳侧全量落地 |
+| ↳ Skills | 本机发现；读写 `settings.json` `skills` 数组（`-id` 排除 / `+id` 加回）；UI checkbox 写回；改后重启 sidecar 生效 |
+| ↳ MCP | 发现 `mcp.json`（`~/.pi/agent/mcp.json`、`.pi/mcp.json`）；官方 `enabled` 字段读写（兼容旧 `disabled`）；UI 开关写回；改后重启 sidecar |
+| ↳ 记忆 | Project / User / Session 三层；内联文本编辑器，修改后保存写回文件；列表自动刷新 |
+| ↳ 模型 | 读写 `settings.json`；Pi 就绪时 RPC `set_model` 即时切换；写入 settings 后可重启 Pi 生效；API 密钥状态（不展示明文） |
 | **Android APK** | `android/` debug 占位壳（Compose；首页 + 设置 stub；不内嵌 Pi） |
 
 ### 诚实限制
 
-- **Skills 开关**：Pi v1.4.0 无对应 RPC；UI 标注「只读 / 暂不支持开关」，请手动编辑配置文件
-- **Skills 启用状态**：SKILL.md 无 `enabled` 字段，列表展示为「状态未知」
+- **API Key 编辑**：不在 UI 中存储或显示明文 key；请使用环境变量或 Pi 的 `/login` 命令
 - **会话持久化**：使用 `--no-session`，每次启动为全新会话；多会话为后续里程碑
 - **Token 用量**：依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」
-- **模型 RPC 切换**：依赖 Pi v1.4.0 的 `set_model` 命令；Pi 未就绪时仅可写入 settings.json（下次启动生效）
-- **API Key 编辑**：不在 UI 中存储或显示明文 key；请使用环境变量或 Pi 的 `/login` 命令
-- **插件**：Pi v1.4.0 无插件扩展体系，此 tab 保留待后续版本
 
 ---
 
