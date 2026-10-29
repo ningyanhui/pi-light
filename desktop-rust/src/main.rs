@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// pi-light — 内嵌 Pi 的轻量 Rust Shell (M2′ 聊天 + M3′ Trace/Token + M4′ 管理面)
+// pi-light — 内嵌 Pi 的轻量 Rust Shell (M2′ 聊天 + M3′ Trace/Token + M4′+ 管理面)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -80,12 +80,20 @@ impl PiLightApp {
         }
     }
 
-    /// Re-probe Pi and re-spawn if found.
+    /// Re-probe Pi binary and re-spawn RPC if found.
     fn reprobe(&mut self) {
-        // Shut down existing client (Drop handles it).
         self.rpc_client = None;
         self.pi_probe = pi_path::probe();
         self.try_spawn_rpc();
+    }
+
+    /// 重启 sidecar（不重新探测二进制）：用于 Skills/MCP/模型配置变更后使新配置生效。
+    fn restart_sidecar(&mut self) {
+        self.rpc_client = None;
+        self.chat = ChatState::default();
+        self.try_spawn_rpc();
+        // 重启后刷新管理面发现结果
+        self.admin.rediscover();
     }
 
     /// Send the current input as a prompt to Pi.
@@ -146,7 +154,7 @@ impl PiLightApp {
         }
     }
 
-    /// M4′: 向 Pi 发送 set_model 命令。
+    /// 向 Pi 发送 set_model 命令。
     fn handle_set_model_request(&mut self, req: SetModelRequest) {
         if let Some(client) = &mut self.rpc_client {
             if let Err(e) = client.send_set_model(&req.provider, &req.model_id) {
@@ -216,9 +224,13 @@ impl eframe::App for PiLightApp {
             });
         });
 
-        // ── M4′ 管理面（右侧面板，始终可见，无需 Pi 就绪）─────────────────
-        if let Some(req) = self.admin.show_panel(ctx, None) {
+        // ── M4′+ 管理面（右侧面板，始终可见，无需 Pi 就绪）────────────────
+        let panel_ret = self.admin.show_panel(ctx, None, self.rpc_client.is_some());
+        if let Some(req) = panel_ret.set_model_request {
             self.handle_set_model_request(req);
+        }
+        if panel_ret.restart_sidecar {
+            self.restart_sidecar();
         }
 
         // ── Dispatch: chat UI vs. not-ready info screen ───────────────────

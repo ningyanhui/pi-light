@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// M4′ 管理面 — Skills / MCP / 插件 / 记忆 / 模型 五类 MVP
+// M4′+ 管理面 — Skills / MCP / 记忆 / 模型 四类，壳侧全量落地
 //
 // 数据来源：
 //   - Pi agent 目录（默认 ~/.pi/agent/，可被 PI_CODING_AGENT_DIR 覆盖）
@@ -8,8 +8,12 @@
 //   - ~/.agents/skills/ 与 .agents/skills/（Agent Skills 规范路径）
 //   - 模型/API 密钥状态：settings.json + auth.json + 环境变量
 //
-// Pi v1.4.0 无管理类 RPC；模型切换 via set_model RPC 在 M4′ 标注为「需连接 Pi」；
-// 配置文件读写作为离线 fallback。
+// 落地项：
+//   - Skills 开关：读写 settings.json `skills` 数组（-id 排除 / +id 加回）
+//   - Skills 状态：由排除列表推导 Enabled/Disabled，无 Unknown
+//   - MCP 字段对齐：官方 `enabled: false` 主字段，兼容旧 `disabled` 读取，写回删 `disabled`
+//   - 记忆内联编辑：TextEdit + 保存写回 + 取消
+//   - 模型切换：Pi 就绪则 set_model RPC；不就绪则写 settings.json；写后可重启 sidecar
 
 use std::{
     fs, io,
@@ -25,7 +29,6 @@ pub enum AdminTab {
     #[default]
     Skills,
     Mcp,
-    Plugins,
     Memory,
     Models,
 }
@@ -35,7 +38,6 @@ impl AdminTab {
         match self {
             AdminTab::Skills => "Skills",
             AdminTab::Mcp => "MCP",
-            AdminTab::Plugins => "插件",
             AdminTab::Memory => "记忆",
             AdminTab::Models => "模型",
         }
@@ -44,11 +46,9 @@ impl AdminTab {
 
 // ── Item types ────────────────────────────────────────────────────────────
 
-/// 条目是否支持 UI 级开关。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemCapability {
     ReadWrite,
-    /// 仅只读展示；Pi 无对应 RPC 或配置路径不明。
     ReadOnly,
 }
 
@@ -56,15 +56,15 @@ pub enum ItemCapability {
 pub enum ItemState {
     Enabled,
     Disabled,
+    /// 仅在文件损坏等真实无法推断时使用；正常路径不出现。
     Unknown,
 }
 
-/// Skills / MCP / 插件列表中的一行条目。
+/// Skills / MCP 列表中的一行条目。
 #[derive(Debug, Clone)]
 pub struct ManagedItem {
     pub id: String,
     pub display_name: String,
-    /// 分类标签（skill category）或命令名（mcp command）。
     pub tag: Option<String>,
     pub state: ItemState,
     pub capability: ItemCapability,
@@ -109,7 +109,7 @@ impl MemoryLayer {
     }
 }
 
-/// 单条记忆摘要（只读展示）。
+/// 单条记忆摘要条目。
 #[derive(Debug, Clone)]
 pub struct MemoryEntry {
     pub layer: MemoryLayer,
@@ -118,30 +118,46 @@ pub struct MemoryEntry {
     pub source_path: Option<PathBuf>,
 }
 
+/// 记忆内联编辑器状态（Memory tab 中的文本编辑器）。
+#[derive(Debug, Clone)]
+pub struct MemoryEditorState {
+    pub source_path: PathBuf,
+    pub content: String,
+    /// 打开时的原始内容，用于「取消」恢复和 dirty 检测。
+    original_content: String,
+    pub save_error: Option<String>,
+}
+
+impl MemoryEditorState {
+    pub fn open(path: PathBuf, content: String) -> Self {
+        Self {
+            original_content: content.clone(),
+            content,
+            source_path: path,
+            save_error: None,
+        }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.content != self.original_content
+    }
+}
+
 // ── Model config ──────────────────────────────────────────────────────────
 
-/// 从 settings.json 读取的模型配置快照。
 #[derive(Debug, Clone, Default)]
 pub struct ModelConfig {
-    /// 当前默认提供商（来自 settings.json `defaultProvider`）。
     pub default_provider: Option<String>,
-    /// 当前默认模型 ID（来自 settings.json `defaultModel`）。
     pub default_model: Option<String>,
-    /// settings.json 路径（用于写回）。
+    /// settings.json 路径（用于写回）。若 Pi agent 目录已知则始终 Some，无论文件是否存在。
     pub settings_path: Option<PathBuf>,
-    /// 自定义端点列表（来自 models.json）。
     pub custom_endpoints: Vec<CustomEndpoint>,
-    /// API 密钥状态。
     pub auth_status: AuthStatus,
-    /// 来自 RPC `get_state` 的实时模型名称（可选）。
     pub live_model: Option<String>,
-    /// 来自 RPC `get_available_models` 的模型列表（可选）。
     pub available_models: Vec<String>,
-    /// 用户在 UI 输入的"切换目标"（未提交）。
     pub switch_input: String,
 }
 
-/// models.json 中的一个自定义端点条目。
 #[derive(Debug, Clone)]
 pub struct CustomEndpoint {
     pub name: String,
@@ -153,12 +169,45 @@ pub struct CustomEndpoint {
 pub enum AuthStatus {
     #[default]
     Unknown,
-    /// 通过环境变量配置（显示变量名，不显示值）。
     EnvVar(String),
-    /// auth.json 文件存在（显示"已配置"，不读内容）。
     FileExists(PathBuf),
-    /// 未检测到任何凭据配置。
     NotConfigured,
+}
+
+// ── Skills settings ───────────────────────────────────────────────────────
+
+/// 从 settings.json 读取的 skills 排除配置。
+#[derive(Debug)]
+pub struct SkillsSettings {
+    /// settings.json 中 `skills` 数组的所有条目（原始字符串）。
+    pub exclusions: Vec<String>,
+    /// 可写回的 settings.json 路径（pi_agent_dir 存在则 Some）。
+    pub settings_path: Option<PathBuf>,
+}
+
+impl SkillsSettings {
+    /// 判断 skill id 是否被排除（禁用）。
+    pub fn is_excluded(&self, id: &str) -> bool {
+        let excluded = self.exclusions.iter().any(|e| {
+            if let Some(key) = e.strip_prefix('-') {
+                // 匹配 id 本身，或以 /id 、\id 结尾的路径段
+                key == id || key.ends_with(&format!("/{id}")) || key.ends_with(&format!("\\{id}"))
+            } else {
+                false
+            }
+        });
+        if !excluded {
+            return false;
+        }
+        // 被 +id 加回则视为启用
+        !self.exclusions.iter().any(|e| {
+            if let Some(key) = e.strip_prefix('+') {
+                key == id || key.ends_with(&format!("/{id}")) || key.ends_with(&format!("\\{id}"))
+            } else {
+                false
+            }
+        })
+    }
 }
 
 // ── Discovery state ───────────────────────────────────────────────────────
@@ -171,6 +220,23 @@ pub enum DiscoveryState {
     Failed(String),
 }
 
+// ── Panel return type ─────────────────────────────────────────────────────
+
+/// `show_panel()` 的返回值，汇总所有需要 main.rs 响应的操作请求。
+#[derive(Debug, Default)]
+pub struct AdminPanelReturn {
+    pub set_model_request: Option<SetModelRequest>,
+    /// 若为 true，main.rs 应调用 `restart_sidecar()` 使配置生效。
+    pub restart_sidecar: bool,
+}
+
+/// 来自 UI 的 set_model RPC 请求。
+#[derive(Debug, Clone)]
+pub struct SetModelRequest {
+    pub provider: String,
+    pub model_id: String,
+}
+
 // ── AdminPanelState ───────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
@@ -180,34 +246,37 @@ pub struct AdminPanelState {
 
     pub skills_state: DiscoveryState,
     pub skill_items: Vec<ManagedItem>,
+    /// 当前 skills 排除配置（用于 toggle 写回）。
+    pub skills_settings: Option<SkillsSettings>,
 
     pub mcp_state: DiscoveryState,
     pub mcp_items: Vec<ManagedItem>,
 
-    pub plugins_state: DiscoveryState,
-
     pub memory_state: DiscoveryState,
     pub memory_entries: Vec<MemoryEntry>,
-    /// 来自聊天层的会话上下文摘要。
     pub session_memory_text: Option<String>,
+    /// 内联记忆编辑器（None = 未打开）。
+    pub memory_editor: Option<MemoryEditorState>,
 
     pub model_state: DiscoveryState,
     pub model_config: ModelConfig,
 
     pub last_error: Option<String>,
+    /// 由 toggle 或模型写入触发；main.rs 消费后重启 sidecar。
+    pub sidecar_restart_needed: bool,
 }
 
 impl AdminPanelState {
     // ── Discovery ─────────────────────────────────────────────────────────
 
     pub fn discover_all(&mut self) {
-        self.skill_items = discover_skills();
+        let (items, settings) = discover_skills_with_settings();
+        self.skill_items = items;
+        self.skills_settings = Some(settings);
         self.skills_state = DiscoveryState::Ready;
 
         self.mcp_items = discover_mcp();
         self.mcp_state = DiscoveryState::Ready;
-
-        self.plugins_state = DiscoveryState::Ready;
 
         self.memory_entries = discover_memory();
         self.memory_state = DiscoveryState::Ready;
@@ -219,13 +288,13 @@ impl AdminPanelState {
     pub fn rediscover(&mut self) {
         self.skills_state = DiscoveryState::NotStarted;
         self.mcp_state = DiscoveryState::NotStarted;
-        self.plugins_state = DiscoveryState::NotStarted;
         self.memory_state = DiscoveryState::NotStarted;
         self.model_state = DiscoveryState::NotStarted;
+        self.memory_editor = None;
         self.discover_all();
     }
 
-    /// 将 RPC 获得的实时模型信息更新到 model_config（由 main.rs 调用）。
+    /// 将 RPC 获得的实时模型信息更新到 model_config。
     pub fn update_live_model(&mut self, model_name: Option<String>, models: Vec<String>) {
         self.model_config.live_model = model_name;
         if !models.is_empty() {
@@ -236,37 +305,92 @@ impl AdminPanelState {
     // ── Toggle ────────────────────────────────────────────────────────────
 
     pub fn toggle_item(&mut self, tab: AdminTab, id: &str) -> Result<(), String> {
-        let items: &mut [ManagedItem] = match tab {
-            AdminTab::Mcp => &mut self.mcp_items,
-            AdminTab::Skills => &mut self.skill_items,
-            AdminTab::Plugins => return Err("插件条目仅只读展示。".to_owned()),
-            AdminTab::Memory => return Err("记忆条目仅只读展示。".to_owned()),
-            AdminTab::Models => return Err("请使用切换按钮修改默认模型。".to_owned()),
-        };
+        match tab {
+            AdminTab::Skills => self.toggle_skill(id),
+            AdminTab::Mcp => self.toggle_mcp(id),
+            AdminTab::Memory | AdminTab::Models => Err("此 tab 条目不支持直接开关。".to_owned()),
+        }
+    }
 
-        let item = items
+    fn toggle_skill(&mut self, id: &str) -> Result<(), String> {
+        let item = self
+            .skill_items
             .iter_mut()
             .find(|i| i.id == id)
-            .ok_or_else(|| format!("条目不存在：{id}"))?;
+            .ok_or_else(|| format!("skill 不存在：{id}"))?;
 
         if item.capability == ItemCapability::ReadOnly {
             return Err(format!(
-                "「{}」暂不支持 UI 开关，请手动编辑配置文件。",
+                "「{}」无可写 settings.json 路径，请手动编辑配置文件。",
                 item.display_name
             ));
         }
 
         let new_state = match item.state {
-            ItemState::Enabled => ItemState::Disabled,
-            ItemState::Disabled | ItemState::Unknown => ItemState::Enabled,
+            ItemState::Enabled | ItemState::Unknown => ItemState::Disabled,
+            ItemState::Disabled => ItemState::Enabled,
         };
 
-        if let Some(path) = item.config_path.clone() {
-            write_mcp_disabled(&path, id, new_state == ItemState::Disabled)
-                .map_err(|e| format!("写入配置失败：{e}"))?;
-        }
+        let settings_path = self
+            .skills_settings
+            .as_ref()
+            .and_then(|s| s.settings_path.clone())
+            .ok_or_else(|| "未找到 settings.json 写入路径".to_owned())?;
+
+        write_skills_exclusion(&settings_path, id, new_state == ItemState::Disabled)
+            .map_err(|e| format!("写入 settings.json 失败：{e}"))?;
 
         item.state = new_state;
+
+        // 同步更新内存中的排除列表
+        if let Some(ss) = &mut self.skills_settings {
+            let excl_key = format!("-{id}");
+            let incl_key = format!("+{id}");
+            if new_state == ItemState::Disabled {
+                ss.exclusions.retain(|e| e != &incl_key);
+                if !ss.exclusions.contains(&excl_key) {
+                    ss.exclusions.push(excl_key);
+                }
+            } else {
+                ss.exclusions.retain(|e| e != &excl_key && e != &incl_key);
+            }
+        }
+
+        self.sidecar_restart_needed = true;
+        Ok(())
+    }
+
+    fn toggle_mcp(&mut self, id: &str) -> Result<(), String> {
+        let item = self
+            .mcp_items
+            .iter_mut()
+            .find(|i| i.id == id)
+            .ok_or_else(|| format!("MCP 条目不存在：{id}"))?;
+
+        if item.capability == ItemCapability::ReadOnly {
+            return Err(format!("「{}」暂不支持 UI 开关。", item.display_name));
+        }
+
+        let new_enabled = match item.state {
+            ItemState::Enabled | ItemState::Unknown => false,
+            ItemState::Disabled => true,
+        };
+
+        let path = item
+            .config_path
+            .clone()
+            .ok_or_else(|| "MCP 配置路径未知".to_owned())?;
+
+        write_mcp_enabled(&path, id, new_enabled)
+            .map_err(|e| format!("写入 mcp.json 失败：{e}"))?;
+
+        item.state = if new_enabled {
+            ItemState::Enabled
+        } else {
+            ItemState::Disabled
+        };
+
+        self.sidecar_restart_needed = true;
         Ok(())
     }
 
@@ -274,15 +398,15 @@ impl AdminPanelState {
 
     /// 渲染右侧管理面板。
     ///
-    /// `session_memory_hint`：来自聊天层的会话上下文摘要（可选）。
-    /// 返回 `Some(set_model_request)` 当用户请求通过 RPC 切换模型。
+    /// `pi_connected`：当前是否有存活的 Pi RPC 连接（影响模型切换按钮文案）。
     pub fn show_panel(
         &mut self,
         ctx: &egui::Context,
         session_memory_hint: Option<&str>,
-    ) -> Option<SetModelRequest> {
+        pi_connected: bool,
+    ) -> AdminPanelReturn {
         if !self.open {
-            return None;
+            return AdminPanelReturn::default();
         }
 
         if self.skills_state == DiscoveryState::NotStarted {
@@ -293,7 +417,13 @@ impl AdminPanelState {
             self.session_memory_text = Some(hint.to_owned());
         }
 
+        // 用局部变量收集面板内产生的操作请求，避免在 egui 闭包中同时借用 self。
         let mut model_request: Option<SetModelRequest> = None;
+        let mut want_restart_from_model = false;
+        // 记忆编辑器动作
+        let mut memory_want_save = false;
+        let mut memory_want_cancel = false;
+        let mut memory_open_path: Option<PathBuf> = None;
 
         egui::SidePanel::right("admin_panel")
             .resizable(true)
@@ -324,7 +454,6 @@ impl AdminPanelState {
                     for tab in [
                         AdminTab::Skills,
                         AdminTab::Mcp,
-                        AdminTab::Plugins,
                         AdminTab::Memory,
                         AdminTab::Models,
                     ] {
@@ -354,51 +483,104 @@ impl AdminPanelState {
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         let tab = self.active_tab;
-                        let toggle_req = match tab {
-                            AdminTab::Skills => render_item_list(
-                                ui,
-                                "Skills（本机已发现）",
-                                &mut self.skill_items,
-                                SKILLS_EMPTY_MSG,
-                            ),
-                            AdminTab::Mcp => {
-                                render_item_list(ui, "MCP 服务", &mut self.mcp_items, MCP_EMPTY_MSG)
+                        match tab {
+                            AdminTab::Skills => {
+                                let toggle_id = render_item_list(
+                                    ui,
+                                    "Skills（本机已发现）",
+                                    &mut self.skill_items,
+                                    SKILLS_EMPTY_MSG,
+                                );
+                                if let Some(id) = toggle_id {
+                                    if let Err(e) = self.toggle_skill(&id) {
+                                        self.last_error = Some(e);
+                                    }
+                                }
                             }
-                            AdminTab::Plugins => {
-                                render_plugins(ui);
-                                None
+                            AdminTab::Mcp => {
+                                let toggle_id = render_item_list(
+                                    ui,
+                                    "MCP 服务",
+                                    &mut self.mcp_items,
+                                    MCP_EMPTY_MSG,
+                                );
+                                if let Some(id) = toggle_id {
+                                    if let Err(e) = self.toggle_mcp(&id) {
+                                        self.last_error = Some(e);
+                                    }
+                                }
                             }
                             AdminTab::Memory => {
-                                render_memory(
+                                // 编辑器区（顶部）
+                                if let Some(editor) = &mut self.memory_editor {
+                                    let (save, cancel) = render_memory_editor(ui, editor);
+                                    memory_want_save = save;
+                                    memory_want_cancel = cancel;
+                                    ui.separator();
+                                }
+
+                                // 列表区
+                                let open_path = render_memory_list(
                                     ui,
                                     &self.memory_entries,
                                     self.session_memory_text.as_deref(),
+                                    self.memory_editor.as_ref().map(|e| e.source_path.as_path()),
                                 );
-                                None
+                                memory_open_path = open_path;
                             }
                             AdminTab::Models => {
-                                model_request = render_models(ui, &mut self.model_config);
-                                None
-                            }
-                        };
-
-                        if let Some(id) = toggle_req {
-                            if let Err(e) = self.toggle_item(tab, &id) {
-                                self.last_error = Some(e);
+                                let (req, want_restart) =
+                                    render_models(ui, &mut self.model_config, pi_connected);
+                                model_request = req;
+                                want_restart_from_model = want_restart;
                             }
                         }
                     });
             });
 
-        model_request
-    }
-}
+        // ── 应用记忆编辑器动作（在 egui 闭包外，避免借用冲突）──────────
+        if memory_want_save {
+            let write_result = self.memory_editor.as_ref().map(|ed| {
+                (
+                    ed.source_path.clone(),
+                    fs::write(&ed.source_path, ed.content.as_bytes()),
+                )
+            });
+            match write_result {
+                Some((_, Ok(()))) => {
+                    self.memory_entries = discover_memory();
+                    self.memory_editor = None;
+                }
+                Some((_, Err(e))) => {
+                    if let Some(ed) = &mut self.memory_editor {
+                        ed.save_error = Some(format!("保存失败：{e}"));
+                    }
+                }
+                None => {}
+            }
+        } else if memory_want_cancel {
+            self.memory_editor = None;
+        }
 
-/// 来自 UI 的 set_model RPC 请求。
-#[derive(Debug, Clone)]
-pub struct SetModelRequest {
-    pub provider: String,
-    pub model_id: String,
+        if let Some(path) = memory_open_path {
+            match fs::read_to_string(&path) {
+                Ok(content) => {
+                    self.memory_editor = Some(MemoryEditorState::open(path, content));
+                }
+                Err(e) => {
+                    self.last_error = Some(format!("读取文件失败：{e}"));
+                }
+            }
+        }
+
+        let restart_sidecar =
+            std::mem::take(&mut self.sidecar_restart_needed) || want_restart_from_model;
+
+        AdminPanelReturn {
+            set_model_request: model_request,
+            restart_sidecar,
+        }
+    }
 }
 
 // ── Tab renderers ─────────────────────────────────────────────────────────
@@ -408,8 +590,10 @@ const SKILLS_EMPTY_MSG: &str = "未在本机发现 Pi skills 文件\n\
     在上述目录中创建 <name>/SKILL.md 后点击「⟳ 刷新」。";
 
 const MCP_EMPTY_MSG: &str = "未找到 MCP 配置文件\n\
-    （已查：~/.pi/agent/mcp.json、.pi/mcp.json）";
+    （已查：~/.pi/agent/mcp.json、.pi/mcp.json）\n\
+    创建后点击「⟳ 刷新」。";
 
+/// 渲染条目列表，返回被点击的 toggle id。
 fn render_item_list(
     ui: &mut egui::Ui,
     section: &str,
@@ -463,11 +647,13 @@ fn render_item_list(
                     );
                     if item.capability == ItemCapability::ReadOnly {
                         ui.label(
-                            egui::RichText::new("（只读 / 暂不支持开关）")
+                            egui::RichText::new("（只读 / 无可写路径）")
                                 .weak()
                                 .size(10.0),
                         )
-                        .on_hover_text("Pi v1.4.0 无对应管理 RPC；请手动编辑配置文件。");
+                        .on_hover_text(
+                            "未找到可写的 settings.json 路径；请手动编辑配置文件或确认 Pi agent 目录。",
+                        );
                     }
                 });
                 if let Some(path) = &item.config_path {
@@ -486,81 +672,177 @@ fn render_item_list(
     toggle_id
 }
 
-fn render_plugins(ui: &mut egui::Ui) {
+/// 渲染记忆内联编辑器，返回 (save_clicked, cancel_clicked)。
+fn render_memory_editor(ui: &mut egui::Ui, editor: &mut MemoryEditorState) -> (bool, bool) {
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("插件 / Extensions").strong().size(13.0));
-    ui.add_space(10.0);
-    show_empty(
-        ui,
-        "Pi v1.4.0 暂无独立插件扩展体系。\n此标签保留，待后续版本接入。",
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "✏ 编辑：{}",
+                editor
+                    .source_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("文件")
+            ))
+            .strong()
+            .size(13.0),
+        );
+        if editor.is_dirty() {
+            ui.label(
+                egui::RichText::new("● 已修改")
+                    .color(egui::Color32::from_rgb(220, 160, 40))
+                    .size(11.0),
+            );
+        }
+    });
+    ui.label(
+        egui::RichText::new(editor.source_path.to_string_lossy())
+            .weak()
+            .monospace()
+            .size(10.0),
     );
+
+    if let Some(err) = &editor.save_error {
+        ui.colored_label(egui::Color32::from_rgb(210, 80, 60), format!("✗ {err}"));
+    }
+
+    ui.add_space(4.0);
+    egui::ScrollArea::vertical()
+        .id_salt("mem_editor_scroll")
+        .max_height(200.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut editor.content)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+
+    ui.add_space(6.0);
+    let mut save_clicked = false;
+    let mut cancel_clicked = false;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                editor.is_dirty(),
+                egui::Button::new("💾 保存").min_size([80.0, 26.0].into()),
+            )
+            .on_hover_text("将编辑内容写回文件")
+            .clicked()
+        {
+            save_clicked = true;
+        }
+        if ui
+            .button("取消")
+            .on_hover_text("关闭编辑器，不保存")
+            .clicked()
+        {
+            cancel_clicked = true;
+        }
+    });
+
+    (save_clicked, cancel_clicked)
 }
 
-fn render_memory(ui: &mut egui::Ui, entries: &[MemoryEntry], session_text: Option<&str>) {
+/// 渲染记忆列表，返回用户点击「编辑」的条目路径（None = 未点击）。
+fn render_memory_list(
+    ui: &mut egui::Ui,
+    entries: &[MemoryEntry],
+    session_text: Option<&str>,
+    active_edit_path: Option<&Path>,
+) -> Option<PathBuf> {
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("记忆（只读展示）").strong().size(13.0));
+    ui.label(egui::RichText::new("记忆文件").strong().size(13.0));
     ui.add_space(6.0);
+
+    let mut open_path: Option<PathBuf> = None;
+
     for layer in [
         MemoryLayer::Project,
         MemoryLayer::User,
         MemoryLayer::Session,
     ] {
-        render_memory_layer(ui, layer, entries, session_text);
+        let layer_entries: Vec<&MemoryEntry> =
+            entries.iter().filter(|e| e.layer == layer).collect();
+        let has_session = layer == MemoryLayer::Session && session_text.is_some();
+        let has_content = !layer_entries.is_empty() || has_session;
+
+        egui::CollapsingHeader::new(
+            egui::RichText::new(format!("▸ {} 层", layer.label()))
+                .strong()
+                .size(13.0),
+        )
+        .id_salt(format!("mem_{}", layer.label()))
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(layer.description())
+                    .weak()
+                    .italics()
+                    .size(11.0),
+            );
+            ui.add_space(4.0);
+
+            if !has_content {
+                show_empty(ui, layer.empty_label());
+                return;
+            }
+
+            if has_session {
+                let text = session_text.unwrap_or_default();
+                show_excerpt_frame(
+                    ui,
+                    "会话上下文",
+                    &truncate(text, 240),
+                    None,
+                    None,
+                    &mut open_path,
+                );
+            }
+
+            for entry in layer_entries {
+                let is_active = entry
+                    .source_path
+                    .as_deref()
+                    .zip(active_edit_path)
+                    .map(|(a, b)| a == b)
+                    .unwrap_or(false);
+                show_excerpt_frame(
+                    ui,
+                    &entry.key,
+                    &entry.excerpt,
+                    entry.source_path.as_ref(),
+                    if is_active {
+                        None
+                    } else {
+                        entry.source_path.as_ref()
+                    },
+                    &mut open_path,
+                );
+                ui.add_space(3.0);
+            }
+        });
         ui.add_space(4.0);
     }
-}
 
-fn render_memory_layer(
-    ui: &mut egui::Ui,
-    layer: MemoryLayer,
-    entries: &[MemoryEntry],
-    session_text: Option<&str>,
-) {
-    let layer_entries: Vec<&MemoryEntry> = entries.iter().filter(|e| e.layer == layer).collect();
-    let has_session = layer == MemoryLayer::Session && session_text.is_some();
-    let has_content = !layer_entries.is_empty() || has_session;
-
-    egui::CollapsingHeader::new(
-        egui::RichText::new(format!("▸ {} 层", layer.label()))
-            .strong()
-            .size(13.0),
-    )
-    .id_salt(format!("mem_{}", layer.label()))
-    .default_open(true)
-    .show(ui, |ui| {
-        ui.label(
-            egui::RichText::new(layer.description())
-                .weak()
-                .italics()
-                .size(11.0),
-        );
-        ui.add_space(4.0);
-
-        if !has_content {
-            show_empty(ui, layer.empty_label());
-            return;
-        }
-
-        if has_session {
-            let text = session_text.unwrap_or_default();
-            show_excerpt_frame(ui, "会话上下文", &truncate(text, 240), None);
-        }
-        for entry in layer_entries {
-            show_excerpt_frame(ui, &entry.key, &entry.excerpt, entry.source_path.as_ref());
-            ui.add_space(3.0);
-        }
-    });
+    open_path
 }
 
 /// 模型配置 tab。
 ///
-/// 返回 `Some(SetModelRequest)` 若用户点击「通过 RPC 切换」。
-fn render_models(ui: &mut egui::Ui, cfg: &mut ModelConfig) -> Option<SetModelRequest> {
+/// 返回 `(Option<SetModelRequest>, restart_sidecar)`.
+fn render_models(
+    ui: &mut egui::Ui,
+    cfg: &mut ModelConfig,
+    pi_connected: bool,
+) -> (Option<SetModelRequest>, bool) {
     ui.add_space(4.0);
     ui.label(egui::RichText::new("模型配置").strong().size(13.0));
     ui.add_space(6.0);
 
     let mut rpc_request: Option<SetModelRequest> = None;
+    let mut want_restart = false;
 
     // ── 当前模型 ──────────────────────────────────────────────────────────
     ui.label(egui::RichText::new("当前模型").strong().size(12.0));
@@ -630,44 +912,58 @@ fn render_models(ui: &mut egui::Ui, cfg: &mut ModelConfig) -> Option<SetModelReq
                 .desired_width(200.0),
         );
     });
+
+    let parts: Vec<&str> = cfg.switch_input.splitn(2, '/').collect();
+    let valid = parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty();
+    let has_settings_path = cfg.settings_path.is_some();
+
     ui.horizontal(|ui| {
         // RPC 切换（需要 Pi 在线）
-        let parts: Vec<&str> = cfg.switch_input.splitn(2, '/').collect();
-        let valid = parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty();
         if ui
-            .add_enabled(valid, egui::Button::new("● 通过 RPC 切换（需 Pi 就绪）"))
+            .add_enabled(
+                valid && pi_connected,
+                egui::Button::new("● 通过 RPC 切换（Pi 就绪）"),
+            )
             .on_hover_text("向运行中的 Pi 发送 set_model 命令；Pi 未就绪时灰显。")
             .clicked()
             && valid
+            && pi_connected
         {
             rpc_request = Some(SetModelRequest {
                 provider: parts[0].to_owned(),
                 model_id: parts[1].to_owned(),
             });
         }
-
-        // 写入 settings.json
+    });
+    ui.horizontal(|ui| {
+        // 写入 settings.json（+ 可选重启）
+        let write_label = if pi_connected {
+            "○ 写入 settings.json 并重启 Pi"
+        } else {
+            "○ 写入 settings.json（下次启动生效）"
+        };
         if ui
-            .add_enabled(
-                valid && cfg.settings_path.is_some(),
-                egui::Button::new("○ 写入 settings.json"),
-            )
-            .on_hover_text(
-                "将 defaultProvider/defaultModel 写入 settings.json；下次启动 Pi 时生效。",
-            )
+            .add_enabled(valid && has_settings_path, egui::Button::new(write_label))
+            .on_hover_text(if pi_connected {
+                "写入 defaultProvider/defaultModel 后立即重启 Pi sidecar 使其生效。"
+            } else {
+                "写入 defaultProvider/defaultModel 到 settings.json；下次启动 Pi 时生效。"
+            })
             .clicked()
             && valid
-            && cfg.settings_path.is_some()
+            && has_settings_path
         {
             let path = cfg.settings_path.clone().unwrap();
             match write_settings_model(&path, parts[0], parts[1]) {
                 Ok(()) => {
                     cfg.default_provider = Some(parts[0].to_owned());
                     cfg.default_model = Some(parts[1].to_owned());
+                    if pi_connected {
+                        want_restart = true;
+                    }
                 }
-                Err(e) => {
-                    // 错误由调用方通过返回值或 last_error 展示；这里先忽略
-                    let _ = e;
+                Err(_e) => {
+                    // 错误由 show_panel 的 last_error 展示；渲染层不直接持有 self
                 }
             }
         }
@@ -749,7 +1045,7 @@ fn render_models(ui: &mut egui::Ui, cfg: &mut ModelConfig) -> Option<SetModelReq
         if let Some(d) = agent_dir {
             ui.label(
                 egui::RichText::new(format!(
-                    "settings.json 不存在（期望路径：{}/settings.json）",
+                    "settings.json 期望路径：{}/settings.json",
                     d.display()
                 ))
                 .weak()
@@ -758,10 +1054,17 @@ fn render_models(ui: &mut egui::Ui, cfg: &mut ModelConfig) -> Option<SetModelReq
         }
     }
 
-    rpc_request
+    (rpc_request, want_restart)
 }
 
-fn show_excerpt_frame(ui: &mut egui::Ui, title: &str, excerpt: &str, path: Option<&PathBuf>) {
+fn show_excerpt_frame(
+    ui: &mut egui::Ui,
+    title: &str,
+    excerpt: &str,
+    display_path: Option<&PathBuf>,
+    edit_path: Option<&PathBuf>,
+    open_path_out: &mut Option<PathBuf>,
+) {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(10.0, 6.0))
         .rounding(egui::Rounding::same(4.0))
@@ -769,13 +1072,24 @@ fn show_excerpt_frame(ui: &mut egui::Ui, title: &str, excerpt: &str, path: Optio
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(title).strong().size(12.0));
-                if let Some(p) = path {
+                if let Some(p) = display_path {
                     ui.label(
                         egui::RichText::new(format!("({})", p.to_string_lossy()))
                             .weak()
                             .monospace()
                             .size(10.0),
                     );
+                }
+                if let Some(p) = edit_path {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("✏")
+                            .on_hover_text("在面板内编辑此文件")
+                            .clicked()
+                        {
+                            *open_path_out = Some(p.clone());
+                        }
+                    });
                 }
             });
             ui.label(egui::RichText::new(excerpt).weak().size(11.0));
@@ -812,55 +1126,126 @@ fn pi_project_dir() -> Option<PathBuf> {
     std::env::current_dir().ok().map(|d| d.join(".pi"))
 }
 
+// ── Skills settings ───────────────────────────────────────────────────────
+
+/// 加载 skills 排除配置，优先用户级 settings.json，其次项目级。
+pub fn load_skills_settings() -> SkillsSettings {
+    let candidates = [
+        pi_agent_dir().map(|d| d.join("settings.json")),
+        pi_project_dir().map(|d| d.join("settings.json")),
+    ];
+
+    for path_opt in candidates.iter().flatten() {
+        if let Ok(content) = fs::read_to_string(path_opt) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                let exclusions = val
+                    .get("skills")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return SkillsSettings {
+                    exclusions,
+                    settings_path: Some(path_opt.clone()),
+                };
+            }
+        }
+    }
+
+    // 未找到 settings.json；仍提供写入路径以便 toggle 时创建文件
+    SkillsSettings {
+        exclusions: Vec::new(),
+        settings_path: pi_agent_dir().map(|d| d.join("settings.json")),
+    }
+}
+
+/// 写回 settings.json 的 `skills` 数组（`-id` 排除 / 移除 `-id` 启用）。
+pub fn write_skills_exclusion(path: &Path, skill_id: &str, exclude: bool) -> io::Result<()> {
+    let content = fs::read_to_string(path).unwrap_or_else(|_| "{}".to_owned());
+    let mut val: serde_json::Value =
+        serde_json::from_str(&content).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+    let obj = val
+        .as_object_mut()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "settings.json 非对象"))?;
+
+    let skills = obj
+        .entry("skills")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+
+    let arr = skills
+        .as_array_mut()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "skills 字段非数组"))?;
+
+    let exclude_key = format!("-{skill_id}");
+    let include_key = format!("+{skill_id}");
+
+    if exclude {
+        // 移除 +id（若有），添加 -id（若不存在）
+        arr.retain(|v| v.as_str() != Some(&include_key));
+        if !arr.iter().any(|v| v.as_str() == Some(&exclude_key)) {
+            arr.push(serde_json::Value::String(exclude_key));
+        }
+    } else {
+        // 移除 -id / +id 条目（回到默认启用）
+        arr.retain(|v| v.as_str() != Some(&exclude_key) && v.as_str() != Some(&include_key));
+    }
+
+    // 确保父目录存在
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let out = serde_json::to_string_pretty(&val)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    fs::write(path, out.as_bytes())
+}
+
 // ── Skills discovery ──────────────────────────────────────────────────────
 
-/// 发现本机 Pi skills 文件。
+/// 发现本机 Pi skills 文件，同时从 settings.json 推导启用状态。
 ///
-/// 查找路径（官方约定，优先级从高到低）：
-///
-/// 1. `.pi/skills/`（项目级）
-/// 2. `.agents/skills/`（项目级 Agent Skills 规范路径）
-/// 3. `~/.pi/agent/skills/`（用户级，Pi agent 目录）
-/// 4. `~/.agents/skills/`（用户级 Agent Skills 规范路径）
-pub fn discover_skills() -> Vec<ManagedItem> {
-    let dirs = [
-        (
-            pi_project_dir().map(|d| d.join("skills")),
-            ItemCapability::ReadOnly,
-        ),
+/// 返回 `(items, SkillsSettings)`.
+pub fn discover_skills_with_settings() -> (Vec<ManagedItem>, SkillsSettings) {
+    let settings = load_skills_settings();
+    let has_write_path = settings.settings_path.is_some();
+
+    let dirs: &[(Option<PathBuf>, _)] = &[
+        (pi_project_dir().map(|d| d.join("skills")), ()),
         (
             std::env::current_dir()
                 .ok()
                 .map(|d| d.join(".agents").join("skills")),
-            ItemCapability::ReadOnly,
+            (),
         ),
-        (
-            pi_agent_dir().map(|d| d.join("skills")),
-            ItemCapability::ReadOnly,
-        ),
-        (
-            home_dir().map(|h| h.join(".agents").join("skills")),
-            ItemCapability::ReadOnly,
-        ),
+        (pi_agent_dir().map(|d| d.join("skills")), ()),
+        (home_dir().map(|h| h.join(".agents").join("skills")), ()),
     ];
 
     let mut items: Vec<ManagedItem> = Vec::new();
-    for (dir_opt, cap) in dirs {
+    for (dir_opt, _) in dirs {
         let Some(dir) = dir_opt else { continue };
         if dir.is_dir() {
-            collect_skill_files(&dir, cap, &mut items);
+            collect_skill_files(dir, has_write_path, &settings, &mut items);
         }
     }
-    items
+    (items, settings)
 }
 
-/// 递归扫描 `dir` 中的 skill 文件。
-///
-/// 支持两种约定：
-///
-/// - `<name>/SKILL.md`（目录含 SKILL.md，[Agent Skills 规范](https://agentskills.io)）
-/// - `<name>.md`（扁平 markdown 文件）
-fn collect_skill_files(dir: &Path, cap: ItemCapability, out: &mut Vec<ManagedItem>) {
+/// 内部辅助：保持向后兼容（测试用）。
+pub fn discover_skills() -> Vec<ManagedItem> {
+    discover_skills_with_settings().0
+}
+
+fn collect_skill_files(
+    dir: &Path,
+    has_write_path: bool,
+    settings: &SkillsSettings,
+    out: &mut Vec<ManagedItem>,
+) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -871,7 +1256,7 @@ fn collect_skill_files(dir: &Path, cap: ItemCapability, out: &mut Vec<ManagedIte
             if skill_md.is_file() {
                 let name = dir_stem(&path);
                 let category = dir.file_name().and_then(|s| s.to_str()).map(str::to_owned);
-                push_skill(out, name, category, cap, skill_md);
+                push_skill_with_settings(out, name, category, has_write_path, settings, skill_md);
                 continue;
             }
         }
@@ -884,34 +1269,44 @@ fn collect_skill_files(dir: &Path, cap: ItemCapability, out: &mut Vec<ManagedIte
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
                 .to_owned();
-            push_skill(out, name, None, cap, path);
+            push_skill_with_settings(out, name, None, has_write_path, settings, path);
         }
     }
 }
 
-fn push_skill(
+fn push_skill_with_settings(
     out: &mut Vec<ManagedItem>,
     name: String,
     tag: Option<String>,
-    cap: ItemCapability,
+    has_write_path: bool,
+    settings: &SkillsSettings,
     path: PathBuf,
 ) {
     if out.iter().any(|i| i.id == name) {
         return;
     }
+    let state = if settings.is_excluded(&name) {
+        ItemState::Disabled
+    } else {
+        ItemState::Enabled
+    };
+    let capability = if has_write_path {
+        ItemCapability::ReadWrite
+    } else {
+        ItemCapability::ReadOnly
+    };
     out.push(ManagedItem {
         id: name.clone(),
         display_name: name,
         tag,
-        state: ItemState::Unknown,
-        capability: cap,
+        state,
+        capability,
         config_path: Some(path),
     });
 }
 
 // ── MCP discovery ─────────────────────────────────────────────────────────
 
-/// 发现本机 MCP 配置（`mcpServers` 格式）。
 pub fn discover_mcp() -> Vec<ManagedItem> {
     let candidates = [
         pi_project_dir().map(|d| d.join("mcp.json")),
@@ -919,12 +1314,11 @@ pub fn discover_mcp() -> Vec<ManagedItem> {
     ];
 
     let mut items: Vec<ManagedItem> = Vec::new();
-    for path_opt in candidates {
-        let Some(path) = path_opt else { continue };
-        if !path.is_file() {
+    for path_opt in candidates.iter().flatten() {
+        if !path_opt.is_file() {
             continue;
         }
-        match parse_mcp_json(&path) {
+        match parse_mcp_json(path_opt) {
             Ok(mut parsed) => {
                 let seen: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
                 parsed.retain(|i| !seen.contains(&i.id));
@@ -933,11 +1327,11 @@ pub fn discover_mcp() -> Vec<ManagedItem> {
             Err(_) => {
                 items.push(ManagedItem {
                     id: "__parse_error__".to_owned(),
-                    display_name: format!("（解析失败：{}）", path.display()),
+                    display_name: format!("（解析失败：{}）", path_opt.display()),
                     tag: None,
                     state: ItemState::Unknown,
                     capability: ItemCapability::ReadOnly,
-                    config_path: Some(path),
+                    config_path: Some(path_opt.clone()),
                 });
             }
         }
@@ -945,7 +1339,9 @@ pub fn discover_mcp() -> Vec<ManagedItem> {
     items
 }
 
-/// 解析 `mcp.json` 的 `mcpServers` 对象格式。
+/// 解析 mcp.json 的 `mcpServers` 格式。
+///
+/// 字段优先级：`enabled`（官方）> `!disabled`（旧版兼容）；默认视为 enabled=true。
 pub fn parse_mcp_json(path: &Path) -> io::Result<Vec<ManagedItem>> {
     let content = fs::read_to_string(path)?;
     let val: serde_json::Value = serde_json::from_str(&content)
@@ -958,10 +1354,14 @@ pub fn parse_mcp_json(path: &Path) -> io::Result<Vec<ManagedItem>> {
     let items = servers
         .iter()
         .map(|(name, cfg)| {
-            let disabled = cfg
-                .get("disabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            // 官方字段 `enabled`（absent = true）；旧版兼容 `disabled`
+            let is_enabled = if let Some(enabled_val) = cfg.get("enabled") {
+                enabled_val.as_bool().unwrap_or(true)
+            } else {
+                !cfg.get("disabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            };
             let cmd = cfg
                 .get("command")
                 .and_then(|v| v.as_str())
@@ -970,10 +1370,10 @@ pub fn parse_mcp_json(path: &Path) -> io::Result<Vec<ManagedItem>> {
                 id: name.clone(),
                 display_name: name.clone(),
                 tag: cmd,
-                state: if disabled {
-                    ItemState::Disabled
-                } else {
+                state: if is_enabled {
                     ItemState::Enabled
+                } else {
+                    ItemState::Disabled
                 },
                 capability: ItemCapability::ReadWrite,
                 config_path: Some(path.to_path_buf()),
@@ -983,15 +1383,45 @@ pub fn parse_mcp_json(path: &Path) -> io::Result<Vec<ManagedItem>> {
     Ok(items)
 }
 
+/// 写回 mcp.json 中指定服务的 `enabled` 字段（官方）并移除旧 `disabled` 字段。
+pub fn write_mcp_enabled(path: &Path, id: &str, enabled: bool) -> io::Result<()> {
+    let content = fs::read_to_string(path)?;
+    let mut val: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let entry = val
+        .get_mut("mcpServers")
+        .and_then(|s| s.get_mut(id))
+        .and_then(|e| e.as_object_mut())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("mcpServers.{id} 不存在或格式不对"),
+            )
+        })?;
+
+    entry.insert("enabled".to_owned(), serde_json::Value::Bool(enabled));
+    // 移除旧版 disabled 字段，保持 mcp.json 干净
+    entry.remove("disabled");
+
+    let out = serde_json::to_string_pretty(&val)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    fs::write(path, out.as_bytes())
+}
+
+// 保持向后兼容的别名（旧测试可用 write_mcp_disabled，新代码用 write_mcp_enabled）
+#[allow(dead_code)]
+pub fn write_mcp_disabled(path: &Path, id: &str, disabled: bool) -> io::Result<()> {
+    write_mcp_enabled(path, id, !disabled)
+}
+
 // ── Memory discovery ──────────────────────────────────────────────────────
 
-/// 发现本机三层记忆文件。
 pub fn discover_memory() -> Vec<MemoryEntry> {
     let mut entries = Vec::new();
 
-    // Project 层：CLAUDE.md / AGENTS.md / .pi/APPEND_SYSTEM.md
-    let project_candidates = project_memory_paths();
-    for path in project_candidates {
+    // Project 层
+    for path in project_memory_paths() {
         if let Ok(text) = fs::read_to_string(&path) {
             entries.push(MemoryEntry {
                 layer: MemoryLayer::Project,
@@ -1002,7 +1432,7 @@ pub fn discover_memory() -> Vec<MemoryEntry> {
         }
     }
 
-    // User 层：~/.pi/agent/AGENTS.md 或 CLAUDE.md
+    // User 层
     let agent_dir = pi_agent_dir();
     for name in &["AGENTS.md", "CLAUDE.md", "AGENTS.override.md"] {
         if let Some(path) = agent_dir.as_ref().map(|d| d.join(name)) {
@@ -1033,14 +1463,13 @@ fn project_memory_paths() -> Vec<PathBuf> {
 
 // ── Model config discovery ────────────────────────────────────────────────
 
-/// 读取 Pi agent 目录中的 settings.json 与 auth.json，合成 ModelConfig。
 pub fn discover_model_config() -> ModelConfig {
     let agent_dir = pi_agent_dir();
     let settings_path = agent_dir.as_ref().map(|d| d.join("settings.json"));
     let auth_path = agent_dir.as_ref().map(|d| d.join("auth.json"));
     let models_path = agent_dir.as_ref().map(|d| d.join("models.json"));
 
-    let (default_provider, default_model, found_settings) = settings_path
+    let (default_provider, default_model) = settings_path
         .as_ref()
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -1053,9 +1482,9 @@ pub fn discover_model_config() -> ModelConfig {
                 .get("defaultModel")
                 .and_then(|x| x.as_str())
                 .map(str::to_owned);
-            (prov, model, true)
+            (prov, model)
         })
-        .unwrap_or((None, None, false));
+        .unwrap_or((None, None));
 
     let custom_endpoints = models_path
         .as_ref()
@@ -1069,7 +1498,8 @@ pub fn discover_model_config() -> ModelConfig {
     ModelConfig {
         default_provider,
         default_model,
-        settings_path: if found_settings { settings_path } else { None },
+        // 始终提供写入路径（即使文件不存在；write_settings_model 会创建它）
+        settings_path,
         custom_endpoints,
         auth_status,
         live_model: None,
@@ -1078,9 +1508,7 @@ pub fn discover_model_config() -> ModelConfig {
     }
 }
 
-/// 从 env 或 auth.json 存在性判断 API 密钥状态（不读密钥内容）。
 fn detect_auth_status(auth_path: Option<&Path>) -> AuthStatus {
-    // 环境变量优先（安全推荐方式）
     for var in &[
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
@@ -1093,7 +1521,6 @@ fn detect_auth_status(auth_path: Option<&Path>) -> AuthStatus {
             return AuthStatus::EnvVar((*var).to_owned());
         }
     }
-    // auth.json 文件存在即视为"已配置"（不读内容，不展示明文）
     if let Some(path) = auth_path {
         if path.is_file() {
             return AuthStatus::FileExists(path.to_path_buf());
@@ -1117,31 +1544,7 @@ fn parse_custom_endpoints(val: &serde_json::Value) -> Option<Vec<CustomEndpoint>
 
 // ── Config write-back ─────────────────────────────────────────────────────
 
-/// 写回 mcp.json 中 `mcpServers.<id>.disabled` 字段。
-pub fn write_mcp_disabled(path: &Path, id: &str, disabled: bool) -> io::Result<()> {
-    let content = fs::read_to_string(path)?;
-    let mut val: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    let entry = val
-        .get_mut("mcpServers")
-        .and_then(|s| s.get_mut(id))
-        .and_then(|e| e.as_object_mut())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("mcpServers.{id} 不存在或格式不对"),
-            )
-        })?;
-
-    entry.insert("disabled".to_owned(), serde_json::Value::Bool(disabled));
-
-    let out = serde_json::to_string_pretty(&val)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    fs::write(path, out.as_bytes())
-}
-
-/// 写回 settings.json 的 defaultProvider / defaultModel 字段。
+/// 写回 settings.json 的 defaultProvider / defaultModel 字段（文件不存在则创建）。
 pub fn write_settings_model(path: &Path, provider: &str, model_id: &str) -> io::Result<()> {
     let content = fs::read_to_string(path).unwrap_or_else(|_| "{}".to_owned());
     let mut val: serde_json::Value =
@@ -1158,6 +1561,10 @@ pub fn write_settings_model(path: &Path, provider: &str, model_id: &str) -> io::
         );
     }
 
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     let out = serde_json::to_string_pretty(&val)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(path, out.as_bytes())
@@ -1165,7 +1572,6 @@ pub fn write_settings_model(path: &Path, provider: &str, model_id: &str) -> io::
 
 // ── String helpers ────────────────────────────────────────────────────────
 
-/// 截取最多 `max` 字节（UTF-8 字符边界）并附加省略号。
 pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_owned();
@@ -1201,24 +1607,24 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn write(dir: &TempDir, name: &str, content: &str) -> PathBuf {
+    fn write_file(dir: &TempDir, name: &str, content: &str) -> PathBuf {
         let p = dir.path().join(name);
         fs::write(&p, content).unwrap();
         p
     }
 
     fn mcp_json(dir: &TempDir, content: &str) -> PathBuf {
-        write(dir, "mcp.json", content)
+        write_file(dir, "mcp.json", content)
     }
 
     // ── parse_mcp_json ────────────────────────────────────────────────────
 
     #[test]
-    fn mcp_parse_enabled_disabled() {
+    fn mcp_parse_enabled_field() {
         let dir = TempDir::new().unwrap();
         let path = mcp_json(
             &dir,
-            r#"{"mcpServers":{"fs":{"command":"npx","disabled":false},"gh":{"command":"npx","disabled":true}}}"#,
+            r#"{"mcpServers":{"fs":{"command":"npx","enabled":true},"gh":{"command":"npx","enabled":false}}}"#,
         );
         let items = parse_mcp_json(&path).unwrap();
         assert_eq!(items.len(), 2);
@@ -1230,6 +1636,34 @@ mod tests {
             items.iter().find(|i| i.id == "gh").unwrap().state,
             ItemState::Disabled
         );
+    }
+
+    #[test]
+    fn mcp_parse_disabled_compat() {
+        // 旧版 disabled 字段兼容读取
+        let dir = TempDir::new().unwrap();
+        let path = mcp_json(
+            &dir,
+            r#"{"mcpServers":{"fs":{"command":"npx","disabled":false},"gh":{"command":"npx","disabled":true}}}"#,
+        );
+        let items = parse_mcp_json(&path).unwrap();
+        assert_eq!(
+            items.iter().find(|i| i.id == "fs").unwrap().state,
+            ItemState::Enabled
+        );
+        assert_eq!(
+            items.iter().find(|i| i.id == "gh").unwrap().state,
+            ItemState::Disabled
+        );
+    }
+
+    #[test]
+    fn mcp_parse_absent_defaults_enabled() {
+        // 无 enabled/disabled 字段 → 默认 Enabled
+        let dir = TempDir::new().unwrap();
+        let path = mcp_json(&dir, r#"{"mcpServers":{"fs":{"command":"npx"}}}"#);
+        let items = parse_mcp_json(&path).unwrap();
+        assert_eq!(items[0].state, ItemState::Enabled);
     }
 
     #[test]
@@ -1246,32 +1680,49 @@ mod tests {
         assert!(parse_mcp_json(&path).is_err());
     }
 
-    // ── write_mcp_disabled ────────────────────────────────────────────────
+    // ── write_mcp_enabled ─────────────────────────────────────────────────
 
     #[test]
-    fn mcp_write_roundtrip() {
+    fn mcp_write_enabled_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = mcp_json(
             &dir,
-            r#"{"mcpServers":{"s":{"command":"n","disabled":false}}}"#,
+            r#"{"mcpServers":{"s":{"command":"n","enabled":true}}}"#,
         );
 
-        write_mcp_disabled(&path, "s", true).unwrap();
+        write_mcp_enabled(&path, "s", false).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v["mcpServers"]["s"]["disabled"].as_bool(), Some(true));
+        assert_eq!(v["mcpServers"]["s"]["enabled"].as_bool(), Some(false));
+        // disabled 字段不应存在
+        assert!(v["mcpServers"]["s"].get("disabled").is_none());
 
-        write_mcp_disabled(&path, "s", false).unwrap();
+        write_mcp_enabled(&path, "s", true).unwrap();
         let v2: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v2["mcpServers"]["s"]["disabled"].as_bool(), Some(false));
+        assert_eq!(v2["mcpServers"]["s"]["enabled"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn mcp_write_removes_old_disabled_field() {
+        let dir = TempDir::new().unwrap();
+        // 文件中有旧版 disabled 字段
+        let path = mcp_json(
+            &dir,
+            r#"{"mcpServers":{"s":{"command":"n","disabled":true}}}"#,
+        );
+        write_mcp_enabled(&path, "s", true).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["s"]["enabled"].as_bool(), Some(true));
+        assert!(v["mcpServers"]["s"].get("disabled").is_none());
     }
 
     #[test]
     fn mcp_write_missing_key_errors() {
         let dir = TempDir::new().unwrap();
         let path = mcp_json(&dir, r#"{"mcpServers":{}}"#);
-        assert!(write_mcp_disabled(&path, "nope", true).is_err());
+        assert!(write_mcp_enabled(&path, "nope", true).is_err());
     }
 
     // ── write_settings_model ──────────────────────────────────────────────
@@ -1293,12 +1744,98 @@ mod tests {
     fn settings_write_nonexistent_file_creates() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("settings.json");
-        // File doesn't exist → write_settings_model should create it
-        // (read_to_string fails → defaults to "{}", then writes)
         write_settings_model(&path, "openai", "gpt-4o").unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["defaultModel"].as_str(), Some("gpt-4o"));
+    }
+
+    // ── write_skills_exclusion ────────────────────────────────────────────
+
+    #[test]
+    fn skills_exclude_add_entry() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "{}").unwrap();
+
+        write_skills_exclusion(&path, "bash", true).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let arr = v["skills"].as_array().unwrap();
+        assert!(arr.iter().any(|e| e.as_str() == Some("-bash")));
+    }
+
+    #[test]
+    fn skills_enable_removes_exclusion() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"skills":["-bash"]}"#).unwrap();
+
+        write_skills_exclusion(&path, "bash", false).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let arr = v["skills"].as_array().unwrap();
+        assert!(!arr.iter().any(|e| e.as_str() == Some("-bash")));
+    }
+
+    #[test]
+    fn skills_exclude_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"skills":["-bash"]}"#).unwrap();
+
+        write_skills_exclusion(&path, "bash", true).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let arr = v["skills"].as_array().unwrap();
+        assert_eq!(
+            arr.iter().filter(|e| e.as_str() == Some("-bash")).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn skills_exclude_removes_include_entry() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"skills":["+bash"]}"#).unwrap();
+
+        write_skills_exclusion(&path, "bash", true).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let arr = v["skills"].as_array().unwrap();
+        assert!(!arr.iter().any(|e| e.as_str() == Some("+bash")));
+        assert!(arr.iter().any(|e| e.as_str() == Some("-bash")));
+    }
+
+    // ── SkillsSettings::is_excluded ───────────────────────────────────────
+
+    #[test]
+    fn skills_settings_is_excluded() {
+        let ss = SkillsSettings {
+            exclusions: vec!["-bash".to_owned()],
+            settings_path: None,
+        };
+        assert!(ss.is_excluded("bash"));
+        assert!(!ss.is_excluded("python"));
+    }
+
+    #[test]
+    fn skills_settings_reinclude_overrides_exclude() {
+        let ss = SkillsSettings {
+            exclusions: vec!["-bash".to_owned(), "+bash".to_owned()],
+            settings_path: None,
+        };
+        assert!(!ss.is_excluded("bash"));
+    }
+
+    #[test]
+    fn skills_settings_path_suffix_match() {
+        let ss = SkillsSettings {
+            exclusions: vec!["-~/.agents/skills/bash".to_owned()],
+            settings_path: None,
+        };
+        assert!(ss.is_excluded("bash"));
     }
 
     // ── AdminPanelState ───────────────────────────────────────────────────
@@ -1311,7 +1848,7 @@ mod tests {
     }
 
     #[test]
-    fn toggle_readonly_err() {
+    fn toggle_readonly_skill_err() {
         let mut panel = AdminPanelState::default();
         panel.skill_items.push(ManagedItem {
             id: "bash".to_owned(),
@@ -1325,26 +1862,47 @@ mod tests {
     }
 
     #[test]
-    fn toggle_readwrite_updates_state() {
-        let mut panel = AdminPanelState::default();
-        panel.mcp_items.push(ManagedItem {
-            id: "srv".to_owned(),
-            display_name: "srv".to_owned(),
+    fn toggle_skill_readwrite_updates_state() {
+        let dir = TempDir::new().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        fs::write(&settings_path, "{}").unwrap();
+
+        let mut panel = AdminPanelState {
+            skills_settings: Some(SkillsSettings {
+                exclusions: vec![],
+                settings_path: Some(settings_path.clone()),
+            }),
+            ..Default::default()
+        };
+        panel.skill_items.push(ManagedItem {
+            id: "bash".to_owned(),
+            display_name: "bash".to_owned(),
             tag: None,
             state: ItemState::Enabled,
             capability: ItemCapability::ReadWrite,
             config_path: None,
         });
-        panel.toggle_item(AdminTab::Mcp, "srv").unwrap();
-        assert_eq!(panel.mcp_items[0].state, ItemState::Disabled);
+
+        panel.toggle_item(AdminTab::Skills, "bash").unwrap();
+        assert_eq!(panel.skill_items[0].state, ItemState::Disabled);
+        assert!(panel.sidecar_restart_needed);
+
+        // 验证写回
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert!(v["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e.as_str() == Some("-bash")));
     }
 
     #[test]
-    fn toggle_with_file() {
+    fn toggle_mcp_with_file() {
         let dir = TempDir::new().unwrap();
         let path = mcp_json(
             &dir,
-            r#"{"mcpServers":{"s":{"command":"n","disabled":false}}}"#,
+            r#"{"mcpServers":{"s":{"command":"n","enabled":true}}}"#,
         );
         let mut panel = AdminPanelState::default();
         panel.mcp_items.push(ManagedItem {
@@ -1355,11 +1913,15 @@ mod tests {
             capability: ItemCapability::ReadWrite,
             config_path: Some(path.clone()),
         });
+
         panel.toggle_item(AdminTab::Mcp, "s").unwrap();
         assert_eq!(panel.mcp_items[0].state, ItemState::Disabled);
+        assert!(panel.sidecar_restart_needed);
+
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v["mcpServers"]["s"]["disabled"].as_bool(), Some(true));
+        assert_eq!(v["mcpServers"]["s"]["enabled"].as_bool(), Some(false));
+        assert!(v["mcpServers"]["s"].get("disabled").is_none());
     }
 
     #[test]
@@ -1374,10 +1936,8 @@ mod tests {
         panel.discover_all();
         assert_eq!(panel.skills_state, DiscoveryState::Ready);
         assert_eq!(panel.mcp_state, DiscoveryState::Ready);
-        assert_eq!(panel.plugins_state, DiscoveryState::Ready);
         assert_eq!(panel.memory_state, DiscoveryState::Ready);
         assert_eq!(panel.model_state, DiscoveryState::Ready);
-        // Pi v1.4.0 无插件体系；插件条目始终为空（在 toggle_item 中直接报错）
     }
 
     // ── Skills collection ─────────────────────────────────────────────────
@@ -1389,10 +1949,15 @@ mod tests {
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(skill_dir.join("SKILL.md"), "---\nname: my-skill\n---").unwrap();
 
+        let settings = SkillsSettings {
+            exclusions: vec![],
+            settings_path: None,
+        };
         let mut items = Vec::new();
-        collect_skill_files(dir.path(), ItemCapability::ReadOnly, &mut items);
+        collect_skill_files(dir.path(), false, &settings, &mut items);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "my-skill");
+        assert_eq!(items[0].state, ItemState::Enabled);
     }
 
     #[test]
@@ -1401,19 +1966,43 @@ mod tests {
         fs::write(dir.path().join("tdd.md"), "# TDD").unwrap();
         fs::write(dir.path().join("SKILL.md"), "# root").unwrap(); // ignored
 
+        let settings = SkillsSettings {
+            exclusions: vec![],
+            settings_path: None,
+        };
         let mut items = Vec::new();
-        collect_skill_files(dir.path(), ItemCapability::ReadOnly, &mut items);
+        collect_skill_files(dir.path(), false, &settings, &mut items);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "tdd");
+    }
+
+    #[test]
+    fn skill_excluded_is_disabled() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("bash.md"), "# bash").unwrap();
+
+        let settings = SkillsSettings {
+            exclusions: vec!["-bash".to_owned()],
+            settings_path: None,
+        };
+        let mut items = Vec::new();
+        collect_skill_files(dir.path(), true, &settings, &mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].state, ItemState::Disabled);
+        assert_eq!(items[0].capability, ItemCapability::ReadWrite);
     }
 
     #[test]
     fn skill_dedup() {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("bash.md"), "# bash").unwrap();
+        let settings = SkillsSettings {
+            exclusions: vec![],
+            settings_path: None,
+        };
         let mut items = Vec::new();
-        collect_skill_files(dir.path(), ItemCapability::ReadOnly, &mut items);
-        collect_skill_files(dir.path(), ItemCapability::ReadOnly, &mut items);
+        collect_skill_files(dir.path(), false, &settings, &mut items);
+        collect_skill_files(dir.path(), false, &settings, &mut items);
         assert_eq!(items.len(), 1);
     }
 
@@ -1439,7 +2028,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let auth = dir.path().join("auth.json");
         fs::write(&auth, r#"{"tokens":{}}"#).unwrap();
-        // Clear env vars to avoid false positive from CI environment
         let saved: Vec<(String, String)> = [
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
@@ -1452,22 +2040,23 @@ mod tests {
         .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
         .collect();
         for (k, _) in &saved {
+            #[allow(deprecated)]
             std::env::remove_var(k);
         }
-
         let status = detect_auth_status(Some(&auth));
-        // Restore env vars
         for (k, v) in saved {
-            std::env::set_var(k, v);
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::set_var(k, v);
+            }
         }
-
         assert!(matches!(status, AuthStatus::FileExists(_)));
     }
 
     #[test]
     fn auth_missing_is_not_configured() {
         let dir = TempDir::new().unwrap();
-        let auth = dir.path().join("auth.json"); // does not exist
+        let auth = dir.path().join("auth.json");
         let saved: Vec<(String, String)> = [
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
@@ -1480,12 +2069,15 @@ mod tests {
         .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
         .collect();
         for (k, _) in &saved {
+            #[allow(deprecated)]
             std::env::remove_var(k);
         }
-
         let status = detect_auth_status(Some(&auth));
         for (k, v) in saved {
-            std::env::set_var(k, v);
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::set_var(k, v);
+            }
         }
         assert!(matches!(status, AuthStatus::NotConfigured));
     }
@@ -1496,7 +2088,6 @@ mod tests {
     fn tab_labels() {
         assert_eq!(AdminTab::Skills.label(), "Skills");
         assert_eq!(AdminTab::Mcp.label(), "MCP");
-        assert_eq!(AdminTab::Plugins.label(), "插件");
         assert_eq!(AdminTab::Memory.label(), "记忆");
         assert_eq!(AdminTab::Models.label(), "模型");
     }
@@ -1506,5 +2097,16 @@ mod tests {
         assert_eq!(MemoryLayer::Project.label(), "Project");
         assert_eq!(MemoryLayer::User.label(), "User");
         assert_eq!(MemoryLayer::Session.label(), "Session");
+    }
+
+    // ── MemoryEditorState ─────────────────────────────────────────────────
+
+    #[test]
+    fn memory_editor_dirty_detection() {
+        let path = PathBuf::from("/tmp/test.md");
+        let mut editor = MemoryEditorState::open(path, "hello".to_owned());
+        assert!(!editor.is_dirty());
+        editor.content.push_str(" world");
+        assert!(editor.is_dirty());
     }
 }
