@@ -1,0 +1,26 @@
+# Rust build artifacts
+/target/
+desktop-rust/target/
+**/*.rs.bk
+Cargo.lock
+
+# Pi sidecar binaries (downloaded at build/release time, not committed)
+desktop-rust/sidecar/pi/*.exe
+desktop-rust/sidecar/pi/*.zip
+desktop-rust/sidecar/pi/*.tar.gz
+desktop-rust/sidecar/pi/node_modules/
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
