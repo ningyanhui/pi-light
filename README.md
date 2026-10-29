@@ -5,6 +5,7 @@
 用 Rust（egui/eframe）构建的轻量桌面客户端，把官方 [Pi coding agent](https://github.com/earendil-works/pi) 直接打进壳里——安装即用，无需手动配置外部 runtime。行为与信息架构参考 [pi-flash](https://github.com/danielbill/pi-flash)，代码 Apache-2.0 洁净室自写。
 
 [![CI](https://github.com/ningyanhui/pi-light/actions/workflows/ci.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/ci.yml)
+[![Android APK](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 ---
@@ -184,6 +185,7 @@ Pi 就绪后，主区自动切换为聊天界面。如果 Pi 需要 API Key，�
 | 路径探测（env → sidecar → PATH），「⟳ 重新探测」无需重启 | 双后端（Pi + Harness）切换 |
 | 关窗时关闭 stdin → 等待 → kill，无孤儿/僵尸进程 | 内嵌 Taskboard / CDP 注入 |
 | `cargo check` + `cargo test`（24 测试）+ `clippy` + `fmt` 全绿 | 捆绑 dsh / deepseek-harness |
+| Android **debug 占位 APK**（Option C：首页 + 设置 stub，无 Pi） | Android 上与 Pi 对话 / Host 配对 |
 
 ### 计划中（里程碑交付后）
 
@@ -192,7 +194,7 @@ Pi 就绪后，主区自动切换为聊天界面。如果 Pi 需要 API Key，�
 | 与 Pi 流式对话（M2′） | 内嵌 Taskboard / CDP 注入 |
 | 显示 Trace / Token 用量（M3′） | 双后端（Pi + Harness）切换 |
 | skill / MCP 列表开关（M4′） | 捆绑 dsh / deepseek-harness |
-| Android 轻量客户端（M6′） | 完整 IDE（文件树 + 多终端 + Git） |
+| Android Host 或同构真连（M6′ stretch） | 完整 IDE（文件树 + 多终端 + Git） |
 | 便携 Release zip | 商店签名分发（本轮不做） |
 
 ---
@@ -223,10 +225,26 @@ sudo apt-get install libgtk-3-dev libglib2.0-dev \
   libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev
 ```
 
-### Android（M6′，两周内为弱功能占位）
+### Android（Option C · debug 占位 APK）
 
-Android 当前为**壳/占位阶段**，完整会话能力以 Windows 为主路径。  
-详见里程碑计划。
+Android 目录 [`android/`](./android/) 提供 **Kotlin + Jetpack Compose** 弱功能壳：
+
+| 项 | 说明 |
+|----|------|
+| **定位** | 可安装的 debug APK；首页与设置页诚实说明限制 |
+| **Pi** | **不内嵌** sidecar，不启动 `pi --mode rpc` |
+| **Host** | **不实现** LAN / Host 配对（stretch Option A 留待后续） |
+| **完整会话** | 请在 **Windows** 使用 `desktop-rust/`（egui + 内嵌/探测 Pi） |
+
+**本地构建**（需 JDK 17+ 与 Android SDK）：
+
+```bash
+cd android
+./gradlew assembleDebug
+# 产物: app/build/outputs/apk/debug/app-debug.apk
+```
+
+**CI**：[`android-apk.yml`](./.github/workflows/android-apk.yml) 在 push/PR 时构建 debug APK 并上传 artifact `pi-light-android-debug`。
 
 ---
 
@@ -237,11 +255,11 @@ Android 当前为**壳/占位阶段**，完整会话能力以 Windows 为主路�
 **简图**：
 
 ```
-desktop-rust/ (egui/eframe)
-      │
-      │ std::process::Command
-      │ JSONL over stdin/stdout
-      ▼
+desktop-rust/ (egui/eframe)          android/ (Compose · Option C 占位壳)
+      │                                      │
+      │ std::process::Command                │ （无 Pi / 无 Host）
+      │ JSONL over stdin/stdout              ▼
+      ▼                              诚实 UI：完整会话请用 Win
 Pi sidecar (pi.exe --mode rpc, MIT)
 ```
 
@@ -267,6 +285,7 @@ Pi sidecar (pi.exe --mode rpc, MIT)
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 贡献指南 |
 | [NOTICE](./NOTICE) | Pi MIT 版权声明 |
 | [THIRD-PARTY-NOTICES](./THIRD-PARTY-NOTICES) | 第三方依赖许可清单 |
+| [android/README.md](./android/README.md) | Android 占位壳构建说明 |
 
 ---
 
@@ -274,7 +293,7 @@ Pi sidecar (pi.exe --mode rpc, MIT)
 
 - **Windows 依赖 Git Bash**：Pi 官方要求在 Windows 上安装 Git Bash 以提供 bash 工具支持
 - **无会话持久化**：M2′ 使用 `--no-session`，每次启动为全新会话；持久化为后续里程碑
-- **Android 为弱功能占位**：完整移动端会话能力为后续里程碑（M6′）
+- **Android（Option C）**：[`android/`](./android/) 提供可安装 **debug 占位 APK**（首页 + 设置 stub）；**不内嵌 Pi、不连 Host**；与 Pi 的完整流式会话请使用 Windows `desktop-rust/`
 - **无官方商店分发**：当前仅提供便携 zip，签名策略见 R0 里程碑
 - **Trace / Token 用量**：M2′ 不显示 token 用量与执行轨迹，见 M3′
 - **CI 测试用 mock-pi**：集成烟测使用内置 `mock-pi` 二进制，无需真实 Pi；实机测试设 `PI_LIGHT_PI_BIN`
