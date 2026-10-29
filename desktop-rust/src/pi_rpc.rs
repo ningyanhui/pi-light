@@ -123,6 +123,29 @@ pub enum PiRpcEvent {
     ModelChanged(String),
 }
 
+// ── Bash PATH injection ───────────────────────────────────────────────────
+
+/// Prepend bundled bash/MSYS dirs to the child process PATH (Windows only).
+///
+/// This ensures Pi can locate `bash.exe` when running shell commands, using
+/// the portable MinGit environment bundled in `sidecar/bash/`.  If no bundled
+/// bash exists the function is a no-op; Pi falls back to whatever `bash` is in
+/// the inherited PATH.
+fn inject_bundled_bash_path(cmd: &mut Command) {
+    let extra_dirs = crate::bash_path::bundled_path_dirs();
+    if extra_dirs.is_empty() {
+        return;
+    }
+    let base = std::env::var_os("PATH").unwrap_or_default();
+    let all: Vec<std::path::PathBuf> = extra_dirs
+        .into_iter()
+        .chain(std::env::split_paths(&base))
+        .collect();
+    if let Ok(new_path) = std::env::join_paths(&all) {
+        cmd.env("PATH", new_path);
+    }
+}
+
 // ── Client ────────────────────────────────────────────────────────────────
 
 /// Thin owner of the `pi --mode rpc` child process and its I/O.
@@ -152,6 +175,11 @@ impl PiRpcClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null()); // stderr carries diagnostics, not protocol data
+
+        // Inject bundled bash/MSYS dirs (sidecar/bash/) into the child's PATH so Pi can
+        // locate bash for shell commands.  Detection and injection happen once per spawn —
+        // the "单次校验入口" constraint.  On non-Windows the dirs list is empty (no-op).
+        inject_bundled_bash_path(&mut cmd);
 
         // Prevent a console window from flashing on Windows GUI builds.
         #[cfg(windows)]

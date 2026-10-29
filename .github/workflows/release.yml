@@ -24,6 +24,10 @@ permissions:
 
 env:
   PI_LIGHT_PI_ZIP_SHA256: "0f7256ea8bdac3af20012b94fdc1252a31cc6dc0d2f9b9eb539555d22e3e321b"
+  # MinGit for Windows v2.47.1.windows.2 — portable bash/MSYS environment (no Node bundled)
+  # SHA-256 sourced from the official release: https://github.com/git-for-windows/git/releases/tag/v2.47.1.windows.2
+  PI_LIGHT_MINGIT_URL: "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/MinGit-2.47.1.2-64-bit.zip"
+  PI_LIGHT_MINGIT_SHA256: "5bafb35dfb249b89d726b37824eeb5022379f0e51f5fbf9c29f49bef57e85b42"
 
 jobs:
   build-windows:
@@ -96,10 +100,19 @@ jobs:
           $root = "pi-light-windows-x64"
           if (Test-Path $root) { Remove-Item -Recurse -Force $root }
           New-Item -ItemType Directory -Path "$root/sidecar/pi" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$root/sidecar/bash" -Force | Out-Null
           Copy-Item -LiteralPath $piLightExe -Destination "$root/pi-light.exe"
           Copy-Item "NOTICE" "$root/NOTICE"
           Copy-Item "LICENSE" "$root/LICENSE"
+
+          # Fetch Pi sidecar (SHA-256 verified inside the script)
           & ./scripts/fetch-pi-sidecar.ps1 -DestDir "$root/sidecar/pi"
+
+          # Fetch portable bash (MinGit, SHA-256 verified inside the script)
+          & ./scripts/fetch-bash-sidecar.ps1 `
+              -DestDir "$root/sidecar/bash" `
+              -MinGitUrl "$env:PI_LIGHT_MINGIT_URL" `
+              -ExpectedSha256 "$env:PI_LIGHT_MINGIT_SHA256"
 
       - name: Create Windows zip
         shell: pwsh

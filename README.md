@@ -80,7 +80,7 @@ pi-light 是一个**通用桌面 Agent Shell**：把官方 [Pi coding agent](htt
 ### 方式 A — 下载发行包（推荐）
 
 从 [Releases](https://github.com/ningyanhui/pi-light/releases) 下载最新 Windows 便携包，解压运行 `pi-light.exe`。
-Pi sidecar 已捆绑在 `sidecar/pi/` 目录中，SHA-256 已由 CI 校验。
+便携包内嵌 **Pi sidecar**（`sidecar/pi/`）与 **bash 环境**（MinGit，`sidecar/bash/`），开箱即用、无需额外安装，禁止捆绑 Node.js。SHA-256 已由 CI 流水线校验并记录在 `NOTICE` 中。
 
 ### 方式 B — 开发调试
 
@@ -126,15 +126,16 @@ cargo build --release
 ```
 desktop-rust/
 ├── src/
-│   ├── main.rs           # egui/eframe App、事件循环
-│   ├── lib.rs            # 库入口（供集成测试用）
-│   ├── pi_path.rs        # Pi 二进制路径探测（三态）
-│   ├── pi_rpc.rs         # JSONL RPC 客户端（M2′+M4′ 模型命令）
-│   ├── chat.rs           # 聊天状态机（M2′）
+│   ├── main.rs              # egui/eframe App、事件循环
+│   ├── lib.rs               # 库入口（供集成测试用）
+│   ├── bash_path.rs         # 便携 bash 路径探测 + PATH 注入（便携 bash / R0+）
+│   ├── pi_path.rs           # Pi 二进制路径探测（三态）
+│   ├── pi_rpc.rs            # JSONL RPC 客户端（M2′+M4′ 模型命令；spawn 注入 bash PATH）
+│   ├── chat.rs              # 聊天状态机（M2′）
 │   ├── session_insights.rs  # Token / Trace（M3′）
-│   ├── admin_panel.rs    # 管理面（M4′）
-│   └── bin/mock_pi.rs    # 集成测试用 Pi 替身
-└── tests/rpc_smoke.rs    # 集成烟测
+│   ├── admin_panel.rs       # 管理面（M4′）
+│   └── bin/mock_pi.rs       # 集成测试用 Pi 替身
+└── tests/rpc_smoke.rs       # 集成烟测
 ```
 
 ---

@@ -59,6 +59,37 @@ Third-Party Component Notice: egui / eframe
   Full license text available at: https://github.com/emilk/egui/blob/master/LICENSE-APACHE
 
 ========================================================================
+Third-Party Component Notice: MinGit for Windows (portable bash environment)
+========================================================================
+
+This product bundles MinGit for Windows, distributed under the GNU General
+Public License version 2 (with exceptions for certain components that carry
+MIT, LGPL-2.1, or other compatible licenses; see the MinGit distribution for
+full license texts).  MinGit is the minimal Git for Windows package and
+includes the MSYS2 bash environment used to provide a portable shell.
+
+  MinGit for Windows
+  Copyright (C) The Git for Windows contributors
+  https://gitforwindows.org/
+  https://github.com/git-for-windows/git
+
+  Version:      2.47.1.2 (v2.47.1.windows.2)
+  Artifact:     MinGit-2.47.1.2-64-bit.zip
+  Download URL: https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/MinGit-2.47.1.2-64-bit.zip
+  SHA-256:      5bafb35dfb249b89d726b37824eeb5022379f0e51f5fbf9c29f49bef57e85b42
+  Sidecar path: {exe_dir}/sidecar/bash/
+
+MinGit is distributed in the Windows portable zip under
+Apache License 2.0 terms for this product's shell only; the MinGit
+binaries themselves remain under their original licenses (GPL-2.0 with
+LGPL and MIT components).  For the full license texts see the
+LICENSE-* files inside the sidecar/bash/ directory (extracted at install
+time) or visit https://github.com/git-for-windows/git.
+
+The SHA-256 above is recorded from the official git-for-windows release
+page and is verified by the CI Release pipeline before packaging.
+
+========================================================================
 See ACKNOWLEDGEMENTS.md for full attribution and inspiration credits.
 See THIRD-PARTY-NOTICES for complete dependency license inventory.
 ========================================================================
