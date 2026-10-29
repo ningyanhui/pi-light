@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：M4′+（管理面全量落地：Skills / MCP / 记忆 / 模型）
+> **当前版本**：M5′（`#` 会话引用）+ 便携 bash / R0+（Pi + MinGit bash 便携包）
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -49,7 +49,7 @@ desktop/   旧 Tauri 树（已标 deprecated，不是文档/实现主路径）
 
 ---
 
-## 目录结构（M4′）
+## 目录结构（便携 bash / R0+）
 
 ```
 pi-light/
@@ -59,8 +59,9 @@ pi-light/
 │   ├── src/
 │   │   ├── lib.rs                # 库入口（供集成测试用）
 │   │   ├── main.rs               # egui/eframe App + 事件循环
+│   │   ├── bash_path.rs          # 便携 bash 路径探测 + PATH 注入辅助（M5′+）
 │   │   ├── pi_path.rs            # Pi 三态路径探测
-│   │   ├── pi_rpc.rs             # JSONL RPC 客户端
+│   │   ├── pi_rpc.rs             # JSONL RPC 客户端（spawn 时注入 bash PATH）
 │   │   ├── chat.rs               # 聊天状态机（M2′）
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
 │   │   ├── admin_panel.rs        # 管理面（M4′）
@@ -69,8 +70,11 @@ pi-light/
 ├── android/                      # Option C 占位壳
 ├── docs/
 │   ├── architecture.md
-│   └── signing.md
-├── scripts/                      # SHA-256 校验脚本
+│   └── signing.md                # Windows 签名策略与 Authenticode 占位
+├── scripts/
+│   ├── fetch-pi-sidecar.ps1      # Pi sidecar 下载/SHA-256 校验
+│   ├── fetch-bash-sidecar.ps1    # MinGit 下载/SHA-256 校验（便携 bash）
+│   └── verify_pi_sha256.sh       # Linux/macOS CI 辅助校验
 └── .github/workflows/            # CI / Release / Android APK
 ```
 
@@ -80,8 +84,9 @@ pi-light/
 
 | 模块 | 职责 |
 |------|------|
+| `bash_path` | 便携 bash 路径探测（捆绑 MinGit → 系统 PATH）；`bundled_path_dirs()` 供 `pi_rpc` spawn 注入 PATH |
 | `pi_path` | Pi 二进制路径探测三态；`PiProbe` 枚举 |
-| `pi_rpc` | `PiRpcClient`：spawn → JSONL stdin/stdout → mpsc events；M4′ 新增 `get_state` / `get_available_models` / `set_model` |
+| `pi_rpc` | `PiRpcClient`：spawn（注入 bash PATH）→ JSONL stdin/stdout → mpsc events；M4′ 新增 `get_state` / `get_available_models` / `set_model` |
 | `chat` | 聊天状态机：消息历史、流式缓冲、中止处理 |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace |
 | `admin_panel` | M4′+ 管理面：四 tab（Skills/MCP/记忆/模型）；Skills 开关写 settings；MCP enabled 字段；记忆内联编辑；模型写回+重启 |
@@ -100,6 +105,35 @@ pi-light/
 | 版本 | v1.4.0 |
 | 发行物 | `pi-windows-x64.zip` |
 | SHA-256 | `0f7256ea8bdac3af20012b94fdc1252a31cc6dc0d2f9b9eb539555d22e3e321b` |
+
+### 便携 bash（MinGit）版本钉定
+
+| 项 | 值 |
+|----|----|
+| 上游 | `git-for-windows/git`（GPL-2.0 + 例外） |
+| 版本 | v2.47.1.windows.2 |
+| 发行物 | `MinGit-2.47.1.2-64-bit.zip` |
+| SHA-256 | `5bafb35dfb249b89d726b37824eeb5022379f0e51f5fbf9c29f49bef57e85b42` |
+| sidecar 路径 | `{exe_dir}/sidecar/bash/` |
+
+MinGit 提供便携 bash/MSYS 环境，Pi 运行 shell 命令时自动使用。
+**禁止捆绑 Node.js**；Pi 所需 JavaScript 运行时不在 pi-light 分发范围内。
+
+### 便携包目录布局
+
+```
+pi-light-windows-x64/
+├── pi-light.exe                  # 主程序，用户唯一入口
+├── NOTICE                        # SHA-256 + 版权声明（Pi 和 MinGit）
+├── LICENSE                       # Apache-2.0
+└── sidecar/
+    ├── pi/
+    │   └── pi.exe                # Pi sidecar（MIT，由 earendil-works/pi 发布）
+    └── bash/                     # MinGit（GPL-2.0 + 例外，便携 bash/MSYS 环境）
+        ├── usr/bin/              # bash.exe, sh.exe, MSYS 工具
+        ├── mingw64/bin/          # 工具链
+        └── cmd/                  # git.exe
+```
 
 ### Pi agent 目录（M4′ 发现路径）
 
@@ -141,7 +175,8 @@ pi-light/
 | **M3′** | Token 用量条、工具 Trace 列表 | ✅ 已合入 |
 | **M4′** | 管理面：Skills/MCP/插件/记忆/模型列表+开关 MVP | ✅ 已合入 |
 | **M4′+** | 管理面全量落地：Skills 开关/状态推导、MCP enabled 字段、记忆内联编辑、模型写回+重启 | ✅ 已合入 |
-| **M5′** | `#` 会话引用最小可用（ZCode 风格引用、chip UI、键盘导航） | ✅ 本 PR |
+| **M5′** | `#` 会话引用最小可用（ZCode 风格引用、chip UI、键盘导航） | ✅ 已合入 |
+| **便携 bash / R0+** | 单 exe 便携包：内嵌 MinGit bash；`bash_path` 模块；PATH 注入；signing.md 完善 | ✅ 本 PR |
 | **M6′** | Android Host 真连或同构嵌入（Option A stretch） | 后续 |
 | **Android C** | `android/` debug 占位 APK | ✅ 已合入 |
 | **R0** | Release（Win 便携 zip + 签名策略） | 已合入（流水线） |
@@ -209,4 +244,4 @@ do_send():
 
 ---
 
-*最后更新：M5′ `#` 会话引用最小可用*
+*最后更新：便携 bash / R0+（Pi + MinGit bash 便携包）*
