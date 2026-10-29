@@ -3,9 +3,10 @@
 // Bash/MSYS 环境路径探测模块（便携 bash sidecar）
 //
 // 探测顺序：
-//   1. {exe_dir}/sidecar/bash/usr/bin/bash.exe  → Bundled（Windows 便携包）
-//   2. 系统 PATH 中的 bash / bash.exe            → System
-//   (均无)                                       → NotAvailable
+//   1. {exe_dir}/sidecar/bash/usr/bin/{bash.exe,sh.exe}  → Bundled
+//      MinGit-2.47.1.2 zip 只有 sh.exe；Release 打包会复制为 bash.exe
+//   2. 系统 PATH 中的 bash / bash.exe                      → System
+//   (均无)                                                 → NotAvailable
 //
 // PATH 注入：bundled_path_dirs() 返回需要前置插入子进程 PATH 的目录列表。
 // 调用者（pi_rpc::PiRpcClient::spawn）在 spawn 时一次性注入，满足"单次校验入口"约束。
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 /// Bash/MSYS 环境就绪状态
 #[derive(Debug, Clone, PartialEq)]
 pub enum BashProbe {
-    /// 捆绑的 MinGit/MSYS bash，位于 `{exe_dir}/sidecar/bash/usr/bin/bash.exe`
+    /// 捆绑的 MinGit POSIX 壳（打包后为 `usr/bin/bash.exe`，zip 原件为 `sh.exe`）
     Bundled { bash_exe: PathBuf },
     /// 系统 PATH 中探测到 bash
     System { bash_exe: PathBuf },
@@ -81,21 +82,22 @@ pub fn bundled_path_dirs() -> Vec<PathBuf> {
 
 /// 依赖注入版本：接受显式参数，方便单元测试。
 pub(crate) fn probe_impl(exe_dir: Option<&Path>, path_dirs: &[PathBuf]) -> BashProbe {
-    let bash_name = bash_binary_name();
-
-    // 1. 捆绑 sidecar（仅 Windows）
+    // 1. 捆绑 sidecar（仅 Windows）：先 bash.exe，再 MinGit 原件 sh.exe
     if let Some(dir) = exe_dir {
         for d in bundled_path_dirs_from(dir) {
-            let candidate = d.join(bash_name);
-            if candidate.is_file() {
-                return BashProbe::Bundled {
-                    bash_exe: candidate,
-                };
+            for name in bundled_shell_names() {
+                let candidate = d.join(name);
+                if candidate.is_file() {
+                    return BashProbe::Bundled {
+                        bash_exe: candidate,
+                    };
+                }
             }
         }
     }
 
-    // 2. 系统 PATH 回退
+    // 2. 系统 PATH 回退（只认正式 bash 名，避免把无关 sh 当成系统 bash）
+    let bash_name = bash_binary_name();
     for dir in path_dirs {
         let candidate = dir.join(bash_name);
         if candidate.is_file() {
@@ -142,6 +144,16 @@ pub fn bash_binary_name() -> &'static str {
         "bash.exe"
     } else {
         "bash"
+    }
+}
+
+/// 捆绑 sidecar 内按优先级查找的壳文件名。
+/// Windows MinGit zip 只有 `sh.exe`；Release 会另放 `bash.exe`。
+fn bundled_shell_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["bash.exe", "sh.exe"]
+    } else {
+        &["bash"]
     }
 }
 
@@ -204,6 +216,29 @@ mod tests {
             result
         );
         assert_eq!(result.bash_exe(), Some(bash_exe.as_path()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_detected_mingit_sh_exe() {
+        // MinGit-2.47.1.2-64-bit.zip ships usr/bin/sh.exe, not bash.exe.
+        let tmp = TempDir::new().unwrap();
+        let usr_bin = tmp
+            .path()
+            .join("sidecar")
+            .join("bash")
+            .join("usr")
+            .join("bin");
+        fs::create_dir_all(&usr_bin).unwrap();
+        let sh_exe = touch(&usr_bin, "sh.exe");
+
+        let result = probe_impl(Some(tmp.path()), &[]);
+        assert!(
+            matches!(result, BashProbe::Bundled { .. }),
+            "expected Bundled from MinGit sh.exe, got {:?}",
+            result
+        );
+        assert_eq!(result.bash_exe(), Some(sh_exe.as_path()));
     }
 
     #[cfg(windows)]
