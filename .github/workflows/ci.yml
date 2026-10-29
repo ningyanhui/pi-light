@@ -59,6 +59,10 @@ jobs:
         working-directory: desktop-rust
         run: cargo check --all-targets
 
+      - name: cargo test (desktop-rust)
+        working-directory: desktop-rust
+        run: cargo test --all-targets
+
   # -----------------------------------------------------------------------
   # Lint: cargo clippy warnings-as-errors (Ubuntu only for speed)
   # -----------------------------------------------------------------------
