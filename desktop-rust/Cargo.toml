@@ -19,6 +19,9 @@ egui = "0.29"
 # Windows: don't spawn a console window when running the GUI binary
 [target.'cfg(windows)'.dependencies]
 
+[dev-dependencies]
+tempfile = "3"
+
 [[bin]]
 name = "pi-light"
 path = "src/main.rs"

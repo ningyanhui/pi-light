@@ -40,21 +40,31 @@ pi-light 是**内嵌 Pi 的轻量 Rust Shell**：
 
 ## 2. 截图
 
-> **M0′ 阶段**：窗口骨架已就位，实际会话 UI 在 M1′/M2′ 阶段交付。
+> **M1′ 阶段**：egui 窗口可运行，三态 Pi 就绪 UI 已实现；会话聊天功能在 M2′ 推出。
 
 ```
-╔══════════════════════════════════════════╗
-║  pi-light                                ║
-║                                          ║
-║         ⚠ Pi 尚未就绪                    ║
-║                                          ║
-║  请通过以下方式之一提供 Pi 二进制：          ║
-║  方式 1 — 环境变量                         ║
-║    PI_LIGHT_PI_BIN=<pi.exe 完整路径>       ║
-║  方式 2 — 捆绑 sidecar（推荐）             ║
-║    {exe_dir}/sidecar/pi/pi.exe            ║
-║                                          ║
-╚══════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════╗
+║  pi-light — 内嵌 Pi 的轻量 Rust Shell  ●  [⟳ 重新探测]   ║
+╠═══════════════════════════════════════════════════════════╣
+║                                                           ║
+║  [状态 1 — 内嵌 sidecar 就绪]                              ║
+║  ✓ Pi 已就绪（内嵌 sidecar / Bundled Ready）               ║
+║  Pi 路径：{exe_dir}/sidecar/pi/pi.exe                     ║
+║                                                           ║
+║  [状态 2 — 探测到本机安装]                                  ║
+║  ~ Pi 就绪（本机 / Detected Local — 环境变量）              ║
+║  Pi 路径：/path/to/pi.exe                                  ║
+║                                                           ║
+║  [状态 3 — 未就绪]                                         ║
+║  ⚠ Pi 尚未就绪（Not Ready）                                ║
+║    方式 1 — PI_LIGHT_PI_BIN=<路径>                         ║
+║    方式 2 — {exe_dir}/sidecar/pi/pi.exe                   ║
+║    方式 3 — 本机 PATH                                      ║
+║    下载：pi-windows-x64.zip @ v1.4.0                      ║
+║    SHA-256: 0f7256ea8bdac3af...                           ║
+║                                                           ║
+║  会话聊天功能将在 M2′ 推出                                    ║
+╚═══════════════════════════════════════════════════════════╝
 ```
 
 ---
@@ -97,13 +107,26 @@ pi-light 的会话优先布局、sidecar 捆绑行为、Pi 进程生命周期管
 
 ## 5. 开始使用
 
+### Pi 就绪三态说明
+
+pi-light 启动时自动探测 Pi 二进制，并在顶部状态栏显示三种状态之一。
+点击「⟳ 重新探测」可在不重启的情况下重新扫描。
+
+| 状态 | 含义 | 来源 |
+|------|------|------|
+| **✓ 内嵌 sidecar（Bundled Ready）** | 在 `{exe_dir}/sidecar/pi/` 下找到 Pi | 正式 Release 默认路径 |
+| **~ 本机（Detected Local）** | 通过环境变量或 PATH 找到 Pi | 开发环境 / 本机安装 |
+| **⚠ 未就绪（Not Ready）** | 未找到 Pi，显示放置指引 | — |
+
+> **会话聊天功能将在 M2′ 推出**。M1′ 阶段实现三态 UI 与路径探测契约，无需真实 Pi 对话即可演示。
+
 ### 方式一：正式 Release（推荐，待 Release 发布）
 
 1. 从 [Releases](https://github.com/ningyanhui/pi-light/releases) 下载最新 Windows 便携包
 2. 解压到任意目录
 3. 直接运行 `pi-light.exe`
 
-> 正式 Release 已将 Pi v1.4.0 打包入 `sidecar/pi/`，无需额外配置。  
+> 正式 Release 已将 Pi v1.4.0 打包入 `sidecar/pi/`，启动即显示「Bundled Ready」状态。  
 > Release 流水线会在打包前校验 Pi 的 SHA-256，确保来源可信。
 
 ### 方式二：开发构建 + 手动提供 Pi
@@ -115,28 +138,32 @@ git clone https://github.com/ningyanhui/pi-light
 cd pi-light
 ```
 
-**2. 提供 Pi 二进制（任选其一）**
+**2. 提供 Pi 二进制（任选其一，优先级从高到低）**
 
-使用环境变量（最简单）：
+**优先级 1 — 环境变量（最简单）：**
 
 ```powershell
 $env:PI_LIGHT_PI_BIN = "C:\path\to\pi.exe"
 ```
 
-或手动解压到 sidecar 目录（校验 SHA-256 后）：
+**优先级 2 — 捆绑 sidecar 目录（推荐，校验 SHA-256 后）：**
 
 ```powershell
 # 下载
 $url = "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-windows-x64.zip"
 Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\pi.zip"
 
-# 校验 SHA-256（必须匹配）
-# 期望值：0f7256ea8bdac3af20012b94fdc1252a31cc6dc0d2f9b9eb539555d22e3e321b
+# 校验 SHA-256（期望值如下，必须匹配）
+# 0f7256ea8bdac3af20012b94fdc1252a31cc6dc0d2f9b9eb539555d22e3e321b
 (Get-FileHash "$env:TEMP\pi.zip" -Algorithm SHA256).Hash
 
-# 解压
+# 解压到 sidecar 目录，启动后显示「Bundled Ready」
 Expand-Archive -Path "$env:TEMP\pi.zip" -DestinationPath "desktop-rust\sidecar\pi"
 ```
+
+**优先级 3 — 系统 PATH（可选）：**
+
+将 `pi.exe` 或 `pi` 加入系统 PATH，启动后显示「Detected Local」状态。
 
 **3. 构建并运行**
 
@@ -149,13 +176,14 @@ cargo run
 
 ## 6. 能做什么 / 不能做什么
 
-### 当前（M0′ 骨架阶段）
+### 当前（M1′ 阶段）
 
 | 能做 | 不能做 |
 |------|--------|
-| 显示 Pi 就绪状态 UI | 实际与 Pi 对话（M2′） |
-| 路径探测（env / sidecar） | 完整三态 UI（M1′） |
-| `cargo check` 编译通过 | 发布可安装包（Release 待定） |
+| 显示三态 Pi 就绪 UI（Bundled / Detected / Not Ready） | 实际与 Pi 对话（M2′） |
+| 路径探测（env → sidecar → PATH，按优先级顺序） | 流式会话、停止按钮（M2′） |
+| 「⟳ 重新探测」按钮（无需重启即更新状态） | 发布可安装包（Release 待定） |
+| `cargo check` + `cargo test` 通过（7 个路径探测单元测试） | Trace / Token 用量（M3′） |
 
 ### 计划中（里程碑交付后）
 
@@ -244,10 +272,11 @@ Pi sidecar (pi.exe --mode rpc, MIT)
 
 ## 11. 已知限制
 
-- **M0′ 阶段**：仅骨架，无实际 Pi 交互能力
-- **Windows 依赖 Git Bash**：Pi 内部使用 bash 工具，在 Windows 上需安装 Git Bash
+- **M1′ 阶段**：三态 UI 与路径探测契约已实现，无实际 Pi RPC 会话能力
+- **会话聊天**：`pi --mode rpc` JSONL 流式对话在 **M2′** 推出，M1′ 不包含
+- **Windows 依赖 Git Bash**：Pi 官方要求在 Windows 上安装 Git Bash 以提供 bash 工具支持
 - **Android 为弱功能占位**：完整移动端会话能力为后续里程碑（M6′）
-- **进程管理尚未实现**：M1′ 起才加入完整三态 UI 和进程生命周期管理
+- **进程生命周期管理**：M2′ 起加入 spawn / stdin 关闭 / wait / kill 全流程
 - **无官方商店分发**：当前仅提供便携 zip，签名策略见 R0 里程碑
 
 ---
