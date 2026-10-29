@@ -12,7 +12,7 @@ import com.pilight.android.ui.PiLightApp
 import com.pilight.android.ui.theme.PiLightTheme
 
 /**
- * pi-light Android — Option C 占位壳（eval v2）。
+ * pi-light Android — Option C 占位壳（M6′ 维持 C）。
  * 不内嵌 Pi；完整会话以 Windows desktop-rust 为准。
  */
 class MainActivity : ComponentActivity() {

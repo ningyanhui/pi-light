@@ -92,7 +92,8 @@
 | **M0′（本 PR）** | README 换轨 + 骨架 + `cargo check` |
 | **M1′** | 路径约定 + 三态 UI（捆绑就绪 / 探测到本机 / 未就绪） |
 | **M2′** | 官方 JSONL RPC 真连聊天 |
-| **M3′–M6′** | Trace/Token、管理面、`#` 引用、Android APK |
+| **M3′–M5′** | Trace/Token、管理面、`#` 引用 |
+| **M6′** | Android：**维持 Option C**（Host 未长出 A 所需共享面；不升真 Host） |
 
 **OUT of M0′**：真 RPC 聊天、三态 UI 完整、zip 捆绑进 git、双后端、Harness/dsh。
 
