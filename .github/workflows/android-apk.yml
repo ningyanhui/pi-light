@@ -45,7 +45,9 @@ jobs:
             mv /tmp/cmdline-tools "${CM}/latest"
           fi
           SDKMAN="${CM}/latest/bin/sdkmanager"
-          yes | "${SDKMAN}" --licenses >/dev/null
+          set +o pipefail
+          yes | "${SDKMAN}" --licenses >/dev/null || true
+          set -o pipefail
           "${SDKMAN}" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
