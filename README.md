@@ -5,6 +5,7 @@
 用 Rust（egui/eframe）构建的轻量桌面客户端，把官方 [Pi coding agent](https://github.com/earendil-works/pi) 直接打进壳里——安装即用，无需手动配置外部 runtime。行为与信息架构参考 [pi-flash](https://github.com/danielbill/pi-flash)，代码 Apache-2.0 洁净室自写。
 
 [![CI](https://github.com/ningyanhui/pi-light/actions/workflows/ci.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/ci.yml)
+[![Release](https://github.com/ningyanhui/pi-light/actions/workflows/release.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/release.yml)
 [![Android APK](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
@@ -116,14 +117,14 @@ pi-light 启动时自动探测 Pi 二进制，并在顶部状态栏显示三种�
 
 Pi 就绪后，主区切换为**聊天界面**：输入框输入消息 → 按 Enter 或点「发送」→ Pi 流式返回 → 点「■ 停止」可中止当前生成。
 
-### 方式一：正式 Release（推荐，待 Release 发布）
+### 方式一：正式 Release（推荐）
 
-1. 从 [Releases](https://github.com/ningyanhui/pi-light/releases) 下载最新 Windows 便携包
-2. 解压到任意目录
-3. 直接运行 `pi-light.exe`
+1. 打开 [Releases](https://github.com/ningyanhui/pi-light/releases)，下载 **`pi-light-windows-x64.zip`**（及可选 Android **`app-debug.apk`**）
+2. 解压 zip 到任意目录（目录内应含 `pi-light.exe` 与 `sidecar/pi/pi.exe`）
+3. 运行 `pi-light.exe`
 
-> 正式 Release 已将 Pi v1.4.0 打包入 `sidecar/pi/`，启动即显示「Bundled Ready」状态。  
-> Release 流水线会在打包前校验 Pi 的 SHA-256，确保来源可信。
+> 正式 Release 已将 **Pi v1.4.0** 打入 `sidecar/pi/`；流水线在打包前校验 SHA-256（与 [NOTICE](./NOTICE) 一致），校验失败不会发布该 zip。  
+> Windows / Android **均无商店级代码签名**，说明见 [docs/signing.md](./docs/signing.md)。
 
 ### 方式二：开发构建 + 手动提供 Pi
 
@@ -178,7 +179,8 @@ Pi 就绪后，主区自动切换为聊天界面。如果 Pi 需要 API Key，�
 
 | 能做 | 不能做 |
 |------|--------|
-| 显示三态 Pi 就绪 UI（Bundled / Detected / Not Ready） | 发布可安装包（Release 待定） |
+| 显示三态 Pi 就绪 UI（Bundled / Detected / Not Ready） | 商店签名 / Play 正式包（见 [docs/signing.md](./docs/signing.md)） |
+| 从 [Releases](https://github.com/ningyanhui/pi-light/releases) 下载 **Windows 便携 zip**（含 SHA-256 校验后的 Pi v1.4.0） | — |
 | Pi 就绪时自动启动 `pi --mode rpc --no-session` | Trace / Token 用量条（M3′） |
 | 流式聊天：输入 → Enter/发送 → 流式文本 → `agent_settled` | skill / MCP 管理面板（M4′） |
 | **■ 停止**按钮：发送 `abort` 命令，中止当前生成 | 完整 IDE（文件树 + 多终端 + Git） |
@@ -191,11 +193,10 @@ Pi 就绪后，主区自动切换为聊天界面。如果 Pi 需要 API Key，�
 
 | 能做 | 不能做（明确不在范围） |
 |------|----------------------|
-| 与 Pi 流式对话（M2′） | 内嵌 Taskboard / CDP 注入 |
+| 与 Pi 流式对话（M2′，桌面） | 内嵌 Taskboard / CDP 注入 |
 | 显示 Trace / Token 用量（M3′） | 双后端（Pi + Harness）切换 |
 | skill / MCP 列表开关（M4′） | 捆绑 dsh / deepseek-harness |
 | Android Host 或同构真连（M6′ stretch） | 完整 IDE（文件树 + 多终端 + Git） |
-| 便携 Release zip | 商店签名分发（本轮不做） |
 
 ---
 
@@ -280,6 +281,8 @@ Pi sidecar (pi.exe --mode rpc, MIT)
 | 文档 | 说明 |
 |------|------|
 | [docs/architecture.md](./docs/architecture.md) | 架构详解 |
+| [docs/signing.md](./docs/signing.md) | R0 签名与分发策略（debug / 未签名） |
+| [desktop-rust/sidecar/README.md](./desktop-rust/sidecar/README.md) | Sidecar 布局、开发放置 Pi、Release 打包说明 |
 | [AGENTS.md](./AGENTS.md) | 洁净室规则与 AI 协作指南 |
 | [ACKNOWLEDGEMENTS.md](./ACKNOWLEDGEMENTS.md) | 致谢与灵感来源 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 贡献指南 |
@@ -294,7 +297,7 @@ Pi sidecar (pi.exe --mode rpc, MIT)
 - **Windows 依赖 Git Bash**：Pi 官方要求在 Windows 上安装 Git Bash 以提供 bash 工具支持
 - **无会话持久化**：M2′ 使用 `--no-session`，每次启动为全新会话；持久化为后续里程碑
 - **Android（Option C）**：[`android/`](./android/) 提供可安装 **debug 占位 APK**（首页 + 设置 stub）；**不内嵌 Pi、不连 Host**；与 Pi 的完整流式会话请使用 Windows `desktop-rust/`
-- **无官方商店分发**：当前仅提供便携 zip，签名策略见 R0 里程碑
+- **无官方商店分发**：R0 提供 GitHub Release 便携 zip 与 Android debug APK；签名策略见 [docs/signing.md](./docs/signing.md)
 - **Trace / Token 用量**：M2′ 不显示 token 用量与执行轨迹，见 M3′
 - **CI 测试用 mock-pi**：集成烟测使用内置 `mock-pi` 二进制，无需真实 Pi；实机测试设 `PI_LIGHT_PI_BIN`
 

@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+      draft:
+        description: "Create as draft release"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  PI_LIGHT_PI_ZIP_SHA256: "0f7256ea8bdac3af20012b94fdc1252a31cc6dc0d2f9b9eb539555d22e3e321b"
+
+jobs:
+  build-windows:
+    name: Windows portable zip
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop-rust/target
+          key: release-win-cargo-${{ hashFiles('desktop-rust/Cargo.toml') }}
+
+      - name: cargo build --release
+        working-directory: desktop-rust
+        run: cargo build --release
+
+      - name: Stage portable directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "pi-light-windows-x64"
+          if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+          New-Item -ItemType Directory -Path "$root/sidecar/pi" -Force | Out-Null
+          Copy-Item "desktop-rust/target/release/pi-light.exe" "$root/pi-light.exe"
+          Copy-Item "NOTICE" "$root/NOTICE"
+          Copy-Item "LICENSE" "$root/LICENSE"
+          & ./scripts/fetch-pi-sidecar.ps1 -DestDir "$root/sidecar/pi"
+
+      - name: Create Windows zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Compress-Archive -Path "pi-light-windows-x64" -DestinationPath "pi-light-windows-x64.zip" -Force
+          if (-not (Test-Path "pi-light-windows-x64.zip")) { throw "zip missing" }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-light-windows-x64
+          path: pi-light-windows-x64.zip
+          if-no-files-found: error
+
+  build-android:
+    name: Android debug APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK packages
+        working-directory: .
+        run: |
+          set -euo pipefail
+          CM="${ANDROID_HOME}/cmdline-tools"
+          if [ ! -x "${CM}/latest/bin/sdkmanager" ]; then
+            mkdir -p "${CM}"
+            curl -fsSL -o /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp
+            rm -rf "${CM}/latest"
+            mv /tmp/cmdline-tools "${CM}/latest"
+          fi
+          SDKMAN="${CM}/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "${SDKMAN}" --licenses >/dev/null || true
+          set -o pipefail
+          "${SDKMAN}" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-light-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "draft=${{ github.event.inputs.draft }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Layout release files
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp release-artifacts/pi-light-windows-x64/pi-light-windows-x64.zip dist/
+          cp release-artifacts/pi-light-android-debug/app-debug.apk dist/app-debug.apk
+          ls -la dist/
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: pi-light ${{ steps.meta.outputs.tag }}
+          body_path: .github/release-notes/v0.1.0.md
+          draft: ${{ steps.meta.outputs.draft }}
+          prerelease: false
+          files: |
+            dist/pi-light-windows-x64.zip
+            dist/app-debug.apk
+          generate_release_notes: false
