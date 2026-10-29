@@ -34,8 +34,19 @@ jobs:
       - name: Install Android SDK packages
         working-directory: .
         run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          set -euo pipefail
+          CM="${ANDROID_HOME}/cmdline-tools"
+          if [ ! -x "${CM}/latest/bin/sdkmanager" ]; then
+            mkdir -p "${CM}"
+            curl -fsSL -o /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp
+            rm -rf "${CM}/latest"
+            mv /tmp/cmdline-tools "${CM}/latest"
+          fi
+          SDKMAN="${CM}/latest/bin/sdkmanager"
+          yes | "${SDKMAN}" --licenses >/dev/null
+          "${SDKMAN}" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
