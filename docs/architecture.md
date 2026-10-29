@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：M5′（`#` 会话引用）+ 便携 bash / R0+（Pi + MinGit bash 便携包）
+> **当前版本**：M5′（`#` 会话引用）+ 多会话 / cwd / 重试 + 便携 bash / R0+
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -18,14 +18,14 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │  desktop-rust/   egui + eframe（主桌面客户端）                        │
 │                                                                       │
-│  ┌──────────────────────────────────────────────────┐  ┌──────────┐  │
-│  │  主区（CentralPanel）                              │  │  管理面   │  │
-│  │  三态启动屏（M1′） / 流式聊天（M2′）                │  │ ⚙ M4′+  │  │
-│  │  Token 条 + Trace 列表（M3′）                      │  │  Skills  │  │
-│  │  输入框 + 发送/停止                                │  │  MCP     │  │
-│  └──────────────────────────────────────────────────┘  │  记忆    │  │
-│                                                         │  模型    │  │
-│  TopPanel：标题栏 + Pi 状态灯 + ⟳ 重新探测 + ⚙ 管理面  └──────────┘  │
+│  ┌──────────┐ ┌─────────────────────────────────────┐  ┌──────────┐  │
+│  │ 会话列表  │ │  主区（CentralPanel）                 │  │  设置面   │  │
+│  │ 新建/切换 │ │  流式聊天 + 工具卡片 + Token/Trace    │  │ ⚙ M4′+  │  │
+│  │ 工作目录  │ │  输入框 + 发送 / 停止 / 重试          │  │  Skills  │  │
+│  └──────────┘ └─────────────────────────────────────┘  │  MCP     │  │
+│                                                         │  记忆    │  │
+│  TopPanel：标题栏 + Pi 状态灯 + ⟳ 重新探测 + ⚙ 设置    │  模型    │  │
+│                                                         └──────────┘  │
 │                                                                       │
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
@@ -37,7 +37,7 @@
                              ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Pi sidecar（官方 MIT，不修改）                                        │
-│  spawn: pi --mode rpc --no-session                                   │
+│  spawn: pi --mode rpc  （可选 cwd；启动后 new_session 得到干净首槽）   │
 │  协议: JSONL（官方 rpc.md / rpc-commands.md / json.md）               │
 │  布局: {exe_dir}/sidecar/pi/pi.exe                                   │
 │  覆盖: PI_LIGHT_PI_BIN                                               │
@@ -86,10 +86,10 @@ pi-light/
 |------|------|
 | `bash_path` | 便携 bash 路径探测（捆绑 MinGit → 系统 PATH）；`bundled_path_dirs()` 供 `pi_rpc` spawn 注入 PATH |
 | `pi_path` | Pi 二进制路径探测三态；`PiProbe` 枚举 |
-| `pi_rpc` | `PiRpcClient`：spawn（注入 bash PATH）→ JSONL stdin/stdout → mpsc events；M4′ 新增 `get_state` / `get_available_models` / `set_model` |
-| `chat` | 聊天状态机：消息历史、流式缓冲、中止处理 |
-| `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace |
-| `admin_panel` | M4′+ 管理面：四 tab（Skills/MCP/记忆/模型）；Skills 开关写 settings；MCP enabled 字段；记忆内联编辑；模型写回+重启 |
+| `pi_rpc` | `PiRpcClient`：spawn（可选 cwd，注入 bash PATH）→ JSONL；`validate_cwd` 入口单次校验；`new_session` / `switch_session` |
+| `chat` | 聊天状态机 + `SessionHub`（本进程多会话）；重试上一条 prompt |
+| `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace（含 args 预览） |
+| `admin_panel` | M4′+ 设置面：四 tab（Skills/MCP/记忆/模型）；Skills 开关写 settings；MCP enabled 字段；记忆内联编辑；模型写回+重启 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
@@ -155,13 +155,15 @@ pi-light-windows-x64/
 3. `~/.pi/agent/skills/`（用户级，Pi agent 目录）
 4. `~/.agents/skills/`（用户级，Agent Skills 规范）
 
-### RPC 命令（M4′ 新增）
+### RPC 命令（M4′ / 多会话）
 
 | 命令 | 用途 |
 |------|------|
-| `get_state` | 获取当前模型信息（Pi 启动后自动查询） |
+| `get_state` | 获取当前模型与 `sessionFile` / `sessionId` |
 | `get_available_models` | 获取可用模型列表 |
 | `set_model` | 切换模型（provider + modelId） |
+| `new_session` | 新建 Pi 会话（壳侧同时新增活动槽） |
+| `switch_session` | 按 `sessionPath` 切回已落盘会话 |
 
 ---
 
@@ -176,7 +178,8 @@ pi-light-windows-x64/
 | **M4′** | 管理面：Skills/MCP/插件/记忆/模型列表+开关 MVP | ✅ 已合入 |
 | **M4′+** | 管理面全量落地：Skills 开关/状态推导、MCP enabled 字段、记忆内联编辑、模型写回+重启 | ✅ 已合入 |
 | **M5′** | `#` 会话引用最小可用（ZCode 风格引用、chip UI、键盘导航） | ✅ 已合入 |
-| **便携 bash / R0+** | 单 exe 便携包：内嵌 MinGit bash；`bash_path` 模块；PATH 注入；signing.md 完善 | ✅ 本 PR |
+| **便携 bash / R0+** | 单 exe 便携包：内嵌 MinGit bash；`bash_path` 模块；PATH 注入；signing.md 完善 | ✅ 已合入 |
+| **Claude 对标缺口** | 多会话列表、工具卡片、停止/重试、设置可达、cwd 切换 | ✅ 本 PR |
 | **M6′** | Android Host 真连或同构嵌入（Option A stretch） | 后续 |
 | **Android C** | `android/` debug 占位 APK | ✅ 已合入 |
 | **R0** | Release（Win 便携 zip + 签名策略） | 已合入（流水线） |
@@ -188,7 +191,7 @@ pi-light-windows-x64/
 | 类目 | 限制说明 |
 |------|---------|
 | API Key 编辑 | 不在 UI 存储或展示明文 key；请用环境变量或 Pi `/login` |
-| 会话持久化 | `--no-session`；每次启动为全新会话；多会话为后续里程碑 |
+| 会话持久化 | 启动时 `new_session` 得到干净首槽；本进程活动槽可新建/切换；历史文件只走 `#` 引用 |
 | Token 用量 | 依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」 |
 
 ## M5′ 诚实限制
@@ -199,7 +202,7 @@ pi-light-windows-x64/
 | Pi 会话文件格式 | Pi 未公开精确格式；按字段名尽力解析 `title` / `summary` / `sessionId`；解析失败则静默跳过 |
 | 跨会话引用 | 仅支持在同一 Pi 进程会话内直接发送；不支持跨实例或远程会话引用 |
 | 消息分支树 | M5′ 不实现消息分支树 UI；若 Pi 官方支持则后续里程碑跟进 |
-| Taskboard 布局 | M5′ 不实现 Taskboard；不在 M5′ 引入 |
+| Taskboard 布局 | 不实现 Taskboard；不引入 CDP / 双后端 / dsh |
 
 ## M5′ `#` 引用工作流
 

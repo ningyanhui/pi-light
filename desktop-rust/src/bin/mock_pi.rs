@@ -2,7 +2,7 @@
 //
 // mock-pi — mock Pi RPC server for integration testing.
 //
-// Simulates `pi --mode rpc --no-session` JSONL protocol:
+// Simulates `pi --mode rpc` JSONL protocol:
 //   • `prompt`  → response + streamed text deltas + agent_settled
 //   • `abort`   → response + agent_settled {aborted:true}
 //   • any other → generic success response
@@ -59,6 +59,8 @@ fn main() {
             "get_state" => handle_get_state(&mut out, cmd_id),
             "get_available_models" => handle_get_available_models(&mut out, cmd_id),
             "set_model" => handle_set_model(&mut out, cmd_id, &cmd),
+            "new_session" => handle_session_command(&mut out, cmd_id, "new_session"),
+            "switch_session" => handle_session_command(&mut out, cmd_id, "switch_session"),
             _ => handle_generic(&mut out, cmd_id, cmd_type),
         }
     }
@@ -251,8 +253,24 @@ fn handle_get_state(out: &mut impl Write, id: Option<String>) {
                     "provider": "mock",
                     "modelId": "mock-model-1",
                     "name": "Mock Model"
-                }
+                },
+                "sessionFile": "/tmp/mock-session.jsonl",
+                "sessionId": "mock-session",
+                "sessionName": "mock"
             }
+        }),
+    );
+}
+
+fn handle_session_command(out: &mut impl Write, id: Option<String>, command: &str) {
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": command,
+            "success": true,
+            "data": { "cancelled": false }
         }),
     );
 }
