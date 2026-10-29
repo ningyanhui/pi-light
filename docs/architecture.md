@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：M1′（三态 UI + 路径探测契约）  
+> **当前版本**：M2′（真连 Pi RPC 聊天）  
 > **主路径**：`desktop-rust/`（egui/eframe）  
 > **许可**：Apache-2.0 洁净室
 
@@ -50,7 +50,7 @@ desktop/       旧 Tauri 树（已标 deprecated，不是文档/实现主路径�
 
 ---
 
-## 目录结构（M0′）
+## 目录结构（M2′）
 
 ```
 pi-light/
@@ -58,8 +58,15 @@ pi-light/
 ├── desktop-rust/                 # 主桌面客户端（egui/eframe）
 │   ├── Cargo.toml
 │   ├── src/
-│   │   ├── main.rs               # 入口 + eframe App
-│   │   └── pi_path.rs            # Pi 路径解析 stub
+│   │   ├── lib.rs                # 库根（供集成测试导入）
+│   │   ├── main.rs               # 入口 + eframe App + 聊天 UI
+│   │   ├── pi_path.rs            # Pi 路径解析（三态探测）
+│   │   ├── pi_rpc.rs             # Pi RPC 客户端（M2′）
+│   │   ├── chat.rs               # 会话状态机（M2′）
+│   │   └── bin/
+│   │       └── mock_pi.rs        # 测试用 mock Pi RPC 服务端
+│   ├── tests/
+│   │   └── rpc_smoke.rs          # 集成烟测（mock-pi / 真实 Pi）
 │   └── sidecar/
 │       └── pi/
 │           ├── .gitkeep          # 目录占位
@@ -68,7 +75,7 @@ pi-light/
 │   └── architecture.md          # 本文件
 ├── .github/
 │   └── workflows/
-│       └── ci.yml               # cargo check CI
+│       └── ci.yml               # CI（check / test / clippy / fmt）
 ├── LICENSE                      # Apache-2.0
 ├── NOTICE                       # Pi MIT 版权声明
 ├── ACKNOWLEDGEMENTS.md          # 致谢（pi-flash 灵感、earendil-works/pi 等）
@@ -112,9 +119,9 @@ pi-light/
 
 | 里程碑 | 新增模块 / 功能 | 状态 |
 |--------|-----------------|------|
-| **M0′** | 仓骨架、README 换轨、egui 窗、pi_path stub | ✅ 本 PR |
-| **M1′** | 三态 UI（捆绑就绪 / 探测到本机 / 未就绪）、进程契约完整 | 待实现 |
-| **M2′** | pi_rpc 模块（JSONL RPC 真连）、流式聊天、停止、进程生命周期 | 待实现 |
+| **M0′** | 仓骨架、README 换轨、egui 窗、pi_path stub | ✅ 已合入 |
+| **M1′** | 三态 UI（捆绑就绪 / 探测到本机 / 未就绪）、进程契约完整 | ✅ 已合入 |
+| **M2′** | pi_rpc 模块（JSONL RPC 真连）、流式聊天、停止、进程生命周期、mock-pi 测试 | ✅ 本 PR |
 | **M3′** | Trace/Token on Pi（`get_session_stats` + usage 事件） | Stretch |
 | **M4′** | 管理面（skill/MCP/记忆列表开关） | 后续 |
 | **M5′** | `#` 会话引用 + 可选 Taskboard 布局 | 后续 |
@@ -132,4 +139,16 @@ pi-light/
 
 ---
 
-*最后更新：M0′ 骨架阶段*
+## 测试策略（M2′）
+
+| 类型 | 文件 | 说明 |
+|------|------|------|
+| 单元测试 | `pi_rpc::tests` | JSONL 解析逻辑（text_delta、agent_settled、response 错误等） |
+| 单元测试 | `pi_path::tests` | 路径探测三态逻辑 |
+| 单元测试 | `chat::tests` | 会话状态机（完整轮次、中止、错误） |
+| 集成测试 | `tests/rpc_smoke.rs` | spawn → prompt → 流式 → settled → shutdown；mock-pi 作 Pi 替身 |
+| 真实测试 | `PI_LIGHT_PI_BIN=/path/to/pi cargo test` | 对真实 Pi 的端到端验证 |
+
+---
+
+*最后更新：M2′ Pi RPC 聊天阶段*
