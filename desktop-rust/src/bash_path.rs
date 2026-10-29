@@ -111,7 +111,7 @@ pub(crate) fn probe_impl(exe_dir: Option<&Path>, path_dirs: &[PathBuf]) -> BashP
 /// 从给定的 exe_dir 计算捆绑 bash 所需的 PATH 目录列表。
 ///
 /// MinGit 解压后的目录结构：
-///   sidecar/bash/usr/bin/     ← bash.exe, sh.exe
+///   sidecar/bash/usr/bin/     ← sh.exe；打包脚本再复制为 bash.exe 供 Pi 查找
 ///   sidecar/bash/mingw64/bin/ ← 工具链
 ///   sidecar/bash/cmd/         ← git.exe
 ///

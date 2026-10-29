@@ -1,6 +1,6 @@
-# Download MinGit for Windows (portable bash/MSYS environment), verify SHA-256, extract to DestDir.
-# MinGit bundles bash.exe + MSYS2 runtime without requiring a full Git installation.
-# Exit non-zero on any failure; never packages an unverified binary.
+# Download MinGit for Windows (portable POSIX/MSYS environment), verify SHA-256, extract to DestDir.
+# MinGit ships usr/bin/sh.exe (and dash.exe), not GNU bash.exe. After extract we copy sh.exe
+# to bash.exe so Pi's `bash` lookup on PATH succeeds. Exit non-zero on any failure.
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string] $DestDir,
@@ -31,11 +31,16 @@ try {
     Write-Host "Extracting MinGit into $DestDir ..."
     Expand-Archive -LiteralPath $tmpZip -DestinationPath $DestDir -Force
 
-    # Verify that bash.exe landed where expected.
-    $bashExe = Join-Path $DestDir "usr\bin\bash.exe"
+    $usrBin = Join-Path $DestDir "usr\bin"
+    $bashExe = Join-Path $usrBin "bash.exe"
+    $shExe = Join-Path $usrBin "sh.exe"
     if (-not (Test-Path -LiteralPath $bashExe)) {
-        Write-Error "bash.exe not found at expected path: $bashExe"
-        exit 1
+        if (-not (Test-Path -LiteralPath $shExe)) {
+            Write-Error "neither bash.exe nor sh.exe found under $usrBin"
+            exit 1
+        }
+        Copy-Item -LiteralPath $shExe -Destination $bashExe
+        Write-Host "MinGit has no bash.exe; copied sh.exe -> bash.exe for Pi PATH lookup"
     }
 
     Write-Host "Bash sidecar ready: $bashExe"
