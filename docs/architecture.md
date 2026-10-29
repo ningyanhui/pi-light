@@ -130,7 +130,7 @@ pi-light-windows-x64/
     ├── pi/
     │   └── pi.exe                # Pi sidecar（MIT，由 earendil-works/pi 发布）
     └── bash/                     # MinGit（GPL-2.0 + 例外，便携 bash/MSYS 环境）
-        ├── usr/bin/              # bash.exe, sh.exe, MSYS 工具
+        ├── usr/bin/              # sh.exe；Release 复制为 bash.exe 供 Pi 查找
         ├── mingw64/bin/          # 工具链
         └── cmd/                  # git.exe
 ```

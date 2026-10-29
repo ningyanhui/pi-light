@@ -54,7 +54,7 @@ pi-light-windows-x64/
 ├── LICENSE                   # Apache-2.0
 └── sidecar/
     ├── pi/pi.exe             # 官方 Pi v1.4.0（打包前校验 SHA-256）
-    └── bash/                 # MinGit 便携 bash / MSYS（打包前校验 SHA-256）
+    └── bash/                 # MinGit（sh.exe；打包复制为 bash.exe；SHA 见 NOTICE）
 ```
 
 SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 为准。Release 流水线校验失败则拒绝打包。签名策略见 [`docs/signing.md`](./docs/signing.md)（当前无 Authenticode）。

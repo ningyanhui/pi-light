@@ -1,6 +1,14 @@
-# Download MinGit for Windows (portable bash/MSYS environment), verify SHA-256, extract to DestDir.
-# MinGit bundles bash.exe + MSYS2 runtime without requiring a full Git installation.
-# Exit non-zero on any failure; never packages an unverified binary.
+# Download MinGit for Windows (portable POSIX/MSYS environment), verify SHA-256, extract to DestDir.
+#
+# MinGit-2.47.1.2-64-bit.zip layout (no extra top-level folder):
+#   usr/bin/sh.exe      POSIX shell (present)
+#   usr/bin/dash.exe    dash (present)
+#   usr/bin/bash.exe    NOT in the zip
+#   mingw64/share/git/edit-git-bash.exe  is a helper, not bash
+#
+# After extract we search DestDir for bash.exe; if none, copy usr/bin/sh.exe to
+# usr/bin/bash.exe so Pi's PATH lookup of `bash` succeeds. SHA check is unchanged.
+# Exit non-zero on any failure; never packages an unverified zip.
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string] $DestDir,
@@ -13,6 +21,17 @@ $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path -LiteralPath $DestDir)) {
     New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+}
+
+function Find-NamedExe {
+    param(
+        [Parameter(Mandatory = $true)][string] $Root,
+        [Parameter(Mandatory = $true)][string] $FileName
+    )
+    if (-not (Test-Path -LiteralPath $Root)) { return $null }
+    Get-ChildItem -LiteralPath $Root -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ieq $FileName } |
+        Select-Object -First 1
 }
 
 $tmpZip = Join-Path $env:TEMP ("mingit-" + [guid]::NewGuid().ToString() + ".zip")
@@ -31,14 +50,31 @@ try {
     Write-Host "Extracting MinGit into $DestDir ..."
     Expand-Archive -LiteralPath $tmpZip -DestinationPath $DestDir -Force
 
-    # Verify that bash.exe landed where expected.
-    $bashExe = Join-Path $DestDir "usr\bin\bash.exe"
-    if (-not (Test-Path -LiteralPath $bashExe)) {
-        Write-Error "bash.exe not found at expected path: $bashExe"
+    # Locate a usable shell, then ensure bash.exe sits next to it (Pi looks up `bash`).
+    $foundBash = Find-NamedExe -Root $DestDir -FileName "bash.exe"
+    if ($null -ne $foundBash) {
+        Write-Host "Found bash.exe at $($foundBash.FullName)"
+        $canonicalBash = $foundBash.FullName
+    }
+    else {
+        Write-Host "No bash.exe in MinGit extract (expected for MinGit-2.47.1.2); looking for sh.exe ..."
+        $foundSh = Find-NamedExe -Root $DestDir -FileName "sh.exe"
+        if ($null -eq $foundSh) {
+            Write-Error "MinGit extract has neither bash.exe nor sh.exe under $DestDir"
+            exit 1
+        }
+        Write-Host "Real shell path: $($foundSh.FullName)"
+        $canonicalBash = Join-Path $foundSh.DirectoryName "bash.exe"
+        Copy-Item -LiteralPath $foundSh.FullName -Destination $canonicalBash -Force
+        Write-Host "Copied sh.exe -> $canonicalBash (Pi looks up bash on PATH)"
+    }
+
+    if (-not (Test-Path -LiteralPath $canonicalBash)) {
+        Write-Error "bash.exe missing after locate/copy: $canonicalBash"
         exit 1
     }
 
-    Write-Host "Bash sidecar ready: $bashExe"
+    Write-Host "Bash sidecar ready: $canonicalBash"
 }
 finally {
     if (Test-Path -LiteralPath $tmpZip) {
