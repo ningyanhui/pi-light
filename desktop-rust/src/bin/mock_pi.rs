@@ -53,7 +53,7 @@ fn main() {
         let cmd_id = cmd.get("id").and_then(|v| v.as_str()).map(str::to_owned);
 
         match cmd_type {
-            "prompt" => handle_prompt(&mut out, cmd_id),
+            "prompt" => handle_prompt(&mut out, cmd_id, &cmd),
             "abort" => handle_abort(&mut out, cmd_id),
             "get_session_stats" => handle_get_session_stats(&mut out, cmd_id),
             "get_state" => handle_get_state(&mut out, cmd_id),
@@ -66,7 +66,7 @@ fn main() {
 
 // ── Handlers ──────────────────────────────────────────────────────────────
 
-fn handle_prompt(out: &mut impl Write, id: Option<String>) {
+fn handle_prompt(out: &mut impl Write, id: Option<String>, cmd: &serde_json::Value) {
     // 1. Acknowledge the prompt (disposition: started)
     emit_with_id(
         out,
@@ -104,7 +104,20 @@ fn handle_prompt(out: &mut impl Write, id: Option<String>) {
         }),
     );
 
-    let chunks = ["Hello from ", "mock Pi! ", "This is a ", "test response."];
+    // M5′: 若 prompt 中含有 `[引用消息` 前缀，则在回复中回显确认
+    let has_ref = cmd
+        .get("message")
+        .and_then(|m| m.as_str())
+        .map(|m| m.contains("[引用消息") || m.contains("[引用历史会话"))
+        .unwrap_or(false);
+
+    let reply = if has_ref {
+        "已收到带引用上下文的消息，mock Pi 回复：Hello from mock Pi! This is a test response."
+    } else {
+        "Hello from mock Pi! This is a test response."
+    };
+
+    let chunks: Vec<&str> = reply.splitn(4, ' ').collect();
     for chunk in &chunks {
         emit(
             out,
@@ -114,7 +127,7 @@ fn handle_prompt(out: &mut impl Write, id: Option<String>) {
                 "assistantMessageEvent": {
                     "type": "text_delta",
                     "contentIndex": 0,
-                    "delta": chunk
+                    "delta": format!("{} ", chunk)
                 }
             }),
         );
@@ -129,7 +142,7 @@ fn handle_prompt(out: &mut impl Write, id: Option<String>) {
             "assistantMessageEvent": {
                 "type": "text_end",
                 "contentIndex": 0,
-                "content": "Hello from mock Pi! This is a test response."
+                "content": reply
             }
         }),
     );

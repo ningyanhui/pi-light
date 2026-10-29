@@ -85,6 +85,7 @@ pi-light/
 | `chat` | 聊天状态机：消息历史、流式缓冲、中止处理 |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace |
 | `admin_panel` | M4′+ 管理面：四 tab（Skills/MCP/记忆/模型）；Skills 开关写 settings；MCP enabled 字段；记忆内联编辑；模型写回+重启 |
+| `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
 ---
@@ -139,8 +140,8 @@ pi-light/
 | **M2′** | pi_rpc（JSONL RPC 真连）、流式聊天、停止、进程生命周期 | ✅ 已合入 |
 | **M3′** | Token 用量条、工具 Trace 列表 | ✅ 已合入 |
 | **M4′** | 管理面：Skills/MCP/插件/记忆/模型列表+开关 MVP | ✅ 已合入 |
-| **M4′+** | 管理面全量落地：Skills 开关/状态推导、MCP enabled 字段、记忆内联编辑、模型写回+重启 | ✅ 本 PR |
-| **M5′** | `#` 会话引用 + 可选 Taskboard 布局 | 后续 |
+| **M4′+** | 管理面全量落地：Skills 开关/状态推导、MCP enabled 字段、记忆内联编辑、模型写回+重启 | ✅ 已合入 |
+| **M5′** | `#` 会话引用最小可用（ZCode 风格引用、chip UI、键盘导航） | ✅ 本 PR |
 | **M6′** | Android Host 真连或同构嵌入（Option A stretch） | 后续 |
 | **Android C** | `android/` debug 占位 APK | ✅ 已合入 |
 | **R0** | Release（Win 便携 zip + 签名策略） | 已合入（流水线） |
@@ -154,6 +155,34 @@ pi-light/
 | API Key 编辑 | 不在 UI 存储或展示明文 key；请用环境变量或 Pi `/login` |
 | 会话持久化 | `--no-session`；每次启动为全新会话；多会话为后续里程碑 |
 | Token 用量 | 依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」 |
+
+## M5′ 诚实限制
+
+| 类目 | 限制说明 |
+|------|---------|
+| 会话列表 RPC | Pi v1.4.0 无会话列表 RPC；当前会话消息始终可引用，历史会话通过本地文件探测（`~/.pi/sessions/*.json`） |
+| Pi 会话文件格式 | Pi 未公开精确格式；按字段名尽力解析 `title` / `summary` / `sessionId`；解析失败则静默跳过 |
+| 跨会话引用 | 仅支持在同一 Pi 进程会话内直接发送；不支持跨实例或远程会话引用 |
+| 消息分支树 | M5′ 不实现消息分支树 UI；若 Pi 官方支持则后续里程碑跟进 |
+| Taskboard 布局 | M5′ 不实现 Taskboard；不在 M5′ 引入 |
+
+## M5′ `#` 引用工作流
+
+```
+用户输入 "# " 或 "#keyword" → find_hash_trigger 检测触发词
+      ↓
+candidates_from_messages（当前会话消息，最多 20 条，最近在前）
+candidates_from_pi_sessions（~/.pi/sessions/*.json，可选，无则静默跳过）
+      ↓
+RefChooserState.activate(all_candidates, query, hash_pos)
+      ↓  ↑↓ 导航  Enter/Tab 确认  Esc 关闭  鼠标点击确认
+RefChip 附在输入区上方（蓝色小 chip，点击可移除）
+      ↓
+do_send():
+  build_prompt_text(chips, user_text)
+  →  "[引用消息#N (角色)]\n内容\n\n用户输入"
+  → client.send_prompt(effective_prompt)     # 现有 prompt RPC
+```
 
 ---
 
@@ -175,8 +204,9 @@ pi-light/
 | 单元测试 | `chat::tests` | 聊天状态机 |
 | 单元测试 | `session_insights::tests` | Token / Trace |
 | 单元测试 | `admin_panel::tests` | 管理面：MCP 解析/写回、settings.json 写回、toggle 逻辑、skills 发现 |
-| 集成测试 | `tests/rpc_smoke.rs` | spawn → prompt → 流式 → settled；mock-pi 替代真实 Pi |
+| 单元测试 | `session_ref::tests` | M5′：RefCandidate / RefChooserState / 触发词解析 / build_prompt_text（共 24 测试） |
+| 集成测试 | `tests/rpc_smoke.rs` | spawn → prompt → 流式 → settled；mock-pi 替代真实 Pi；M5′ 新增引用上下文 prompt 发送 / 空态 / 键盘确认流程 |
 
 ---
 
-*最后更新：M4′+ 管理面全量落地*
+*最后更新：M5′ `#` 会话引用最小可用*

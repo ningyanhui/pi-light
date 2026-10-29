@@ -6,3 +6,4 @@ pub mod chat;
 pub mod pi_path;
 pub mod pi_rpc;
 pub mod session_insights;
+pub mod session_ref;
