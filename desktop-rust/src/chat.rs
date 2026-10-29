@@ -3,6 +3,7 @@
 // Chat state machine for the pi-light chat UI (M2′).
 
 use crate::pi_rpc::PiRpcEvent;
+use crate::session_insights::SessionInsights;
 
 // ── Message types ─────────────────────────────────────────────────────────
 
@@ -29,6 +30,8 @@ pub struct ChatState {
     pub error: Option<String>,
     /// Scroll-to-bottom flag: set when new content arrives.
     pub scroll_to_bottom: bool,
+    /// M3′: token usage + tool trace derived from Pi RPC.
+    pub insights: SessionInsights,
 }
 
 impl ChatState {
@@ -74,6 +77,7 @@ impl ChatState {
 
     /// Process a single `PiRpcEvent` from the RPC client.
     pub fn handle_rpc_event(&mut self, event: PiRpcEvent) {
+        self.insights.handle_rpc_event(&event);
         match event {
             PiRpcEvent::TextDelta(delta) => {
                 if !self.is_streaming {
@@ -90,6 +94,10 @@ impl ChatState {
             PiRpcEvent::CommandError { command, error } => {
                 self.set_error(format!("命令 `{command}` 失败：{error}"));
             }
+            PiRpcEvent::UsageUpdate(_)
+            | PiRpcEvent::SessionStats(_)
+            | PiRpcEvent::ToolTraceStart { .. }
+            | PiRpcEvent::ToolTraceEnd { .. } => {}
         }
     }
 }

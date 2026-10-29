@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// pi-light — 内嵌 Pi 的轻量 Rust Shell (M2′: 真连 Pi RPC 聊天)
+// pi-light — 内嵌 Pi 的轻量 Rust Shell (M2′ 聊天 + M3′ Trace/Token)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -7,7 +7,8 @@ use eframe::egui;
 use pi_light::{
     chat::{ChatMessage, ChatState},
     pi_path::{self, PiProbe},
-    pi_rpc::PiRpcClient,
+    pi_rpc::{PiRpcClient, PiRpcEvent},
+    session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
 };
 
 fn main() -> eframe::Result<()> {
@@ -108,13 +109,25 @@ impl PiLightApp {
         if let Some(client) = &mut self.rpc_client {
             let events = client.drain_events();
             for event in events {
-                // Detect process exit so we can clear the client.
-                let is_exit = matches!(event, pi_light::pi_rpc::PiRpcEvent::ProcessExited { .. });
+                let is_exit = matches!(&event, PiRpcEvent::ProcessExited { .. });
+                let request_stats = matches!(&event, PiRpcEvent::AgentSettled { aborted: false });
                 self.chat.handle_rpc_event(event);
+                if request_stats {
+                    self.request_session_stats();
+                }
                 if is_exit {
                     self.rpc_client = None;
                     break;
                 }
+            }
+        }
+    }
+
+    fn request_session_stats(&mut self) {
+        if let Some(client) = &mut self.rpc_client {
+            self.chat.insights.on_stats_request_sent();
+            if client.request_session_stats().is_err() {
+                self.chat.insights.stats_fetch = StatsFetchState::Failed;
             }
         }
     }
@@ -169,6 +182,13 @@ impl PiLightApp {
     // ── Chat UI ───────────────────────────────────────────────────────────
 
     fn show_chat_ui(&mut self, ctx: &egui::Context) {
+        // Token / trace summary above the input area
+        egui::TopBottomPanel::bottom("insights_bar")
+            .min_height(28.0)
+            .show(ctx, |ui| {
+                show_session_insights_bar(ui, &self.chat);
+            });
+
         // Bottom input panel
         egui::TopBottomPanel::bottom("chat_input")
             .min_height(56.0)
@@ -270,6 +290,8 @@ impl PiLightApp {
                     if scroll_to_bottom {
                         ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
                     }
+
+                    show_trace_section(ui, &self.chat);
                 });
         });
     }
@@ -448,6 +470,69 @@ fn show_not_ready_panel(ui: &mut egui::Ui) {
         .monospace()
         .size(11.0),
     );
+}
+
+// ── M3′ Trace / Token UI ──────────────────────────────────────────────────
+
+fn show_session_insights_bar(ui: &mut egui::Ui, chat: &ChatState) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Token").strong().size(12.0));
+        match chat.insights.usage_display_state() {
+            UsageDisplayState::Available => {
+                if let Some(line) = chat.insights.usage_summary_line() {
+                    ui.label(egui::RichText::new(line).monospace().size(11.0));
+                } else {
+                    ui.weak("（字段不完整）");
+                }
+            }
+            UsageDisplayState::Unknown => {
+                if chat.insights.stats_fetch == StatsFetchState::Pending {
+                    ui.weak("用量统计中…");
+                } else {
+                    ui.weak("用量未知 — Pi 尚未上报 usage / stats 字段");
+                }
+            }
+            UsageDisplayState::Unsupported => {
+                ui.weak("不支持 — 当前 Pi 无法提供 get_session_stats");
+            }
+        }
+    });
+}
+
+fn show_trace_section(ui: &mut egui::Ui, chat: &ChatState) {
+    ui.add_space(10.0);
+    ui.separator();
+    egui::CollapsingHeader::new("Trace / 工具步骤")
+        .default_open(true)
+        .id_salt("pi_light_trace")
+        .show(ui, |ui| match chat.insights.trace_display_state() {
+            TraceDisplayState::Empty => {
+                ui.weak("暂无 Trace — 本会话尚未收到 tool_execution_* 事件");
+            }
+            TraceDisplayState::Available => {
+                for step in &chat.insights.trace_steps {
+                    let status = if step.running {
+                        "运行中…"
+                    } else if step.is_error {
+                        "失败"
+                    } else {
+                        "完成"
+                    };
+                    let dur = step
+                        .duration_ms
+                        .map(|ms| format!(" · {ms} ms"))
+                        .unwrap_or_default();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "• {} ({}) — {}{}",
+                            step.tool_name, step.tool_call_id, status, dur
+                        ))
+                        .monospace()
+                        .size(11.0),
+                    );
+                }
+            }
+        });
 }
 
 // ── Chat message renderers ────────────────────────────────────────────────
