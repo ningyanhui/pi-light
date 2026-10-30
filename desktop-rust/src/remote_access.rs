@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// 远程访问（v3 M5）：设置抽屉「远程访问」页。
-// 配对码 / 二维码、Cloudflare Tunnel 状态、已授权设备；给 M6 companion 留 claim 钩子。
+// 远程访问（v3 M5 + M6-lite）：设置抽屉「远程访问」页。
+// 配对码 / 二维码、Cloudflare Tunnel 状态、已授权设备；companion 经 /v1/chat 写入当前 Pi 会话。
 
 use std::{
     fs, io,
@@ -12,9 +12,11 @@ use std::{
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use crate::chat::{ChatMessage, ChatState};
 use crate::relay_mgr::{self, CloudflaredProbe, RelayManager, TunnelStatus};
 use crate::remote_gateway::{
-    AuthorizedDevice, GatewayHandle, PairOffer, CHAT_PATH, CLAIM_PATH, PROTOCOL,
+    AuthorizedDevice, ChatSnapshot, GatewayHandle, PairOffer, PendingChat, SnapshotMsg, CHAT_PATH,
+    CLAIM_PATH, PROTOCOL,
 };
 
 pub const PAIR_TTL_SECS: u64 = 600;
@@ -165,6 +167,10 @@ impl RemoteAccessState {
                 self.save();
                 dirty = true;
             }
+            gw.set_authorized_devices(self.persist.devices.clone());
+            if gw.has_pending_chat() {
+                dirty = true;
+            }
         }
         if let Some(pair) = &self.pair {
             if unix_now() > pair.expires_unix {
@@ -215,6 +221,11 @@ impl RemoteAccessState {
         if on {
             if self.gateway.is_none() {
                 let gw = GatewayHandle::start().map_err(|e| format!("本机网关启动失败：{e}"))?;
+                gw.set_authorized_devices(self.persist.devices.clone());
+                gw.set_chat_snapshot(ChatSnapshot {
+                    host: crate::remote_gateway::local_host_label(),
+                    ..ChatSnapshot::default()
+                });
                 self.gateway = Some(gw);
             }
             match self.persist.relay {
@@ -298,7 +309,52 @@ impl RemoteAccessState {
 
     pub fn revoke(&mut self, id: &str) {
         self.persist.devices.retain(|d| d.id != id);
+        if let Some(gw) = &self.gateway {
+            gw.set_authorized_devices(self.persist.devices.clone());
+        }
         self.save();
+    }
+
+    pub fn take_pending_chat(&self) -> Option<PendingChat> {
+        self.gateway
+            .as_ref()
+            .and_then(GatewayHandle::take_pending_chat)
+    }
+
+    pub fn publish_chat(&self, title: &str, chat: &ChatState) {
+        let Some(gw) = &self.gateway else {
+            return;
+        };
+        let mut messages: Vec<SnapshotMsg> = chat
+            .messages
+            .iter()
+            .map(|m| match m {
+                ChatMessage::User(t) => SnapshotMsg {
+                    role: "user".into(),
+                    text: t.clone(),
+                },
+                ChatMessage::Assistant(t) => SnapshotMsg {
+                    role: "assistant".into(),
+                    text: t.clone(),
+                },
+            })
+            .collect();
+        const MAX: usize = 50;
+        if messages.len() > MAX {
+            messages = messages.split_off(messages.len() - MAX);
+        }
+        gw.set_chat_snapshot(ChatSnapshot {
+            host: crate::remote_gateway::local_host_label(),
+            session_title: if title.trim().is_empty() {
+                "会话".into()
+            } else {
+                title.to_owned()
+            },
+            writable: true,
+            streaming: chat.is_streaming,
+            partial: chat.streaming_buf.clone(),
+            messages,
+        });
     }
 
     pub fn save(&self) {
@@ -491,7 +547,7 @@ pub fn render_tab(ui: &mut egui::Ui, state: &mut RemoteAccessState) {
     ui.add_space(4.0);
     ui.label(
         egui::RichText::new(
-            "手机 companion 扫码/输码后的远程聊天是后续里程碑（M6）。本页已提供配对码、中继出口与 POST /v1/pair/claim。远程桌面三档（浏览 / 触控 / 全屏）尚未开放。电脑操控需要操作系统权限，不会因为打开远程而自动启用。",
+            "手机 companion 扫码或输入配对码后，经公网中继写入本机当前 Pi 会话（默认可写）。远程桌面三档（浏览 / 触控 / 全屏）尚未开放。电脑操控需要操作系统权限，不会因为打开远程而自动启用。",
         )
         .weak()
         .size(11.0),

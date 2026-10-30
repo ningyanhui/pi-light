@@ -110,7 +110,7 @@
 | **M1′** | 路径约定 + 三态 UI（捆绑就绪 / 探测到本机 / 未就绪） |
 | **M2′** | 官方 JSONL RPC 真连聊天 |
 | **M3′–M5′** | Trace/Token、管理面、`#` 引用 |
-| **M6′** | Android：**维持 Option C**（Host 未长出 A 所需共享面；不升真 Host） |
+| **M6′ / v3 M6-lite** | Android companion：扫码或输码经公网中继配对，并完成一通写入当前 Pi 会话的远程聊天。不内嵌 Pi，不做 M7 三档远程桌面 |
 | **v3 M2** | Slim 五包预置进发行树 + SHA 闸门；操控三包预置文件默认关 |
 
 **OUT of M0′**：真 RPC 聊天、三态 UI 完整、zip 捆绑进 git、双后端、Harness/dsh。

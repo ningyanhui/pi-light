@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.2 + v3 M0–M2 + **M5 桌面远程** — 右设置抽屉七 Tab；市场 + Slim 预置；远程访问：配对码/二维码、Cloudflare Tunnel、已授权设备
+> **当前版本**：v0.2.2 + v3 M0–M2 + M5 桌面远程 + **M6-lite companion 聊天** — 右设置抽屉七 Tab；市场 + Slim 预置；远程访问：配对码/二维码、Cloudflare Tunnel、已授权设备；Android 扫码/输码后一通远程聊
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -45,7 +45,7 @@
 │  覆盖: PI_LIGHT_PI_BIN                                               │
 └─────────────────────────────────────────────────────────────────────┘
 
-android/   Kotlin Compose（Option C：debug 占位 APK，不内嵌 Pi；M6′ 维持 C，见下文）
+android/   Kotlin Compose companion（M6-lite：扫码/输码 + 公网远程聊天；不内嵌 Pi）
 desktop/   旧 Tauri 树（已标 deprecated，不是文档/实现主路径）
 ```
 
@@ -80,12 +80,12 @@ pi-light/
 │   │   ├── relay_mgr.rs          # cloudflared 探测 / 下载 / 隧道
 │   │   └── bin/mock_pi.rs        # 集成测试用 Pi 替身
 │   └── tests/rpc_smoke.rs        # 集成烟测
-├── android/                      # Option C 占位壳
+├── android/                      # M6-lite companion（配对 + 远程聊天）
 ├── docs/
 │   ├── architecture.md
 │   ├── preset-packages.md        # Slim / 操控包钉版本与 tarball SHA-256
 │   ├── remote-acceptance.md      # M5 公网配对与中继验收
-│   ├── companion-protocol.md     # M6 消费的 claim / chat 钩子
+│   ├── companion-protocol.md     # claim / chat 协议
 │   └── signing.md                # Windows 签名策略与 Authenticode 占位
 ├── scripts/
 │   ├── fetch-pi-sidecar.ps1      # Pi sidecar 下载/SHA-256 校验
@@ -119,7 +119,7 @@ pi-light/
 | `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `remote_access` | 远程访问页：允许手机远程、配对码/QR（TTL 10 分钟）、设备列表撤销、中继选项 |
-| `remote_gateway` | 本机 `127.0.0.1` HTTP：`/health`、`/v1/pair/info`、`POST /v1/pair/claim`；`/v1/chat` 返回 501 |
+| `remote_gateway` | 本机 `127.0.0.1` HTTP：`/health`、`/v1/pair/info`、`POST /v1/pair/claim`、已授权 `GET/POST /v1/chat` |
 | `relay_mgr` | cloudflared 探测顺序、SHA 校验下载、trycloudflare / 命名隧道启停与状态 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
@@ -223,8 +223,8 @@ pi-light-windows-x64/
 | **M5′** | `#` 会话引用最小可用（ZCode 风格引用、chip UI、键盘导航） | ✅ 已合入 |
 | **便携 bash / R0+** | 单 exe 便携包：内嵌 MinGit bash；`bash_path` 模块；PATH 注入；signing.md 完善 | ✅ 已合入 |
 | **Claude 对标缺口** | 多会话列表、工具卡片、停止/重试、设置可达、cwd 切换 | ✅ 已合入（#11） |
-| **M6′** | Android：仅当 Host 已自然长出共享面时升 Option A | **维持 C**（见下节） |
-| **Android C** | `android/` debug 占位 APK（`assembleDebug`） | ✅ 已合入；v0.2.2 仍为此路径 |
+| **M6′** | Android：仅当 Host 已自然长出共享面时升 Option A | 被 v3 **M6-lite** 覆盖：companion 真连，仍不内嵌 Pi |
+| **Android C** | `android/` debug 占位 APK（`assembleDebug`） | 已被 M6-lite companion 替换 |
 | **R0 / v0.1.0** | Release（Win 便携 zip + 签名策略） | ✅ 已发布 |
 | **v0.2.0** | 文档换轨 + 便携 bash + Claude 对标缺口合入后的发版 | ✅ 已发布 |
 | **v0.2.1** | 中文显示、应用内密钥、会话恢复、设置页顺序 | ✅ 已发布 |
@@ -232,23 +232,25 @@ pi-light-windows-x64/
 | **v3 M0** | 设置抽屉七 Tab；厂商 + 自定义 API；主聊天模型下拉；firstrun 只配密钥 | ✅ 已合入 |
 | **v3 M1** | 扩展市场浏览 / 搜索 / 类型滤镜；确认后 sidecar `pi install`；list/remove；`/reload` 提示 | ✅ 已合入 |
 | **v3 M2** | Slim 五包预置进 `sidecar/pi-packages/`；NOTICE tarball SHA；操控三包默认关 + 一键启用壳 | ✅ 已合入 |
-| **v3 M5** | 远程访问页：配对码/二维码、Cloudflare Tunnel 状态、已授权设备；本机 claim 钩子 | 本 PR |
+| **v3 M5** | 远程访问页：配对码/二维码、Cloudflare Tunnel 状态、已授权设备；本机 claim 钩子 | ✅ 已合入 |
+| **v3 M6-lite** | Android companion：扫码/输码经公网中继配对；`/v1/chat` 写入桌面当前 Pi 会话 | 本 PR |
 
 ---
 
-## M6′ / Android：占位 APK，桌面钩子已在 M5 长出
+## M6-lite / Android companion
 
-v3 **M5** 已在桌面提供：
+v3 **M5** 已在桌面提供本机 loopback 网关、配对码 / 二维码 / `POST /v1/pair/claim`、Cloudflare Tunnel 公网出口。
 
-- 本机 loopback HTTP 网关（`remote_gateway`）
-- 配对码 / 二维码 / `POST /v1/pair/claim`
-- Cloudflare Tunnel 公网出口（`relay_mgr`）
+**M6-lite** 把 `android/` 从 Option C 占位壳换成 companion MVP：
 
-这是 companion 真连所需的 Host 面，供 **M6-lite** 消费（见 `docs/companion-protocol.md`）。
+- 首页设备卡（已连接 / via 中继 / latency）
+- 扫码或手输配对码 + 中继 URL（不要求同一局域网）
+- `GET/POST /v1/chat` 带 Bearer token，写入桌面当前 Pi 会话（默认可写）
+- 「远程桌面」入口诚实标明即将推出（M7，不在本里程碑）
 
-**本里程碑仍不把 Android 升为真 companion**：`android/` 继续是 Kotlin Compose debug 占位壳，CI / Release 只跑 `assembleDebug`，不内嵌 Pi、不扫码、不连中继。完整会话以 Windows `desktop-rust/` 为准。M6 再把 APK 接到上述钩子。
+CI / Release 仍只构建 debug APK（`testDebugUnitTest` + `assembleDebug`）。不内嵌 Pi。Pi sidecar 仍是 Windows x64 的 `pi-windows-x64.zip`，`pi_rpc` 仍只托管本机 `pi --mode rpc`。
 
-Pi sidecar 仍是 Windows x64 的 `pi-windows-x64.zip`，不能原样塞进 APK。`pi_rpc` 仍只托管本机 `pi --mode rpc`。
+公网验收必须走蜂窝网手机 ↔ 家宽桌面剧本，见 `docs/remote-acceptance.md`。局域网 loopback 冒烟不能代替该剧本。
 
 ---
 
@@ -275,7 +277,8 @@ Pi sidecar 仍是 Windows x64 的 `pi-windows-x64.zip`，不能原样塞进 APK�
 | 类目 | 限制说明 |
 |------|---------|
 | 中继 | 依赖本机网络与公网可达性。临时 trycloudflare 无需 Cloudflare 账号，主机名每次启动会变。命名隧道 / Tailscale 需要账号。同一局域网不能代替公网中继 |
-| 配对握手 | 桌面校验配对码后自动授权。手机 UI 与远程聊天是 M6。`/v1/chat` 返回 501 |
+| 配对握手 | 桌面校验配对码后自动授权。手机扫码或手输后 claim；聊天走 `/v1/chat` |
+| 远程聊天 | 默认可写当前 Pi 会话；依赖桌面在跑、中继已连接、手机能访问公网主机名 |
 | 远程桌面 | 浏览 / 触控 / 全屏未开放 |
 | cloudflared | 未钉平台（如 macOS）不提供应用内下载，只探测 PATH / 环境变量 |
 

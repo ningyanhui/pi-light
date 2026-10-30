@@ -16,6 +16,7 @@ use pi_light::{
     pi_rpc::{self, PiRpcClient, PiRpcEvent},
     provider_catalog,
     remote_access::RemoteAccessState,
+    remote_gateway::CompanionChatEvent,
     session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
     session_ref::{self, RefCandidate, RefChip, RefChooserState},
     session_store::{self, RpcAttach},
@@ -68,6 +69,8 @@ struct PiLightApp {
     persist_retry_at: Option<std::time::Instant>,
     /// v3 M5：远程访问（配对 / Cloudflare Tunnel / 设备列表）。
     remote: RemoteAccessState,
+    /// M6-lite：当前 companion HTTP 回合的回包通道。
+    companion_reply: Option<std::sync::mpsc::Sender<CompanionChatEvent>>,
 }
 
 impl PiLightApp {
@@ -117,6 +120,7 @@ impl PiLightApp {
             persist_dirty: false,
             persist_retry_at: None,
             remote: RemoteAccessState::load_default(),
+            companion_reply: None,
         };
         app.try_spawn_rpc();
         app
@@ -318,6 +322,21 @@ impl PiLightApp {
             for event in events {
                 let is_exit = matches!(&event, PiRpcEvent::ProcessExited { .. });
                 let request_stats = matches!(&event, PiRpcEvent::AgentSettled { aborted: false });
+                let companion_note = match &event {
+                    PiRpcEvent::AgentSettled { aborted } => Some(CompanionChatEvent::Settled {
+                        text: String::new(),
+                        aborted: *aborted,
+                    }),
+                    PiRpcEvent::ProcessExited { .. } => Some(CompanionChatEvent::Error {
+                        code: "pi_exited".into(),
+                        message: "Pi 进程已退出".into(),
+                    }),
+                    PiRpcEvent::CommandError { error, .. } => Some(CompanionChatEvent::Error {
+                        code: "command_error".into(),
+                        message: error.clone(),
+                    }),
+                    _ => None,
+                };
 
                 match &event {
                     PiRpcEvent::StateInfo {
@@ -348,6 +367,9 @@ impl PiLightApp {
                 }
 
                 self.sessions.active_chat_mut().handle_rpc_event(event);
+                if let Some(note) = companion_note {
+                    self.finish_companion_turn(note);
+                }
                 if request_stats {
                     self.request_session_stats();
                 }
@@ -360,6 +382,67 @@ impl PiLightApp {
                 self.touch_sessions();
             }
         }
+    }
+
+    fn finish_companion_turn(&mut self, note: CompanionChatEvent) {
+        let Some(tx) = self.companion_reply.take() else {
+            return;
+        };
+        let event = match note {
+            CompanionChatEvent::Settled { aborted, .. } => {
+                let text = match self.sessions.active_chat().messages.last() {
+                    Some(ChatMessage::Assistant(t)) => t.clone(),
+                    _ => self.sessions.active_chat().streaming_buf.clone(),
+                };
+                CompanionChatEvent::Settled { text, aborted }
+            }
+            other => other,
+        };
+        let _ = tx.send(event);
+    }
+
+    fn drain_companion_inbox(&mut self) {
+        let Some(pending) = self.remote.take_pending_chat() else {
+            return;
+        };
+        if self.companion_reply.is_some() || self.sessions.active_is_streaming() {
+            let _ = pending.reply.send(CompanionChatEvent::Error {
+                code: "busy".into(),
+                message: "desktop is already generating".into(),
+            });
+            return;
+        }
+        if self.rpc_client.is_none() {
+            let _ = pending.reply.send(CompanionChatEvent::Error {
+                code: "pi_unavailable".into(),
+                message: "Pi sidecar is not running".into(),
+            });
+            return;
+        }
+        let text = pending.text;
+        self.touch_sessions();
+        self.sessions.set_active_title_from_user(&text);
+        {
+            let chat = self.sessions.active_chat_mut();
+            chat.push_user(text.clone());
+            chat.last_sent_prompt = Some(text.clone());
+            chat.begin_streaming();
+        }
+        let send_err = self
+            .rpc_client
+            .as_mut()
+            .and_then(|client| client.send_prompt(&text).err());
+        if let Some(e) = send_err {
+            let msg = format!("发送失败：{e}");
+            self.sessions.active_chat_mut().set_error(msg.clone());
+            let _ = pending.reply.send(CompanionChatEvent::Error {
+                code: "send_failed".into(),
+                message: msg,
+            });
+            return;
+        }
+        self.companion_reply = Some(pending.reply);
+        self.persist_sessions(true);
     }
 
     fn touch_sessions(&mut self) {
@@ -464,9 +547,20 @@ impl eframe::App for PiLightApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_rpc_events();
+        self.drain_companion_inbox();
         self.update_ref_chooser();
         if self.remote.poll() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        self.remote.publish_chat(
+            self.sessions.active().title.as_str(),
+            self.sessions.active_chat(),
+        );
+        if self.remote.persist.enabled {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        if self.companion_reply.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
 
         // M5′: 键盘导航（在面板渲染前消费按键，避免被 TextEdit 截获）

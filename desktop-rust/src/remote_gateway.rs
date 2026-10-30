@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // 本机 loopback 控制面。Cloudflare Tunnel 把这里暴露到公网。
-// M5：health / pair info / pair claim。M6 的 `/v1/chat` 返回 501 作为明确钩子。
+// M5：health / pair info / pair claim。
+// M6-lite：已授权设备可 POST/GET /v1/chat，写入桌面当前 Pi 会话。
 
 use std::{
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,6 +21,7 @@ pub const DEFAULT_PORT: u16 = 17831;
 pub const CLAIM_PATH: &str = "/v1/pair/claim";
 pub const CHAT_PATH: &str = "/v1/chat";
 pub const PROTOCOL: &str = "pi-light-companion/1";
+const CHAT_WAIT_SECS: u64 = 120;
 
 #[derive(Debug, Clone)]
 pub struct PairOffer {
@@ -41,6 +43,49 @@ pub struct ClaimedDevice {
     pub device: AuthorizedDevice,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotMsg {
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatSnapshot {
+    pub host: String,
+    pub session_title: String,
+    pub writable: bool,
+    pub streaming: bool,
+    pub partial: String,
+    pub messages: Vec<SnapshotMsg>,
+}
+
+impl Default for ChatSnapshot {
+    fn default() -> Self {
+        Self {
+            host: "pi-light".into(),
+            session_title: "会话".into(),
+            writable: true,
+            streaming: false,
+            partial: String::new(),
+            messages: Vec::new(),
+        }
+    }
+}
+
+/// UI 线程完成一轮 companion 提示后发回网关 HTTP 线程。
+#[derive(Debug, Clone)]
+pub enum CompanionChatEvent {
+    Settled { text: String, aborted: bool },
+    Error { code: String, message: String },
+}
+
+/// 等待 UI 把这条用户消息写入当前 Pi 会话。
+pub struct PendingChat {
+    pub text: String,
+    pub device_id: String,
+    pub reply: mpsc::Sender<CompanionChatEvent>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ClaimRequest {
     #[serde(default)]
@@ -53,10 +98,25 @@ struct ClaimRequest {
     platform: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ChatRequest {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    prompt: String,
+}
+
 struct GatewayShared {
     offer: Option<PairOffer>,
     public_url: Option<String>,
     new_devices: Vec<ClaimedDevice>,
+    devices: Vec<AuthorizedDevice>,
+    pending: Option<PendingChat>,
+    snapshot: ChatSnapshot,
+    /// 仅测试：跳过 UI 等待，立即回这条文本。
+    auto_reply: Option<String>,
 }
 
 pub struct GatewayHandle {
@@ -98,6 +158,10 @@ impl GatewayHandle {
             offer: None,
             public_url: None,
             new_devices: Vec::new(),
+            devices: Vec::new(),
+            pending: None,
+            snapshot: ChatSnapshot::default(),
+            auto_reply: None,
         }));
         let flag = shutdown.clone();
         let state = shared.clone();
@@ -144,11 +208,34 @@ impl GatewayHandle {
         }
     }
 
+    pub fn set_authorized_devices(&self, devices: Vec<AuthorizedDevice>) {
+        if let Ok(mut g) = self.shared.lock() {
+            g.devices = devices;
+        }
+    }
+
+    pub fn set_chat_snapshot(&self, snapshot: ChatSnapshot) {
+        if let Ok(mut g) = self.shared.lock() {
+            g.snapshot = snapshot;
+        }
+    }
+
     pub fn take_new_devices(&self) -> Vec<ClaimedDevice> {
         self.shared
             .lock()
             .map(|mut g| std::mem::take(&mut g.new_devices))
             .unwrap_or_default()
+    }
+
+    pub fn take_pending_chat(&self) -> Option<PendingChat> {
+        self.shared.lock().ok()?.pending.take()
+    }
+
+    pub fn has_pending_chat(&self) -> bool {
+        self.shared
+            .lock()
+            .map(|g| g.pending.is_some())
+            .unwrap_or(false)
     }
 
     pub fn local_base(&self) -> String {
@@ -163,6 +250,29 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+pub fn local_host_label() -> String {
+    for key in ["COMPUTERNAME", "HOSTNAME"] {
+        if let Ok(s) = std::env::var(key) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return t.to_owned();
+            }
+        }
+    }
+    if let Ok(s) = std::fs::read_to_string("/etc/hostname") {
+        let t = s.trim();
+        if !t.is_empty() {
+            return t.to_owned();
+        }
+    }
+    "pi-light".to_owned()
+}
+
+enum DispatchOut {
+    Ready(u16, String),
+    ChatWait(mpsc::Receiver<CompanionChatEvent>),
+}
+
 fn handle_conn(mut stream: TcpStream, shared: &Mutex<GatewayShared>) {
     let req = match read_request(&mut stream) {
         Ok(r) => r,
@@ -171,44 +281,94 @@ fn handle_conn(mut stream: TcpStream, shared: &Mutex<GatewayShared>) {
             return;
         }
     };
-    let (status, body) = dispatch(&req, shared);
-    let _ = write_json(&mut stream, status, &body);
+    match dispatch(&req, shared) {
+        DispatchOut::Ready(status, body) => {
+            let _ = write_json(&mut stream, status, &body);
+        }
+        DispatchOut::ChatWait(rx) => {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(CHAT_WAIT_SECS + 5)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(CHAT_WAIT_SECS + 5)));
+            let (status, body) = wait_chat_reply(rx);
+            let _ = write_json(&mut stream, status, &body);
+        }
+    }
+}
+
+fn wait_chat_reply(rx: mpsc::Receiver<CompanionChatEvent>) -> (u16, String) {
+    match rx.recv_timeout(Duration::from_secs(CHAT_WAIT_SECS)) {
+        Ok(CompanionChatEvent::Settled { text, aborted }) => (
+            200,
+            serde_json::json!({
+                "ok": true,
+                "reply": text,
+                "aborted": aborted,
+                "writable": true,
+                "protocol": PROTOCOL,
+            })
+            .to_string(),
+        ),
+        Ok(CompanionChatEvent::Error { code, message }) => {
+            let status = match code.as_str() {
+                "busy" => 409,
+                "pi_unavailable" => 503,
+                "unauthorized" => 401,
+                _ => 502,
+            };
+            (
+                status,
+                serde_json::json!({
+                    "ok": false,
+                    "error": code,
+                    "message": message,
+                })
+                .to_string(),
+            )
+        }
+        Err(_) => (
+            504,
+            serde_json::json!({
+                "ok": false,
+                "error": "timeout",
+                "message": "desktop did not finish this turn in time",
+            })
+            .to_string(),
+        ),
+    }
 }
 
 struct HttpReq {
     method: String,
     path: String,
     body: Vec<u8>,
+    authorization: Option<String>,
 }
 
-fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> (u16, String) {
+fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
     let path = req.path.split('?').next().unwrap_or(req.path.as_str());
     match (req.method.as_str(), path) {
-        ("GET", "/health") | ("GET", "/") => (
+        ("GET", "/health") | ("GET", "/") => DispatchOut::Ready(
             200,
             serde_json::json!({
                 "ok": true,
                 "app": "pi-light",
                 "role": "remote-gateway",
                 "protocol": PROTOCOL,
-                "chat": false,
+                "chat": true,
+                "writable": true,
             })
             .to_string(),
         ),
-        ("GET", "/v1/pair/info") => pair_info(shared),
-        ("POST", CLAIM_PATH) => claim(shared, &req.body),
-        ("GET", CHAT_PATH) | ("POST", CHAT_PATH) => (
-            501,
-            serde_json::json!({
-                "ok": false,
-                "error": "not_implemented",
-                "milestone": "M6",
-                "hint": "Remote chat websocket/HTTP is reserved for the Android companion.",
-                "path": CHAT_PATH,
-            })
-            .to_string(),
-        ),
-        _ => (
+        ("GET", "/v1/pair/info") => {
+            let (st, body) = pair_info(shared);
+            DispatchOut::Ready(st, body)
+        }
+        ("POST", CLAIM_PATH) => {
+            let (st, body) = claim(shared, &req.body);
+            DispatchOut::Ready(st, body)
+        }
+        ("GET", CHAT_PATH) => chat_get(req, shared),
+        ("POST", CHAT_PATH) => chat_post(req, shared),
+        _ => DispatchOut::Ready(
             404,
             serde_json::json!({"ok":false,"error":"not_found"}).to_string(),
         ),
@@ -237,6 +397,7 @@ fn pair_info(shared: &Mutex<GatewayShared>) -> (u16, String) {
             "has_offer": has,
             "exp": exp,
             "relay": g.public_url,
+            "writable": true,
         })
         .to_string(),
     )
@@ -309,6 +470,7 @@ fn claim(shared: &Mutex<GatewayShared>, body: &[u8]) -> (u16, String) {
         authorized_unix: unix_now(),
         token_sha256,
     };
+    g.devices.push(device.clone());
     g.new_devices.push(ClaimedDevice {
         device: device.clone(),
     });
@@ -321,9 +483,156 @@ fn claim(shared: &Mutex<GatewayShared>, body: &[u8]) -> (u16, String) {
             "relay_url": g.public_url,
             "chat_path": CHAT_PATH,
             "protocol": PROTOCOL,
+            "writable": true,
+            "host": g.snapshot.host,
         })
         .to_string(),
     )
+}
+
+fn bearer_token(auth: Option<&str>) -> Option<&str> {
+    let raw = auth?.trim();
+    let rest = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?;
+    let t = rest.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+fn ct_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+fn authorize<'a>(
+    g: &'a GatewayShared,
+    auth: Option<&str>,
+) -> Result<&'a AuthorizedDevice, (u16, String)> {
+    let Some(token) = bearer_token(auth) else {
+        return Err((
+            401,
+            serde_json::json!({"ok":false,"error":"unauthorized"}).to_string(),
+        ));
+    };
+    let got = crate::relay_mgr::sha256_hex(token.as_bytes());
+    g.devices
+        .iter()
+        .find(|d| ct_eq(&d.token_sha256, &got))
+        .ok_or_else(|| {
+            (
+                401,
+                serde_json::json!({"ok":false,"error":"unauthorized"}).to_string(),
+            )
+        })
+}
+
+fn chat_get(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
+    let Ok(g) = shared.lock() else {
+        return DispatchOut::Ready(
+            500,
+            serde_json::json!({"ok":false,"error":"busy"}).to_string(),
+        );
+    };
+    if let Err((st, body)) = authorize(&g, req.authorization.as_deref()) {
+        return DispatchOut::Ready(st, body);
+    }
+    let snap = &g.snapshot;
+    DispatchOut::Ready(
+        200,
+        serde_json::json!({
+            "ok": true,
+            "writable": snap.writable,
+            "streaming": snap.streaming,
+            "partial": snap.partial,
+            "host": snap.host,
+            "session_title": snap.session_title,
+            "messages": snap.messages,
+            "protocol": PROTOCOL,
+            "relay": g.public_url,
+        })
+        .to_string(),
+    )
+}
+
+fn chat_post(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
+    let parsed: ChatRequest = match serde_json::from_slice(&req.body) {
+        Ok(v) => v,
+        Err(_) => {
+            return DispatchOut::Ready(
+                400,
+                serde_json::json!({"ok":false,"error":"invalid_json"}).to_string(),
+            );
+        }
+    };
+    let text = first_nonempty(&[&parsed.text, &parsed.message, &parsed.prompt]);
+    if text.is_empty() {
+        return DispatchOut::Ready(
+            400,
+            serde_json::json!({"ok":false,"error":"text_required"}).to_string(),
+        );
+    }
+    if text.len() > 16 * 1024 {
+        return DispatchOut::Ready(
+            413,
+            serde_json::json!({"ok":false,"error":"too_large"}).to_string(),
+        );
+    }
+    let Ok(mut g) = shared.lock() else {
+        return DispatchOut::Ready(
+            500,
+            serde_json::json!({"ok":false,"error":"busy"}).to_string(),
+        );
+    };
+    let device_id = match authorize(&g, req.authorization.as_deref()) {
+        Ok(d) => d.id.clone(),
+        Err((st, body)) => return DispatchOut::Ready(st, body),
+    };
+    if g.pending.is_some() || g.snapshot.streaming {
+        return DispatchOut::Ready(
+            409,
+            serde_json::json!({"ok":false,"error":"busy"}).to_string(),
+        );
+    }
+    if let Some(reply) = g.auto_reply.clone() {
+        return DispatchOut::Ready(
+            200,
+            serde_json::json!({
+                "ok": true,
+                "reply": reply,
+                "aborted": false,
+                "writable": true,
+                "protocol": PROTOCOL,
+                "device_id": device_id,
+            })
+            .to_string(),
+        );
+    }
+    let (tx, rx) = mpsc::channel();
+    g.pending = Some(PendingChat {
+        text,
+        device_id,
+        reply: tx,
+    });
+    DispatchOut::ChatWait(rx)
+}
+
+fn first_nonempty(parts: &[&str]) -> String {
+    for p in parts {
+        let t = p.trim();
+        if !t.is_empty() {
+            return t.to_owned();
+        }
+    }
+    String::new()
 }
 
 fn sanitize_label(s: &str, max: usize) -> String {
@@ -373,10 +682,15 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
     let method = parts.next().unwrap_or("GET").to_owned();
     let path = parts.next().unwrap_or("/").to_owned();
     let mut content_len = 0usize;
+    let mut authorization = None;
     for line in lines {
-        let l = line.to_ascii_lowercase();
-        if let Some(v) = l.strip_prefix("content-length:") {
+        let lower = line.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-length:") {
             content_len = v.trim().parse().unwrap_or(0);
+        } else if lower.starts_with("authorization:") {
+            if let Some((_, v)) = line.split_once(':') {
+                authorization = Some(v.trim().to_owned());
+            }
         }
     }
     if content_len > 32 * 1024 {
@@ -394,7 +708,12 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
         }
     }
     body.truncate(content_len);
-    Ok(HttpReq { method, path, body })
+    Ok(HttpReq {
+        method,
+        path,
+        body,
+        authorization,
+    })
 }
 
 fn write_json(stream: &mut TcpStream, status: u16, body: &str) -> io::Result<()> {
@@ -405,7 +724,11 @@ fn write_json(stream: &mut TcpStream, status: u16, body: &str) -> io::Result<()>
         404 => "Not Found",
         409 => "Conflict",
         410 => "Gone",
+        413 => "Payload Too Large",
         501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
         _ => "Error",
     };
     let bytes = body.as_bytes();
@@ -426,17 +749,51 @@ pub(crate) fn dispatch_for_test(
     body: &[u8],
     offer: Option<PairOffer>,
 ) -> (u16, serde_json::Value) {
+    dispatch_for_test_ex(method, path, body, offer, None, Vec::new(), None)
+}
+
+#[cfg(test)]
+pub(crate) fn dispatch_for_test_ex(
+    method: &str,
+    path: &str,
+    body: &[u8],
+    offer: Option<PairOffer>,
+    authorization: Option<&str>,
+    devices: Vec<AuthorizedDevice>,
+    auto_reply: Option<String>,
+) -> (u16, serde_json::Value) {
     let shared = Mutex::new(GatewayShared {
         offer,
         public_url: Some("https://demo.trycloudflare.com".into()),
         new_devices: Vec::new(),
+        devices,
+        pending: None,
+        snapshot: ChatSnapshot {
+            host: "demo-host".into(),
+            session_title: "日常咨询".into(),
+            writable: true,
+            streaming: false,
+            partial: String::new(),
+            messages: vec![SnapshotMsg {
+                role: "user".into(),
+                text: "hi".into(),
+            }],
+        },
+        auto_reply,
     });
     let req = HttpReq {
         method: method.to_owned(),
         path: path.to_owned(),
         body: body.to_vec(),
+        authorization: authorization.map(str::to_owned),
     };
-    let (status, text) = dispatch(&req, &shared);
+    let (status, text) = match dispatch(&req, &shared) {
+        DispatchOut::Ready(s, b) => (s, b),
+        DispatchOut::ChatWait(_) => (
+            503,
+            serde_json::json!({"ok":false,"error":"desktop_offline"}).to_string(),
+        ),
+    };
     let val = serde_json::from_str(&text).unwrap_or(serde_json::json!({"raw": text}));
     (status, val)
 }
@@ -453,21 +810,89 @@ mod tests {
         }
     }
 
+    fn device_with_token(token: &str) -> AuthorizedDevice {
+        AuthorizedDevice {
+            id: "dev_aa".into(),
+            name: "Pixel".into(),
+            platform: "Android".into(),
+            authorized_unix: 1,
+            token_sha256: crate::relay_mgr::sha256_hex(token.as_bytes()),
+        }
+    }
+
     #[test]
     fn health_ok() {
         let (st, v) = dispatch_for_test("GET", "/health", b"", None);
         assert_eq!(st, 200);
         assert_eq!(v["ok"], true);
-        assert_eq!(v["chat"], false);
+        assert_eq!(v["chat"], true);
+        assert_eq!(v["writable"], true);
         assert_eq!(v["app"], "pi-light");
     }
 
     #[test]
-    fn chat_is_reserved_for_m6() {
+    fn chat_requires_bearer() {
         let (st, v) = dispatch_for_test("GET", "/v1/chat", b"", None);
-        assert_eq!(st, 501);
-        assert_eq!(v["milestone"], "M6");
-        assert_eq!(v["path"], CHAT_PATH);
+        assert_eq!(st, 401);
+        assert_eq!(v["error"], "unauthorized");
+
+        let (st, v) = dispatch_for_test("POST", "/v1/chat", br#"{"text":"hi"}"#, None);
+        assert_eq!(st, 401);
+        assert_eq!(v["error"], "unauthorized");
+    }
+
+    #[test]
+    fn chat_auto_reply_with_valid_token() {
+        let token = "aabbccdd";
+        let (st, v) = dispatch_for_test_ex(
+            "POST",
+            "/v1/chat",
+            br#"{"text":"hello from phone"}"#,
+            None,
+            Some(&format!("Bearer {token}")),
+            vec![device_with_token(token)],
+            Some("ok from desktop".into()),
+        );
+        assert_eq!(st, 200);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["reply"], "ok from desktop");
+        assert_eq!(v["writable"], true);
+    }
+
+    #[test]
+    fn chat_rejects_revoked_token() {
+        let token = "deadbeef";
+        let (st, v) = dispatch_for_test_ex(
+            "POST",
+            "/v1/chat",
+            br#"{"message":"hi"}"#,
+            None,
+            Some(&format!("Bearer {token}")),
+            Vec::new(),
+            Some("should-not-run".into()),
+        );
+        assert_eq!(st, 401);
+        assert_eq!(v["error"], "unauthorized");
+        assert!(!v.to_string().contains("deadbeef"));
+    }
+
+    #[test]
+    fn chat_get_returns_snapshot() {
+        let token = "snap-token";
+        let (st, v) = dispatch_for_test_ex(
+            "GET",
+            "/v1/chat",
+            b"",
+            None,
+            Some(&format!("Bearer {token}")),
+            vec![device_with_token(token)],
+            None,
+        );
+        assert_eq!(st, 200);
+        assert_eq!(v["writable"], true);
+        assert_eq!(v["host"], "demo-host");
+        assert_eq!(v["session_title"], "日常咨询");
+        assert_eq!(v["messages"][0]["text"], "hi");
     }
 
     #[test]
@@ -479,6 +904,7 @@ mod tests {
         let dumped = v.to_string();
         assert!(!dumped.contains("AB12CD"));
         assert_eq!(v["claim"], CLAIM_PATH);
+        assert_eq!(v["writable"], true);
     }
 
     #[test]
@@ -507,6 +933,7 @@ mod tests {
         assert_eq!(v["token"].as_str().unwrap().len(), 64);
         assert_eq!(v["chat_path"], CHAT_PATH);
         assert_eq!(v["protocol"], PROTOCOL);
+        assert_eq!(v["writable"], true);
     }
 
     #[test]
@@ -523,6 +950,7 @@ mod tests {
             .unwrap();
         let health: serde_json::Value = serde_json::from_str(&health_text).unwrap();
         assert_eq!(health["ok"], true);
+        assert_eq!(health["chat"], true);
 
         let body =
             serde_json::json!({"code":"ZZ99AA","name":"Pixel","platform":"Android"}).to_string();
@@ -543,8 +971,76 @@ mod tests {
     }
 
     #[test]
+    fn live_gateway_chat_roundtrip_and_revoke() {
+        let gw = GatewayHandle::start().unwrap();
+        gw.set_offer(Some(offer("QQ11WW", 600)));
+        gw.set_public_url(Some("https://demo.trycloudflare.com".into()));
+        let base = gw.local_base();
+        let claimed_text = ureq::post(&format!("{base}{CLAIM_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .send_string(r#"{"code":"QQ11WW","device_name":"Pixel","platform":"Android"}"#)
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let claimed: serde_json::Value = serde_json::from_str(&claimed_text).unwrap();
+        let token = claimed["token"].as_str().unwrap().to_owned();
+        let new = gw.take_new_devices();
+        gw.set_authorized_devices(vec![new[0].device.clone()]);
+
+        let waiter_base = base.clone();
+        let waiter_token = token.clone();
+        let handle = thread::spawn(move || {
+            ureq::post(&format!("{waiter_base}{CHAT_PATH}"))
+                .timeout(Duration::from_secs(5))
+                .set("Content-Type", "application/json")
+                .set("Authorization", &format!("Bearer {waiter_token}"))
+                .send_string(r#"{"text":"hello from companion"}"#)
+                .unwrap()
+                .into_string()
+                .unwrap()
+        });
+
+        let pending = (0..50)
+            .find_map(|_| {
+                thread::sleep(Duration::from_millis(20));
+                gw.take_pending_chat()
+            })
+            .expect("pending chat");
+        assert_eq!(pending.text, "hello from companion");
+        pending
+            .reply
+            .send(CompanionChatEvent::Settled {
+                text: "hi from desktop session".into(),
+                aborted: false,
+            })
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_str(&handle.join().unwrap()).unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["reply"], "hi from desktop session");
+        assert_eq!(body["writable"], true);
+
+        gw.set_authorized_devices(Vec::new());
+        let revoked = ureq::post(&format!("{base}{CHAT_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_string(r#"{"text":"after revoke"}"#);
+        let err = revoked.expect_err("revoked token must fail");
+        let resp = err.into_response().expect("http error");
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[test]
     fn unknown_path_404() {
         let (st, _) = dispatch_for_test("GET", "/nope", b"", None);
         assert_eq!(st, 404);
+    }
+
+    #[test]
+    fn ct_eq_rejects_length_mismatch() {
+        assert!(!ct_eq("aa", "aabb"));
+        assert!(ct_eq("abcd", "abcd"));
     }
 }
