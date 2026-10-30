@@ -181,6 +181,35 @@ pub fn package_present(root: &Path, spec: &PresetSpec) -> bool {
     package_dir(root, spec).join("package.json").is_file()
 }
 
+/// 比较键：去掉 Windows 扩展前缀 `\\?\` / `\\?\UNC\`，统一分隔符。
+/// Windows 上忽略大小写。8.3 与长路径先 canonicalize，再走此键。
+fn path_cmp_key(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('/', "\\");
+    let stripped = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        raw
+    };
+    if cfg!(windows) {
+        stripped.to_ascii_lowercase()
+    } else {
+        stripped
+    }
+}
+
+/// 是否指向同一位置。Windows GHA 上 tempfile 可能是 `RUNNER~1` 短路径，
+/// `canonicalize` 则给出带 `\\?\` 的长路径；两边都规范化后再比，不假设长路径。
+fn paths_equivalent(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    let a_n = fs::canonicalize(a).unwrap_or_else(|_| a.to_path_buf());
+    let b_n = fs::canonicalize(b).unwrap_or_else(|_| b.to_path_buf());
+    a_n == b_n || path_cmp_key(&a_n) == path_cmp_key(&b_n)
+}
+
 fn source_name(source: &str) -> String {
     display_name_version(source).0
 }
@@ -251,7 +280,10 @@ pub fn sync_slim_into_settings(settings_path: &Path, packages_root: &Path) -> io
             {
                 Some(entry) => {
                     let src = entry_source(entry).unwrap_or("");
-                    if looks_like_path(src) && src != dest_str && !Path::new(src).is_dir() {
+                    if looks_like_path(src)
+                        && !paths_equivalent(Path::new(src), &dest)
+                        && !Path::new(src).is_dir()
+                    {
                         set_entry_source(entry, dest_str);
                         changed = true;
                     }
@@ -343,6 +375,18 @@ mod tests {
         .unwrap();
     }
 
+    fn package_sources(settings: &Path) -> Vec<String> {
+        let val: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
+        match val.get("packages").and_then(Value::as_array) {
+            Some(arr) => arr
+                .iter()
+                .filter_map(entry_source)
+                .map(str::to_owned)
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     #[test]
     fn lock_has_slim_five_and_control_three() {
         let slim: Vec<_> = catalog()
@@ -405,12 +449,15 @@ mod tests {
             write_pkg(&root, spec, &spec.version);
         }
         assert!(sync_slim_into_settings(&settings, &root).unwrap());
-        let text = fs::read_to_string(&settings).unwrap();
+        let sources = package_sources(&settings);
         for spec in catalog().iter().filter(|p| p.role == PresetRole::Slim) {
             let dest = package_dir(&root, spec);
             assert!(
-                text.contains(&dest.to_string_lossy().into_owned()),
-                "{text}"
+                sources
+                    .iter()
+                    .any(|s| paths_equivalent(Path::new(s), &dest)),
+                "missing equivalent path for {} dest={dest:?} sources={sources:?}",
+                spec.name
             );
         }
         assert!(!sync_slim_into_settings(&settings, &root).unwrap());
@@ -445,10 +492,52 @@ mod tests {
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect();
         assert!(joined.iter().any(|s| s == "npm:pi-memory@0.4.2"));
-        assert!(joined
-            .iter()
-            .any(|s| s == package_dir(&root, market).to_string_lossy().as_ref()));
+        let market_dir = package_dir(&root, market);
+        assert!(
+            joined
+                .iter()
+                .any(|s| paths_equivalent(Path::new(s), &market_dir)),
+            "repaired path not equivalent to {market_dir:?}: {joined:?}"
+        );
         assert!(!joined.iter().any(|s| s.contains("old")));
+    }
+
+    #[test]
+    fn path_cmp_key_strips_windows_verbatim_prefix() {
+        let verbatim = Path::new(r"\\?\C:\Users\runneradmin\AppData\Local\Temp\pkgs\pi-memory");
+        let plain = Path::new(r"C:\Users\runneradmin\AppData\Local\Temp\pkgs\pi-memory");
+        assert_eq!(path_cmp_key(verbatim), path_cmp_key(plain));
+        let unc = Path::new(r"\\?\UNC\server\share\pkgs\pi-memory");
+        let unc_plain = Path::new(r"\\server\share\pkgs\pi-memory");
+        assert_eq!(path_cmp_key(unc), path_cmp_key(unc_plain));
+    }
+
+    #[test]
+    fn paths_equivalent_after_json_backslash_escape() {
+        // Windows 上路径写入 pretty JSON 会把 `\` 编成 `\\`，对原文做 contains 必失败。
+        let win = r"C:\Users\RUNNER~1\AppData\Local\Temp\.tmpmfaGR3\pkgs\pi-memory";
+        let json = serde_json::to_string_pretty(&serde_json::json!({ "packages": [win] })).unwrap();
+        assert!(
+            !json.contains(win),
+            "raw JSON must escape backslashes: {json}"
+        );
+        let val: Value = serde_json::from_str(&json).unwrap();
+        let src = val["packages"][0].as_str().unwrap();
+        assert_eq!(src, win);
+        assert_eq!(path_cmp_key(Path::new(src)), path_cmp_key(Path::new(win)));
+    }
+
+    #[test]
+    fn paths_equivalent_matches_canonical_form() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("pkgs").join("pi-memory");
+        fs::create_dir_all(&dest).unwrap();
+        assert!(paths_equivalent(&dest, &dest));
+        let canon = fs::canonicalize(&dest).unwrap();
+        assert!(
+            paths_equivalent(&dest, &canon),
+            "raw={dest:?} canon={canon:?}"
+        );
     }
 
     #[test]
