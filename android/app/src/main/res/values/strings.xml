@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">pi-light</string>
+    <string name="camera_permission_rationale">扫描桌面配对二维码需要相机权限。也可以改用手输配对码和中继地址。</string>
 </resources>

@@ -11,10 +11,7 @@ import androidx.compose.ui.Modifier
 import com.pilight.android.ui.PiLightApp
 import com.pilight.android.ui.theme.PiLightTheme
 
-/**
- * pi-light Android — Option C 占位壳（M6′ 维持 C）。
- * 不内嵌 Pi；完整会话以 Windows desktop-rust 为准。
- */
+/** pi-light Android companion（M6-lite）：公网配对 + 远程聊天。 */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

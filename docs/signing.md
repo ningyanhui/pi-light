@@ -114,7 +114,7 @@ CI 未注入时步骤自动跳过，**不影响无签名发布**。
 | 项 | 说明 |
 |----|------|
 | 构建 | `./gradlew assembleDebug`（debug 签名） |
-| 能力 | Option C 占位壳：不含 Pi sidecar、不含 Host RPC |
+| 能力 | M6-lite companion：不含 Pi sidecar；经桌面中继配对并远程聊天 |
 | 签名 | Android debug keystore（Gradle 默认）；**非** release / Play App Signing |
 | 安装 | 需允许「未知来源」；无法作为商店正式版分发 |
 
@@ -123,7 +123,7 @@ CI 未注入时步骤自动跳过，**不影响无签名发布**。
 ## 明确不上架商店（本策略约束）
 
 - **Windows Store（MSIX）**：本里程碑范围外；不打包 MSIX，不提交 Partner Center
-- **Google Play**：Android 侧为 Option C debug 占位壳（M6′ 维持 C）；release 签名与 Play 分发不在本版本范围
+- **Google Play**：Android 侧为 debug companion APK（M6-lite）；release 签名与 Play 分发不在本版本范围
 - **Apple Mac App Store**：macOS 目前为可开发调试平台，未列入正式发布计划
 
 ---

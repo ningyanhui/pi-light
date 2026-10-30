@@ -111,6 +111,34 @@ Optional sidecar for Cloudflare Tunnel. SHA-256 of the GitHub release
 assets is recorded in NOTICE. The binary is not stored in git.
 
 ------------------------------------------------------------------------
+Component: OkHttp
+------------------------------------------------------------------------
+Repository:   https://github.com/square/okhttp
+Version:      4.12.0 (pinned in android/app/build.gradle.kts)
+License:      Apache-2.0
+
+Used by the Android companion to call the desktop relay (claim + /v1/chat).
+
+------------------------------------------------------------------------
+Component: ZXing core
+------------------------------------------------------------------------
+Repository:   https://github.com/zxing/zxing
+Version:      3.5.3 (pinned in android/app/build.gradle.kts)
+License:      Apache-2.0
+
+Used to decode desktop pairing QR codes from CameraX frames.
+
+------------------------------------------------------------------------
+Component: CameraX
+------------------------------------------------------------------------
+Repository:   https://developer.android.com/jetpack/androidx/releases/camera
+Version:      1.4.1 (pinned in android/app/build.gradle.kts)
+License:      Apache-2.0
+
+Used for the optional QR scan preview. Camera permission is not required
+to type a pair code instead.
+
+------------------------------------------------------------------------
 Rust Standard Library and Toolchain
 ------------------------------------------------------------------------
 Repository:   https://github.com/rust-lang/rust

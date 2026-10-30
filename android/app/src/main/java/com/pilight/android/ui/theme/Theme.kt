@@ -1,35 +1,37 @@
 package com.pilight.android.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val LightColors =
-    lightColorScheme(
-        primary = Color(0xFF1565C0),
-        onPrimary = Color.White,
-        secondary = Color(0xFF455A64),
-        background = Color(0xFFF5F7FA),
-        surface = Color.White,
-    )
+val PurplePrimary = Color(0xFFB794F6)
+val PurpleBright = Color(0xFF8B5CF6)
+val PurpleDeep = Color(0xFF2A1648)
+val Bg = Color(0xFF0B0714)
+val Surface = Color(0xFF161022)
+val SurfaceCard = Color(0xFF1C1333)
+val Connected = Color(0xFF4ADE80)
+val Muted = Color(0xFF9CA3AF)
 
 private val DarkColors =
     darkColorScheme(
-        primary = Color(0xFF90CAF9),
-        onPrimary = Color(0xFF0D47A1),
-        secondary = Color(0xFFB0BEC5),
+        primary = PurplePrimary,
+        onPrimary = Color(0xFF1A0B2E),
+        secondary = Muted,
+        background = Bg,
+        surface = Surface,
+        surfaceVariant = SurfaceCard,
+        onBackground = Color(0xFFF5F3FF),
+        onSurface = Color(0xFFF5F3FF),
+        onSurfaceVariant = Muted,
+        outline = Color(0xFF3B2A63),
     )
 
 @Composable
-fun PiLightTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    content: @Composable () -> Unit,
-) {
+fun PiLightTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = DarkColors,
         content = content,
     )
 }
