@@ -4,6 +4,7 @@
 pub mod admin_panel;
 pub mod bash_path;
 pub mod chat;
+pub mod onboarding;
 pub mod pi_path;
 pub mod pi_rpc;
 pub mod session_insights;

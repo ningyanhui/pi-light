@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use pi_light::{
-    admin_panel::{AdminPanelState, SetModelRequest},
+    admin_panel::{self, AdminPanelState, AdminTab, SetModelRequest},
     chat::{ChatMessage, ChatState, SessionHub},
+    onboarding::{self, FirstRunSurface},
     pi_path::{self, PiProbe},
     pi_rpc::{self, PiRpcClient, PiRpcEvent},
     session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
@@ -42,6 +43,10 @@ struct PiLightApp {
     egui_ctx: egui::Context,
     /// M4′ 管理面 / 设置面状态。
     admin: AdminPanelState,
+    /// 用户已从首次模型引导进入对话。
+    onboarding_dismissed: bool,
+    /// 引导期间只把设置切到「模型」一次。
+    primed_model_tab: bool,
     /// M5′ `#` 引用选择器状态。
     ref_chooser: RefChooserState,
     /// M5′ 已确认待附带发送的引用 chips。
@@ -57,10 +62,16 @@ struct PiLightApp {
 
 impl PiLightApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        apply_theme(&cc.egui_ctx);
         let probe = pi_path::probe();
         let egui_ctx = cc.egui_ctx.clone();
         let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let workdir_draft = workdir.to_string_lossy().into_owned();
+        let onboarding_dismissed = cc
+            .storage
+            .and_then(|storage| storage.get_string(onboarding::ONBOARDING_DISMISSED_KEY))
+            .as_deref()
+            == Some("1");
         let mut app = Self {
             pi_probe: probe,
             rpc_client: None,
@@ -68,6 +79,8 @@ impl PiLightApp {
             spawn_error: None,
             egui_ctx,
             admin: AdminPanelState::default(),
+            onboarding_dismissed,
+            primed_model_tab: false,
             ref_chooser: RefChooserState::default(),
             ref_chips: Vec::new(),
             ref_candidates_cache: Vec::new(),
@@ -294,7 +307,7 @@ impl PiLightApp {
             }
         } else {
             self.admin.last_error =
-                Some("Pi 未就绪，无法通过 RPC 切换模型。请使用「写入 settings.json」。".to_owned());
+                Some("当前没有连上 Pi，不能立即切换。请改用「保存为默认」。".to_owned());
         }
     }
 
@@ -345,6 +358,12 @@ impl PiLightApp {
 // ── eframe::App ───────────────────────────────────────────────────────────
 
 impl eframe::App for PiLightApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if self.onboarding_dismissed {
+            storage.set_string(onboarding::ONBOARDING_DISMISSED_KEY, "1".to_owned());
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_rpc_events();
         self.update_ref_chooser();
@@ -382,46 +401,40 @@ impl eframe::App for PiLightApp {
             }
         }
 
+        self.show_footer(ctx);
+
         // ── Header ────────────────────────────────────────────────────────
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("⚡").size(22.0).color(amber()));
                 ui.heading("pi-light");
-                ui.weak("— 内嵌 Pi 的轻量 Rust Shell");
+                ui.weak("轻量桌面助手");
 
                 let (dot_color, dot_tip) = pi_dot_color(&self.pi_probe, self.rpc_client.is_some());
                 ui.colored_label(dot_color, "●").on_hover_text(dot_tip);
 
                 if self.sessions.active_is_streaming() {
-                    ui.weak("● 生成中…");
+                    ui.weak("生成中…");
                 }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button("⟳ 重新探测")
-                        .on_hover_text("重新扫描 Pi 二进制并重启 RPC 连接")
-                        .clicked()
-                    {
-                        self.reprobe();
-                    }
-
-                    let admin_label = if self.admin.open {
-                        "⚙ 关闭设置"
-                    } else {
-                        "⚙ 设置"
-                    };
-                    if ui
-                        .selectable_label(self.admin.open, admin_label)
-                        .on_hover_text("打开 / 关闭设置（Skills / MCP / 记忆 / 模型）")
-                        .clicked()
-                    {
-                        self.admin.open = !self.admin.open;
-                    }
-                });
             });
         });
 
-        // ── M4′+ 管理面（右侧面板，始终可见，无需 Pi 就绪）────────────────
-        let panel_ret = self.admin.show_panel(ctx, None, self.rpc_client.is_some());
+        // ── 主路径：模型引导 / 缺程序说明 / 对话 ─────────────────────────
+        let surface =
+            onboarding::first_run_surface(self.pi_probe.is_ready(), self.onboarding_dismissed);
+        if matches!(surface, FirstRunSurface::ModelSetup) && !self.primed_model_tab {
+            self.admin.open = true;
+            self.admin.active_tab = AdminTab::Models;
+            self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+            self.primed_model_tab = true;
+        }
+
+        let panel_ret = self.admin.show_panel(
+            ctx,
+            None,
+            self.rpc_client.is_some(),
+            self.pi_probe.is_ready(),
+        );
         if let Some(req) = panel_ret.set_model_request {
             self.handle_set_model_request(req);
         }
@@ -429,13 +442,18 @@ impl eframe::App for PiLightApp {
             self.restart_sidecar();
         }
 
-        // ── Dispatch: chat UI vs. not-ready info screen ───────────────────
-        if self.pi_probe.is_ready() && self.rpc_client.is_some() {
-            self.show_chat_ui(ctx);
-        } else if let Some(err) = &self.spawn_error.clone() {
-            self.show_spawn_error(ctx, &err.clone());
-        } else {
-            show_not_ready_screen(ctx, &self.pi_probe);
+        match surface {
+            FirstRunSurface::ModelSetup => self.show_model_onboarding(ctx),
+            FirstRunSurface::PiMissing => self.show_pi_missing(ctx),
+            FirstRunSurface::Chat => {
+                if self.rpc_client.is_some() {
+                    self.show_chat_ui(ctx);
+                } else if let Some(err) = self.spawn_error.clone() {
+                    self.show_spawn_error(ctx, &err);
+                } else {
+                    self.show_pi_disconnected(ctx);
+                }
+            }
         }
     }
 }
@@ -632,6 +650,7 @@ impl PiLightApp {
         let empty = self.sessions.active_chat().messages.is_empty();
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            paint_lightning_backdrop(ui);
             if empty && !is_streaming {
                 self.show_chat_welcome(ui);
                 return;
@@ -777,191 +796,401 @@ impl PiLightApp {
     }
 
     fn show_chat_welcome(&self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(80.0);
-            ui.label(
-                egui::RichText::new("Pi 已就绪")
-                    .color(egui::Color32::from_rgb(80, 180, 100))
-                    .strong()
-                    .size(18.0),
-            );
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new(format!(
-                    "二进制：{}",
-                    self.pi_probe
-                        .path()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default()
-                ))
-                .monospace()
-                .weak()
-                .size(11.0),
-            );
-            ui.label(
-                egui::RichText::new(format!("工作目录：{}", self.workdir.to_string_lossy()))
-                    .monospace()
-                    .weak()
-                    .size(11.0),
-            );
-            ui.add_space(20.0);
-            ui.label(
-                egui::RichText::new("在底部输入框中输入消息开始对话")
-                    .weak()
-                    .italics()
-                    .size(13.0),
-            );
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new("输入 # 可引用历史会话消息，附带上下文发送")
-                    .weak()
-                    .size(12.0),
-            );
-        });
-    }
-
-    fn show_spawn_error(&self, ctx: &egui::Context, error: &str) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(80.0);
+        ui.add_space(72.0);
+        centered_column(ui, 460.0, |ui| {
+            soft_card(ui, |ui| {
                 ui.label(
-                    egui::RichText::new("⚠ Pi 启动失败")
-                        .color(egui::Color32::from_rgb(210, 80, 60))
+                    egui::RichText::new("可以开始了")
                         .strong()
-                        .size(17.0),
+                        .size(22.0)
+                        .color(amber()),
                 );
-                ui.add_space(12.0);
-                ui.label(egui::RichText::new(error).monospace().size(12.0));
-                ui.add_space(16.0);
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("在下方输入消息。").size(14.0));
+                ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new("请检查 Pi 二进制是否可执行，然后点击「⟳ 重新探测」。")
+                    egui::RichText::new("要改模型或查看密钥，用左下角的「设置」。")
+                        .weak()
+                        .size(13.0),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("输入 # 可引用本会话或历史消息。")
                         .weak()
                         .size(13.0),
                 );
             });
         });
     }
+
+    fn show_footer(&mut self, ctx: &egui::Context) {
+        let mut toggle_settings = false;
+        let mut reprobe = false;
+        egui::TopBottomPanel::bottom("app_footer")
+            .exact_height(40.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(4.0);
+                    let gear = egui::Button::new(egui::RichText::new("⚙  设置").color(
+                        if self.admin.open {
+                            ink()
+                        } else {
+                            egui::Color32::from_rgb(230, 232, 238)
+                        },
+                    ))
+                    .fill(if self.admin.open {
+                        amber()
+                    } else {
+                        egui::Color32::from_rgb(36, 40, 54)
+                    })
+                    .min_size(egui::vec2(96.0, 28.0));
+                    if ui
+                        .add(gear)
+                        .on_hover_text("模型、密钥、Skills、MCP")
+                        .clicked()
+                    {
+                        toggle_settings = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("重新探测")
+                            .on_hover_text("重新扫描 Pi 程序并重连")
+                            .clicked()
+                        {
+                            reprobe = true;
+                        }
+                    });
+                });
+            });
+        if toggle_settings {
+            self.admin.open = !self.admin.open;
+            if self.admin.open {
+                self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+            } else {
+                self.admin.opened_pass = None;
+            }
+        }
+        if reprobe {
+            self.reprobe();
+        }
+    }
+
+    fn show_model_onboarding(&mut self, ctx: &egui::Context) {
+        let spawn_note = self.spawn_error.clone();
+        let settings_open = self.admin.open;
+        let mut dismiss = false;
+        let mut open_models = false;
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            paint_lightning_backdrop(ui);
+            ui.add_space(48.0);
+            centered_column(ui, 520.0, |ui| {
+                soft_card(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("配置模型与密钥")
+                            .strong()
+                            .size(22.0)
+                            .color(amber()),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Pi 已经就绪。先在设置里确认模型和 API 密钥，再开始对话。")
+                            .size(14.0),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "密钥用环境变量，或稍后在对话里使用 /login。设置里只显示是否已配置，不保存明文。",
+                        )
+                        .weak()
+                        .size(12.0),
+                    );
+                    if let Some(note) = &spawn_note {
+                        ui.add_space(8.0);
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 150, 70),
+                            format!("程序已找到，但这次没有启动成功：{note}"),
+                        );
+                    }
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        if !settings_open && ui.button("打开设置").clicked() {
+                            open_models = true;
+                        }
+                        if !settings_open {
+                            ui.add_space(8.0);
+                        }
+                        if primary_button(ui, "进入对话").clicked() {
+                            dismiss = true;
+                        }
+                    });
+                });
+            });
+        });
+
+        if open_models {
+            self.admin.open = true;
+            self.admin.active_tab = AdminTab::Models;
+            self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+        }
+        if dismiss {
+            self.onboarding_dismissed = true;
+            self.admin.open = false;
+            self.admin.opened_pass = None;
+        }
+    }
+
+    fn show_pi_missing(&mut self, ctx: &egui::Context) {
+        let mut reprobe = false;
+        let mut open_models = false;
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            paint_lightning_backdrop(ui);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    ui.add_space(36.0);
+                    centered_column(ui, 560.0, |ui| {
+                        soft_card(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new("还没有找到 Pi")
+                                    .strong()
+                                    .size(22.0)
+                                    .color(amber()),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "平时只需要配置模型和 API 密钥。当前还没找到 Pi，所以暂时不能对话。",
+                                )
+                                .size(14.0),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "官方 Windows 便携包已经把 Pi 放在程序旁边。请完整解压 pi-light-windows-x64.zip，直接运行 pi-light.exe，然后点「重新探测」。一般不用自己设环境变量或 PATH。",
+                                )
+                                .size(13.0),
+                            );
+                            ui.add_space(14.0);
+                            ui.horizontal(|ui| {
+                                if primary_button(ui, "重新探测").clicked() {
+                                    reprobe = true;
+                                }
+                                ui.add_space(8.0);
+                                if ui.button("先填写模型配置").clicked() {
+                                    open_models = true;
+                                }
+                            });
+                            ui.add_space(16.0);
+                            egui::CollapsingHeader::new("高级：自己指定 Pi 程序")
+                                .default_open(false)
+                                .id_salt("pi_recovery_center")
+                                .show(ui, |ui| {
+                                    admin_panel::show_pi_binary_recovery(ui);
+                                });
+                        });
+                    });
+                    ui.add_space(24.0);
+                });
+        });
+
+        if open_models {
+            self.admin.open = true;
+            self.admin.active_tab = AdminTab::Models;
+            self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+        }
+        if reprobe {
+            self.reprobe();
+        }
+    }
+
+    fn show_pi_disconnected(&mut self, ctx: &egui::Context) {
+        let path = self
+            .pi_probe
+            .path()
+            .map(|p| p.to_string_lossy().into_owned());
+        let mut reprobe = false;
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            paint_lightning_backdrop(ui);
+            ui.add_space(72.0);
+            centered_column(ui, 480.0, |ui| {
+                soft_card(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("连接断开了")
+                            .strong()
+                            .size(20.0)
+                            .color(amber()),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Pi 已经找到，不用重新安装。再探测一次即可。")
+                            .size(14.0),
+                    );
+                    if let Some(path) = &path {
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new(path).monospace().weak().size(11.0));
+                    }
+                    ui.add_space(14.0);
+                    if primary_button(ui, "重新探测").clicked() {
+                        reprobe = true;
+                    }
+                });
+            });
+        });
+
+        if reprobe {
+            self.reprobe();
+        }
+    }
+
+    fn show_spawn_error(&self, ctx: &egui::Context, error: &str) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            paint_lightning_backdrop(ui);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    ui.add_space(48.0);
+                    centered_column(ui, 520.0, |ui| {
+                        soft_card(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new("Pi 没有启动")
+                                    .color(egui::Color32::from_rgb(210, 120, 80))
+                                    .strong()
+                                    .size(20.0),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(error).size(13.0));
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "确认程序可以运行后，点窗口底部的「重新探测」。",
+                                )
+                                .weak()
+                                .size(13.0),
+                            );
+                            ui.add_space(12.0);
+                            egui::CollapsingHeader::new("高级：换一个 Pi 程序")
+                                .default_open(false)
+                                .id_salt("pi_recovery_spawn")
+                                .show(ui, |ui| {
+                                    admin_panel::show_pi_binary_recovery(ui);
+                                });
+                        });
+                    });
+                });
+        });
+    }
 }
 
-// ── Not-ready info screen (M1′ three-state, preserved) ────────────────────
+// ── 外观：深色底 + 自绘闪电（不引用外部图片）────────────────────────────
 
-fn show_not_ready_screen(ctx: &egui::Context, probe: &PiProbe) {
-    egui::CentralPanel::default().show(ctx, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(60.0);
-            show_pi_status(ui, probe);
+fn amber() -> egui::Color32 {
+    egui::Color32::from_rgb(244, 198, 96)
+}
+
+fn ink() -> egui::Color32 {
+    egui::Color32::from_rgb(28, 24, 16)
+}
+
+fn apply_theme(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+    visuals.window_fill = egui::Color32::from_rgb(17, 19, 27);
+    visuals.panel_fill = egui::Color32::from_rgb(22, 25, 34);
+    visuals.extreme_bg_color = egui::Color32::from_rgb(30, 34, 46);
+    visuals.faint_bg_color = egui::Color32::from_rgb(36, 40, 54);
+    visuals.code_bg_color = egui::Color32::from_rgb(28, 32, 44);
+    visuals.hyperlink_color = amber();
+    visuals.selection.bg_fill = egui::Color32::from_rgb(72, 58, 28);
+    visuals.selection.stroke.color = amber();
+    visuals.window_rounding = egui::Rounding::same(8.0);
+    visuals.menu_rounding = egui::Rounding::same(6.0);
+    for widgets in [
+        &mut visuals.widgets.noninteractive,
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
+    ] {
+        widgets.rounding = egui::Rounding::same(6.0);
+    }
+    ctx.set_visuals(visuals);
+}
+
+fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).color(ink()).strong())
+            .fill(amber())
+            .min_size(egui::vec2(132.0, 34.0)),
+    )
+}
+
+fn soft_card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(22.0, 18.0))
+        .rounding(egui::Rounding::same(12.0))
+        .fill(egui::Color32::from_rgba_unmultiplied(28, 32, 44, 236))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgba_unmultiplied(244, 198, 96, 60),
+        ))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+fn centered_column(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    let full = ui.available_width();
+    let width = width.min(full);
+    let side = ((full - width) * 0.5).max(0.0);
+    ui.horizontal(|ui| {
+        ui.add_space(side);
+        ui.vertical(|ui| {
+            ui.set_width(width);
+            add(ui);
         });
     });
 }
 
-fn show_pi_status(ui: &mut egui::Ui, probe: &PiProbe) {
-    match probe {
-        PiProbe::BundledReady(_) => {
-            show_status_badge(
-                ui,
-                "✓ Pi 已就绪（内嵌 sidecar / Bundled Ready）",
-                egui::Color32::from_rgb(80, 180, 100),
-            );
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new("已从捆绑路径找到 Pi 二进制。").size(14.0));
-        }
-        PiProbe::DetectedLocal { .. } => {
-            let title = format!(
-                "~ Pi 就绪（本机 / Detected Local — {}）",
-                probe.source_label()
-            );
-            show_status_badge(ui, &title, egui::Color32::from_rgb(80, 140, 210));
-            ui.add_space(10.0);
-            ui.label(
-                egui::RichText::new(format!("通过「{}」找到 Pi。", probe.source_label()))
-                    .size(14.0),
-            );
-        }
-        PiProbe::NotReady => {
-            show_not_ready_panel(ui);
-        }
+/// 折线闪电。顶点是自写的，不是外部素材。
+fn bolt_polyline(origin: egui::Pos2, scale: f32) -> Vec<egui::Pos2> {
+    const LINE: [[f32; 2]; 4] = [[0.72, 0.00], [0.26, 0.46], [0.54, 0.50], [0.12, 1.00]];
+    LINE.into_iter()
+        .map(|[x, y]| origin + egui::vec2(x * scale, y * scale))
+        .collect()
+}
+
+fn paint_lightning_backdrop(ui: &egui::Ui) {
+    let rect = ui.max_rect();
+    if rect.width() < 80.0 || rect.height() < 80.0 {
+        return;
     }
-
-    if let Some(path) = probe.path() {
-        ui.add_space(8.0);
-        show_path_box(ui, &path.to_string_lossy());
-    }
-
-    ui.add_space(28.0);
-    ui.label(
-        egui::RichText::new("会话聊天需要 Pi 就绪后自动启动，当前尚未找到 Pi")
-            .weak()
-            .italics()
-            .size(12.0),
+    let painter = ui.painter();
+    let scale = (rect.height() * 0.46).clamp(140.0, 280.0);
+    let origin = egui::pos2(
+        rect.right() - 28.0 - scale * 0.74,
+        rect.bottom() - 36.0 - scale,
     );
-}
+    painter.add(egui::Shape::line(
+        bolt_polyline(origin, scale),
+        egui::Stroke::new(
+            (scale * 0.055).clamp(8.0, 16.0),
+            egui::Color32::from_rgba_unmultiplied(244, 198, 96, 32),
+        ),
+    ));
 
-fn show_status_badge(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
-    ui.label(egui::RichText::new(label).color(color).strong().size(17.0));
-}
-
-fn show_path_box(ui: &mut egui::Ui, path: &str) {
-    egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(14.0, 8.0))
-        .rounding(egui::Rounding::same(4.0))
-        .fill(ui.visuals().extreme_bg_color)
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new("Pi 路径：").strong().size(12.0));
-            ui.label(egui::RichText::new(path).monospace().size(12.0));
-        });
-}
-
-fn show_not_ready_panel(ui: &mut egui::Ui) {
-    ui.label(
-        egui::RichText::new("⚠ Pi 尚未就绪（Not Ready）")
-            .color(egui::Color32::from_rgb(210, 150, 50))
-            .strong()
-            .size(17.0),
-    );
-    ui.add_space(12.0);
-    ui.label(
-        egui::RichText::new("请通过以下方式之一提供 Pi 二进制，然后点击「⟳ 重新探测」：")
-            .size(14.0),
-    );
-    ui.add_space(10.0);
-
-    egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(16.0, 12.0))
-        .rounding(egui::Rounding::same(4.0))
-        .fill(ui.visuals().extreme_bg_color)
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new("方式 1 — 环境变量（开发 / 临时优先）").strong());
-            ui.code("PI_LIGHT_PI_BIN=<pi 或 pi.exe 的完整路径>");
-            ui.add_space(10.0);
-
-            ui.label(egui::RichText::new("方式 2 — 捆绑 sidecar（推荐，解压到以下目录）").strong());
-            ui.code("{exe_dir}/sidecar/pi/pi.exe    (Windows)");
-            ui.code("{exe_dir}/sidecar/pi/pi        (Linux / macOS)");
-            ui.add_space(10.0);
-
-            ui.label(egui::RichText::new("方式 3 — 本机 PATH（可选探测）").strong());
-            ui.label(
-                egui::RichText::new("将 pi / pi.exe 加入系统 PATH，点击「⟳ 重新探测」即可识别。")
-                    .weak()
-                    .size(12.0),
-            );
-        });
-
-    ui.add_space(14.0);
-    ui.label(egui::RichText::new("下载 Pi v1.4.0 官方 Release：").size(13.0));
-    ui.hyperlink_to(
-        "pi-windows-x64.zip（GitHub Releases）",
-        "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-windows-x64.zip",
-    );
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(
-            "SHA-256: 0f7256ea8bdac3af20012b94fdc1252a31cc6dc0d2f9b9eb539555d22e3e321b",
-        )
-        .weak()
-        .monospace()
-        .size(11.0),
-    );
+    let small = 34.0;
+    let small_origin = egui::pos2(rect.right() - 28.0 - small * 0.74, rect.top() + 16.0);
+    painter.add(egui::Shape::line(
+        bolt_polyline(small_origin, small),
+        egui::Stroke::new(
+            2.2_f32,
+            egui::Color32::from_rgba_unmultiplied(255, 214, 130, 150),
+        ),
+    ));
 }
 
 // ── M3′ Trace / Token UI ──────────────────────────────────────────────────
@@ -1107,7 +1336,7 @@ fn pi_dot_color(probe: &PiProbe, rpc_alive: bool) -> (egui::Color32, &'static st
     if !probe.is_ready() {
         return (
             egui::Color32::from_rgb(200, 90, 70),
-            "Pi 未就绪 — 请提供 Pi 二进制",
+            "Pi 未就绪。恢复说明在主界面和设置底部的「高级」里。",
         );
     }
     if rpc_alive {

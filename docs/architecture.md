@@ -18,14 +18,14 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │  desktop-rust/   egui + eframe（主桌面客户端）                        │
 │                                                                       │
-│  ┌──────────┐ ┌─────────────────────────────────────┐  ┌──────────┐  │
-│  │ 会话列表  │ │  主区（CentralPanel）                 │  │  设置面   │  │
-│  │ 新建/切换 │ │  流式聊天 + 工具卡片 + Token/Trace    │  │ ⚙ M4′+  │  │
-│  │ 工作目录  │ │  输入框 + 发送 / 停止 / 重试          │  │  Skills  │  │
-│  └──────────┘ └─────────────────────────────────────┘  │  MCP     │  │
-│                                                         │  记忆    │  │
-│  TopPanel：标题栏 + Pi 状态灯 + ⟳ 重新探测 + ⚙ 设置    │  模型    │  │
-│                                                         └──────────┘  │
+│  ┌──────────┐ ┌──────────────────────────────────────────────────┐ │
+│  │ 会话列表  │ │  主区（CentralPanel）                              │ │
+│  │ 新建/切换 │ │  流式聊天 + 工具卡片 + Token/Trace                 │ │
+│  │ 工作目录  │ │  输入框 + 发送 / 停止 / 重试                       │ │
+│  └──────────┘ └──────────────────────────────────────────────────┘ │
+│  顶栏：标题 + Pi 状态灯                                              │
+│  底栏左下角：⚙ 设置（居中对话框：模型与密钥 / Skills / MCP / 记忆 / 高级）│
+│  底栏右侧：重新探测                                                  │
 │                                                                       │
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
@@ -65,6 +65,7 @@ pi-light/
 │   │   ├── chat.rs               # 聊天状态机（M2′）
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
 │   │   ├── admin_panel.rs        # 管理面（M4′）
+│   │   ├── onboarding.rs         # 首次打开：模型引导 / 缺程序说明
 │   │   └── bin/mock_pi.rs        # 集成测试用 Pi 替身
 │   └── tests/rpc_smoke.rs        # 集成烟测
 ├── android/                      # Option C 占位壳
@@ -90,6 +91,7 @@ pi-light/
 | `chat` | 聊天状态机 + `SessionHub`（本进程多会话）；重试上一条 prompt |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace（含 args 预览） |
 | `admin_panel` | M4′+ 设置面：四 tab（Skills/MCP/记忆/模型）；Skills 开关写 settings；MCP enabled 字段；记忆内联编辑；模型写回+重启 |
+| `onboarding` | 首次打开主路径：Pi 就绪时进入模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 

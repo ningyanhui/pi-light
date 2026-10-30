@@ -59,7 +59,18 @@ pi-light-windows-x64/
 
 SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 为准。Release 流水线校验失败则拒绝打包。签名策略见 [`docs/signing.md`](./docs/signing.md)（当前无 Authenticode）。
 
-### Pi 路径探测（开发或自备二进制时）
+### 第一次打开
+
+官方便携包已经带好 Pi。第一次运行的主界面是**模型与 API 密钥**，不是安装步骤。
+
+- 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，会打开设置对话框的「模型与密钥」。确认后再点「进入对话」。
+- 密钥只显示「已设置 / 未设置」。请用环境变量，或在对话里使用 Pi 的 `/login`。本程序不保存密钥明文。
+- 设置入口在窗口**左下角**。对话框里有模型与密钥、Skills、MCP、记忆。自己指定 Pi 程序（环境变量、sidecar 目录、PATH）在「高级」页，不是第一屏。
+- 若这次没找到 Pi：主界面说明便携包应已包含它，并提供「重新探测」。
+
+### Pi 程序位置（高级）
+
+只有便携包里没有 Pi，或你要改用别的程序时才需要：
 
 1. 环境变量 `PI_LIGHT_PI_BIN`
 2. `{exe_dir}/sidecar/pi/pi.exe`（Windows）或 `{exe_dir}/sidecar/pi/pi`（其他）
@@ -82,13 +93,13 @@ cargo run
 
 | 能力 | 说明 |
 |------|------|
-| 三态启动 | Bundled Ready / Detected Local / Not Ready；可重新探测 |
+| 三态启动 | 找到捆绑 sidecar、找到本机 Pi，或未找到；未找到时安装说明默认折叠 |
 | 流式聊天 | 官方 JSONL RPC 真连 Pi；停止生成 |
 | 多会话 | 左侧列表：新建 / 切换；Pi `new_session` / `switch_session` |
 | 工具卡片 | 名称 / 状态 / 耗时 / 参数预览（`tool_execution_*`） |
 | 停止 / 重试 | 生成中停止；空闲时可重发上一条 prompt |
 | `#` 引用 | 输入 `#` 引用当前会话消息或本机历史会话文件，chip 拼入 prompt |
-| 设置 / 模型 | 标题栏「⚙ 设置」：Skills、MCP、记忆、模型四个 tab |
+| 设置 | 左下角齿轮打开对话框：模型与密钥、Skills、MCP、记忆。首次打开优先模型与密钥；Pi 程序位置在「高级」 |
 | Skills | 本机发现；读写 `settings.json` 的 `skills` 数组；改后重启 sidecar |
 | MCP | 发现 `mcp.json`；读写官方 `enabled`（兼容旧 `disabled`）；改后重启 sidecar |
 | 记忆 | Project / User / Session 三层；内联编辑写回文件 |
