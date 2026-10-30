@@ -59,7 +59,18 @@ pi-light-windows-x64/
 
 SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 为准。Release 流水线校验失败则拒绝打包。签名策略见 [`docs/signing.md`](./docs/signing.md)（当前无 Authenticode）。
 
-### Pi 路径探测（开发或自备二进制时）
+### 第一次打开
+
+官方便携包已经带好 Pi。第一次运行的主界面是**模型与 API 密钥**，不是安装步骤。
+
+- 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，会打开设置对话框的「模型与密钥」。确认后再点「进入对话」。
+- 在「模型与密钥」里填写提供商 API 密钥。保存后写入 Pi 的 `auth.json`，输入框清空，已存密钥只显示掩码 `••••••••`，不回显明文。环境变量和 `/login` 仍然可用。
+- 设置入口在窗口**左下角**。对话框里有模型与密钥、Skills、MCP、记忆。自己指定 Pi 程序（环境变量、sidecar 目录、PATH）在「高级」页，不是第一屏。
+- 若这次没找到 Pi：主界面说明便携包应已包含它，并提供「重新探测」。
+
+### Pi 程序位置（高级）
+
+只有便携包里没有 Pi，或你要改用别的程序时才需要：
 
 1. 环境变量 `PI_LIGHT_PI_BIN`
 2. `{exe_dir}/sidecar/pi/pi.exe`（Windows）或 `{exe_dir}/sidecar/pi/pi`（其他）
@@ -82,14 +93,14 @@ cargo run
 
 | 能力 | 说明 |
 |------|------|
-| 三态启动 | Bundled Ready / Detected Local / Not Ready；可重新探测 |
+| 三态启动 | 找到捆绑 sidecar、找到本机 Pi，或未找到；未找到时安装说明默认折叠 |
 | 流式聊天 | 官方 JSONL RPC 真连 Pi；停止生成 |
 | 多会话 | 左侧列表：新建 / 切换；Pi `new_session` / `switch_session` |
 | 工具卡片 | 名称 / 状态 / 耗时 / 参数预览（`tool_execution_*`） |
 | 停止 / 重试 | 生成中停止；空闲时可重发上一条 prompt |
 | `#` 引用 | 输入 `#` 引用当前会话消息或本机历史会话文件，chip 拼入 prompt |
-| 设置 / 模型 | 标题栏「⚙ 设置」：密钥、模型、Skills、MCP、记忆 |
-| API 密钥 | 「密钥」页写入 Pi `auth.json`；保存后输入框清空，已存密钥只显示掩码 |
+| 设置 | 左下角齿轮打开对话框：模型与密钥、Skills、MCP、记忆。首次打开优先模型与密钥；Pi 程序位置在「高级」 |
+| API 密钥 | 「模型与密钥」写入 Pi `auth.json`；保存后输入框清空，已存密钥只显示掩码 `••••••••` |
 | 会话恢复 | 会话列表与消息写入 `~/.pi-light/sessions.json`，下次启动读回；Pi 会话文件仍在则 `switch_session` |
 | 中文显示 | Windows 用系统微软雅黑等 CJK 字体作为 egui 回退，避免方框；不捆绑字体文件 |
 | Skills | 本机发现；读写 `settings.json` 的 `skills` 数组；改后重启 sidecar |
@@ -153,7 +164,7 @@ desktop-rust/src/
 
 ## 6. 诚实说明
 
-- **API 密钥**：设置里的「密钥」页可以把提供商 API 密钥写入 Pi 的 `auth.json`（`type: api_key`）。保存后输入框清空，已存密钥只显示固定掩码 `••••••••`，界面不回显明文，也不在错误信息里打印密钥。OAuth 登录不会被这个表单覆盖。环境变量和 Pi 的 `/login` 仍然可用。文件权限在 Unix 上为 `0600`。
+- **API 密钥**：设置对话框的「模型与密钥」可以把提供商 API 密钥写入 Pi 的 `auth.json`（`type: api_key`）。保存后输入框清空，已存密钥只显示固定掩码 `••••••••`，界面不回显明文，也不在错误信息里打印密钥。OAuth 登录不会被这个表单覆盖。环境变量和 Pi 的 `/login` 仍然可用。文件权限在 Unix 上为 `0600`。
 - **会话持久化**：壳把会话列表、消息、输入草稿、工作目录和 Pi 会话文件路径写到 `~/.pi-light/sessions.json`（可用 `PI_LIGHT_STATE_PATH` 改位置）。下次启动读回。若对应会话文件还在，则对 Pi 发 `switch_session`；否则保留壳内记录并 `new_session`。没有会话树 / fork。`#` 引用仍然可用。
 - **中文**：不捆绑字体。Windows 优先加载系统微软雅黑（`msyh.ttc` / `msyh.ttf`）作为 egui 回退。可用 `PI_LIGHT_CJK_FONT` 指定字体文件。
 - **Android = Option C**：桌面 Host 没有长出 Android 真 Host 所需的共享面（仍是本机 stdin/stdout spawn，无 LAN / HTTP 配对 API）。M6′ **不升 Option A**，Android 继续是 debug 占位 APK（`assembleDebug`，不内嵌 Pi）。决策记录见 [`docs/architecture.md`](./docs/architecture.md)。

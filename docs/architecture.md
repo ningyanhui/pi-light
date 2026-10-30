@@ -18,19 +18,18 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │  desktop-rust/   egui + eframe（主桌面客户端）                        │
 │                                                                       │
-│  ┌──────────┐ ┌─────────────────────────────────────┐  ┌──────────┐  │
-│  │ 会话列表  │ │  主区（CentralPanel）                 │  │  设置面   │  │
-│  │ 恢复/新建 │ │  流式聊天 + 工具卡片 + Token/Trace    │  │ ⚙        │  │
-│  │ 工作目录  │ │  输入框 + 发送 / 停止 / 重试          │  │  密钥    │  │
-│  └──────────┘ └─────────────────────────────────────┘  │  模型    │  │
-│                                                         │  Skills  │  │
-│  TopPanel：标题 + 状态灯 + 当前模型 + 目录名            │  MCP     │  │
-│             + ⟳ 重新探测 + ⚙ 设置                      │  记忆    │  │
-│                                                         └──────────┘  │
+│  ┌──────────┐ ┌──────────────────────────────────────────────────┐ │
+│  │ 会话列表  │ │  主区（CentralPanel）                              │ │
+│  │ 恢复/新建 │ │  流式聊天 + 工具卡片 + Token/Trace                 │ │
+│  │ 工作目录  │ │  输入框 + 发送 / 停止 / 重试                       │ │
+│  └──────────┘ └──────────────────────────────────────────────────┘ │
+│  顶栏：标题 + 状态灯 + 当前模型 + 目录名                             │
+│  底栏左下角：⚙ 设置（对话框：模型与密钥 / Skills / MCP / 记忆 / 高级）│
+│  底栏右侧：重新探测                                                  │
 │                                                                       │
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
-│  admin_panel 模块：设置面（密钥 / 模型 / Skills / MCP / 记忆）             │
+│  admin_panel 模块：设置对话框（模型与密钥 / Skills / MCP / 记忆 / 高级）   │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ std::process::Command（stdin/stdout piped）
                              │ 后台线程读 stdout → mpsc channel
@@ -68,7 +67,8 @@ pi-light/
 │   │   ├── session_store.rs      # 会话历史落盘与启动恢复
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
 │   │   ├── admin_panel.rs        # 管理面（M4′）
-│   │   ├── api_keys.rs           # 应用内 API 密钥
+│   │   ├── api_keys.rs           # 应用内 API 密钥（写入 auth.json，保存后掩码）
+│   │   ├── onboarding.rs         # 首次打开：模型引导 / 缺程序说明
 │   │   └── bin/mock_pi.rs        # 集成测试用 Pi 替身
 │   └── tests/rpc_smoke.rs        # 集成烟测
 ├── android/                      # Option C 占位壳
@@ -96,7 +96,8 @@ pi-light/
 | `fonts` | 系统 CJK 字体作为 egui 回退；Windows 优先 `msyh.ttc` |
 | `api_keys` | 设置页写入 Pi `auth.json` 的 API 密钥；保存后掩码，不回显明文 |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace（含 args 预览） |
-| `admin_panel` | 设置面：密钥 / 模型 / Skills / MCP / 记忆。密钥写入 `auth.json` 后只显示掩码 |
+| `admin_panel` | 左下角对话框：模型与密钥 / Skills / MCP / 记忆 / 高级。密钥写入 `auth.json` 后只显示掩码 |
+| `onboarding` | 首次打开主路径：Pi 就绪时进入模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
