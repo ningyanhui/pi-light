@@ -129,6 +129,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $npm = Get-Command npm -ErrorAction SilentlyContinue
+          if (-not $npm) { throw "npm missing after setup-node" }
+          Write-Host "npm: $($npm.Source)"
+          npm --version
           python scripts/fetch-pi-packages.py `
             --dest "pi-light-windows-x64/sidecar/pi-packages" `
             --install-deps `
