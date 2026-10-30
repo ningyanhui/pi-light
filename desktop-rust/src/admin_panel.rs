@@ -6,7 +6,7 @@
 //   - Pi agent 目录（默认 ~/.pi/agent/，可被 PI_CODING_AGENT_DIR 覆盖）
 //   - 项目 .pi/ 目录
 //   - ~/.agents/skills/ 与 .agents/skills/（Agent Skills 规范路径）
-//   - 模型/API 密钥状态：settings.json + auth.json + 环境变量
+//   - 模型与密钥：settings.json 写默认模型；「模型与密钥」页写入 auth.json（保存后只显示掩码）
 //
 // 落地项：
 //   - Skills 开关：读写 settings.json `skills` 数组（-id 排除 / +id 加回）
@@ -22,25 +22,27 @@ use std::{
 
 use eframe::egui;
 
+use crate::api_keys::{self, ApiKeyForm};
+
 // ── Tabs ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AdminTab {
     #[default]
+    Models,
     Skills,
     Mcp,
     Memory,
-    Models,
     Advanced,
 }
 
 impl AdminTab {
     pub fn label(self) -> &'static str {
         match self {
+            AdminTab::Models => "模型与密钥",
             AdminTab::Skills => "Skills",
             AdminTab::Mcp => "MCP",
             AdminTab::Memory => "记忆",
-            AdminTab::Models => "模型与密钥",
             AdminTab::Advanced => "高级",
         }
     }
@@ -262,6 +264,7 @@ pub struct AdminPanelState {
 
     pub model_state: DiscoveryState,
     pub model_config: ModelConfig,
+    pub api_keys: ApiKeyForm,
 
     pub last_error: Option<String>,
     /// 由 toggle 或模型写入触发；main.rs 消费后重启 sidecar。
@@ -291,6 +294,9 @@ impl AdminPanelState {
 
         self.model_config = discover_model_config();
         self.model_state = DiscoveryState::Ready;
+
+        let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
+        self.api_keys.refresh(auth_path.as_deref());
     }
 
     pub fn rediscover(&mut self) {
@@ -488,6 +494,7 @@ impl AdminPanelState {
         // 用局部变量收集面板内产生的操作请求，避免在 egui 闭包中同时借用 self。
         let mut model_request: Option<SetModelRequest> = None;
         let mut want_restart_from_model = false;
+        let mut key_result = api_keys::KeyUiResult::default();
         // 记忆编辑器动作
         let mut memory_want_save = false;
         let mut memory_want_cancel = false;
@@ -661,6 +668,14 @@ impl AdminPanelState {
                                     memory_open_path = open_path;
                                 }
                                 AdminTab::Models => {
+                                    let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
+                                    key_result = api_keys::render(
+                                        ui,
+                                        &mut self.api_keys,
+                                        auth_path.as_deref(),
+                                    );
+                                    ui.add_space(12.0);
+                                    ui.separator();
                                     let (req, want_restart, write_error) =
                                         render_models(ui, &mut self.model_config, pi_connected);
                                     model_request = req;
@@ -745,6 +760,13 @@ impl AdminPanelState {
                     self.last_error = Some(format!("读取文件失败：{e}"));
                 }
             }
+        }
+
+        if key_result.restart {
+            self.last_error = None;
+            self.sidecar_restart_needed = true;
+        } else if let Some(err) = key_result.error {
+            self.last_error = Some(err);
         }
 
         let restart_sidecar =
@@ -1242,78 +1264,6 @@ fn render_models(
             .weak()
             .size(10.0),
     );
-    ui.add_space(8.0);
-
-    // ── API 密钥状态（只显示有无，不明文）────────────────────────────────
-    ui.label(egui::RichText::new("API 密钥").strong().size(13.0));
-    ui.label(
-        egui::RichText::new(
-            "这里不输入、不保存、也不展示密钥内容。用环境变量，或在对话里使用 /login。",
-        )
-        .weak()
-        .size(11.0),
-    );
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        for var in [
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "DEEPSEEK_API_KEY",
-            "GEMINI_API_KEY",
-            "GROQ_API_KEY",
-            "PI_API_KEY",
-        ] {
-            let present = std::env::var(var).is_ok();
-            let (mark, color) = if present {
-                ("已设置", egui::Color32::from_rgb(90, 180, 110))
-            } else {
-                ("未设置", egui::Color32::from_rgb(150, 150, 160))
-            };
-            ui.label(
-                egui::RichText::new(format!("{var} {mark}"))
-                    .color(color)
-                    .monospace()
-                    .size(11.0),
-            );
-        }
-    });
-    ui.add_space(4.0);
-    match &cfg.auth_status {
-        AuthStatus::EnvVar(var) => {
-            ui.label(
-                egui::RichText::new(format!("  ✓ 通过环境变量配置：{var}=***"))
-                    .color(egui::Color32::from_rgb(60, 160, 80))
-                    .size(12.0),
-            );
-        }
-        AuthStatus::FileExists(path) => {
-            ui.label(
-                egui::RichText::new(format!("  ✓ auth.json 存在：{}", path.display()))
-                    .color(egui::Color32::from_rgb(60, 160, 80))
-                    .size(12.0),
-            );
-            ui.label(
-                egui::RichText::new("  （内容不展示；如需重新登录，在 Pi 中运行 /login）")
-                    .weak()
-                    .size(10.0),
-            );
-        }
-        AuthStatus::NotConfigured => {
-            ui.label(
-                egui::RichText::new("  ✗ 未检测到 API 密钥（环境变量或 auth.json）")
-                    .color(egui::Color32::from_rgb(210, 120, 60))
-                    .size(12.0),
-            );
-            ui.label(
-                egui::RichText::new("  在 Pi 中运行 /login 进行认证，或设置对应环境变量。")
-                    .weak()
-                    .size(11.0),
-            );
-        }
-        AuthStatus::Unknown => {
-            ui.label(egui::RichText::new("  ○ 状态未知").weak().size(12.0));
-        }
-    }
     ui.add_space(8.0);
 
     // ── 自定义端点 ────────────────────────────────────────────────────────
@@ -2209,7 +2159,7 @@ mod tests {
     fn panel_defaults() {
         let panel = AdminPanelState::default();
         assert!(!panel.open);
-        assert_eq!(panel.active_tab, AdminTab::Skills);
+        assert_eq!(panel.active_tab, AdminTab::Models);
     }
 
     #[test]
@@ -2451,10 +2401,10 @@ mod tests {
 
     #[test]
     fn tab_labels() {
+        assert_eq!(AdminTab::Models.label(), "模型与密钥");
         assert_eq!(AdminTab::Skills.label(), "Skills");
         assert_eq!(AdminTab::Mcp.label(), "MCP");
         assert_eq!(AdminTab::Memory.label(), "记忆");
-        assert_eq!(AdminTab::Models.label(), "模型与密钥");
         assert_eq!(AdminTab::Advanced.label(), "高级");
     }
 
