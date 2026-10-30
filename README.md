@@ -9,7 +9,7 @@
 [![Android APK](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-当前版本：**v0.2.0**（Windows 便携包为主路径）。主线在此之上包含：系统 CJK 字体、应用内 API 密钥、会话恢复。
+当前版本：**v0.2.1**（Windows 便携包为主路径）。
 
 ---
 
@@ -78,7 +78,7 @@ cargo run
 
 ## 3. 已交付能力
 
-相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。
+相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 在此之上补上系统 CJK 字体、应用内 API 密钥和会话恢复。
 
 | 能力 | 说明 |
 |------|------|

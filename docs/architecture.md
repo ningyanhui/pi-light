@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.0 — M1′–M5′ + 便携 bash + Claude 对标缺口；M6′ 维持 Android Option C
+> **当前版本**：v0.2.1 — 系统 CJK 字体、应用内密钥、会话恢复；M6′ 维持 Android Option C
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -188,9 +188,10 @@ pi-light-windows-x64/
 | **便携 bash / R0+** | 单 exe 便携包：内嵌 MinGit bash；`bash_path` 模块；PATH 注入；signing.md 完善 | ✅ 已合入 |
 | **Claude 对标缺口** | 多会话列表、工具卡片、停止/重试、设置可达、cwd 切换 | ✅ 已合入（#11） |
 | **M6′** | Android：仅当 Host 已自然长出共享面时升 Option A | **维持 C**（见下节） |
-| **Android C** | `android/` debug 占位 APK（`assembleDebug`） | ✅ 已合入；v0.2.0 仍为此路径 |
+| **Android C** | `android/` debug 占位 APK（`assembleDebug`） | ✅ 已合入；v0.2.1 仍为此路径 |
 | **R0 / v0.1.0** | Release（Win 便携 zip + 签名策略） | ✅ 已发布 |
-| **v0.2.0** | 文档换轨 + 便携 bash + Claude 对标缺口合入后的发版 | 本发版 |
+| **v0.2.0** | 文档换轨 + 便携 bash + Claude 对标缺口合入后的发版 | ✅ 已发布 |
+| **v0.2.1** | 中文显示、应用内密钥、会话恢复、设置页顺序 | 本发版 |
 
 ---
 
@@ -271,4 +272,4 @@ do_send():
 
 ---
 
-*最后更新：v0.2.0（M6′ 维持 Android Option C；README 产品向重写）*
+*最后更新：v0.2.1（中文显示、应用内密钥、会话恢复）*
