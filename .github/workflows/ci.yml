@@ -123,6 +123,20 @@ jobs:
         run: cargo fmt --check
 
   # -----------------------------------------------------------------------
+  # M2 预置包：lockfile + NOTICE/文档 SHA，并下载 tarball 核对
+  # -----------------------------------------------------------------------
+  preset-packages:
+    name: preset-packages sha
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: verify lockfile SHA-256 and docs
+        run: python3 scripts/fetch-pi-packages.py --verify-only --check-docs
+
+  # -----------------------------------------------------------------------
   # 文案禁词（远程桌面不得使用已废弃命名）
   # -----------------------------------------------------------------------
   forbidden-words:

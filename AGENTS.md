@@ -66,6 +66,23 @@
 | 环境覆盖 | `PI_LIGHT_PI_BIN` |
 | 启动命令 | `pi`/`pi.exe` + `--mode rpc` |
 
+### M2 预置包钉定（默认 Slim；操控包默认 OFF）
+
+权威文件：`scripts/preset-packages.lock.json`。tarball SHA-256 必须同时出现在 `NOTICE` 与 `docs/preset-packages.md`。CI `--verify-only --check-docs` 与 Release 下载校验失败则红。
+
+| 包 | 版本 | 角色 |
+|----|------|------|
+| pi-marketplace | 0.1.3 | Slim 默认启用 |
+| pi-mcp-adapter | 7.0.0 | Slim 默认启用 |
+| pi-web-access | 0.46.0 | Slim 默认启用 |
+| pi-memory | 0.4.2 | Slim 默认启用 |
+| pi-subagents | 0.84.0 | Slim 默认启用 |
+| pi-browser-use | 0.12.15 | 预置文件，默认关闭 |
+| pi-chrome-connector | 0.2.2 | 预置文件，默认关闭 |
+| @injaneity/pi-computer-use | 0.5.1 | 预置文件，默认关闭；启用前权限向导 |
+
+**不得**把 `pi-lens`、`billion-context` 打进默认预置树。运行时路径：`{exe_dir}/sidecar/pi-packages/`（`PI_LIGHT_PACKAGES_DIR` 可覆盖）。
+
 ---
 
 ## 路径探测顺序（M1′ 契约，不可随意更改）
@@ -94,6 +111,7 @@
 | **M2′** | 官方 JSONL RPC 真连聊天 |
 | **M3′–M5′** | Trace/Token、管理面、`#` 引用 |
 | **M6′** | Android：**维持 Option C**（Host 未长出 A 所需共享面；不升真 Host） |
+| **v3 M2** | Slim 五包预置进发行树 + SHA 闸门；操控三包预置文件默认关 |
 
 **OUT of M0′**：真 RPC 聊天、三态 UI 完整、zip 捆绑进 git、双后端、Harness/dsh。
 

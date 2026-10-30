@@ -14,14 +14,16 @@ use eframe::egui;
 
 use crate::pi_pkg::{
     display_name_version, install_npm, normalize_source, npm_spec, remove_npm, InstalledPackage,
+    PkgOrigin,
 };
+use crate::preset_packages;
 
 const NPM_SEARCH: &str = "https://registry.npmjs.org/-/v1/search";
 const NPM_REGISTRY: &str = "https://registry.npmjs.org";
 const CATALOG_URL: &str = "https://pi.dev/packages";
 const USER_AGENT: &str = "pi-light/0.2.2 (+https://github.com/ningyanhui/pi-light)";
 
-/// 原型「精选扩展」名单（浏览用；不把包打进发行树，那是 M2）。
+/// 原型「精选扩展」名单。Slim 五包进发行树；lens / billion-context 仅市场可选。
 const FEATURED: &[FeaturedMeta] = &[
     FeaturedMeta {
         name: "pi-marketplace",
@@ -33,6 +35,7 @@ const FEATURED: &[FeaturedMeta] = &[
             "元数据与源码关键词审计",
             "安装前必须确认",
         ],
+        control: false,
     },
     FeaturedMeta {
         name: "pi-mcp-adapter",
@@ -40,6 +43,7 @@ const FEATURED: &[FeaturedMeta] = &[
         official: true,
         kinds: &[PkgKind::Extension],
         features_zh: &["连接 MCP 服务器", "把工具暴露给 Pi"],
+        control: false,
     },
     FeaturedMeta {
         name: "pi-web-access",
@@ -47,6 +51,7 @@ const FEATURED: &[FeaturedMeta] = &[
         official: true,
         kinds: &[PkgKind::Extension, PkgKind::Skill],
         features_zh: &["网页抓取", "搜索与内容提取"],
+        control: false,
     },
     FeaturedMeta {
         name: "pi-subagents",
@@ -54,6 +59,7 @@ const FEATURED: &[FeaturedMeta] = &[
         official: true,
         kinds: &[PkgKind::Extension],
         features_zh: &["子代理委托", "脚本化多代理流程"],
+        control: false,
     },
     FeaturedMeta {
         name: "pi-lens",
@@ -61,6 +67,7 @@ const FEATURED: &[FeaturedMeta] = &[
         official: true,
         kinds: &[PkgKind::Extension],
         features_zh: &["LSP / lint / 格式化", "结构分析"],
+        control: false,
     },
     FeaturedMeta {
         name: "pi-memory",
@@ -68,13 +75,39 @@ const FEATURED: &[FeaturedMeta] = &[
         official: true,
         kinds: &[PkgKind::Skill, PkgKind::Extension],
         features_zh: &["长期记忆", "语义检索"],
+        control: false,
     },
     FeaturedMeta {
         name: "billion-context",
-        blurb_zh: "上下文压缩插件，可拉长单会话可用上下文。",
+        blurb_zh: "上下文压缩插件，可拉长单会话可用上下文。市场可选，不进默认预置。",
         official: false,
         kinds: &[PkgKind::Extension],
         features_zh: &["上下文压缩", "长会话"],
+        control: false,
+    },
+    FeaturedMeta {
+        name: "pi-browser-use",
+        blurb_zh: "Chrome DevTools MCP 浏览器自动化。预置文件默认关闭，一键启用。",
+        official: true,
+        kinds: &[PkgKind::Extension],
+        features_zh: &["浏览器自动化", "启用后 /reload"],
+        control: true,
+    },
+    FeaturedMeta {
+        name: "pi-chrome-connector",
+        blurb_zh: "连接本机 Chrome。Companion 扩展需用户装到浏览器。预置文件默认关闭。",
+        official: true,
+        kinds: &[PkgKind::Extension],
+        features_zh: &["真实 Chrome 连接", "需安装 Companion"],
+        control: true,
+    },
+    FeaturedMeta {
+        name: "@injaneity/pi-computer-use",
+        blurb_zh: "电脑操控（observe / click / scroll）。必须先过 Windows 权限向导，不默认开启。",
+        official: false,
+        kinds: &[PkgKind::Extension],
+        features_zh: &["observe / click / scroll", "Win 权限向导"],
+        control: true,
     },
 ];
 
@@ -84,6 +117,7 @@ struct FeaturedMeta {
     official: bool,
     kinds: &'static [PkgKind],
     features_zh: &'static [&'static str],
+    control: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,6 +264,7 @@ pub struct ExtMarketState {
     pub installed_query: String,
     pub detail: Option<PackageDetail>,
     pub confirm_remove: Option<String>,
+    pub computer_wizard: bool,
     pub job_busy: bool,
     pub job_label: Option<String>,
     pub last_job: Option<JobResult>,
@@ -263,6 +298,7 @@ impl Default for ExtMarketState {
             installed_query: String::new(),
             detail: None,
             confirm_remove: None,
+            computer_wizard: false,
             job_busy: false,
             job_label: None,
             last_job: None,
@@ -420,7 +456,9 @@ fn featured_meta(name: &str) -> Option<&'static FeaturedMeta> {
 fn featured_to_catalog(meta: &FeaturedMeta) -> CatalogPackage {
     CatalogPackage {
         name: meta.name.to_owned(),
-        version: String::new(),
+        version: preset_packages::version_of(meta.name)
+            .unwrap_or("")
+            .to_owned(),
         description: meta.blurb_zh.to_owned(),
         author: if meta.official {
             "官方".to_owned()
@@ -841,6 +879,11 @@ fn percent_encode_path(name: &str) -> String {
 pub struct MarketUiResult {
     pub error: Option<String>,
     pub restart: bool,
+    /// 一键启用操控包（写入 settings 本地 path，不跑 npm）。
+    pub enable: Option<String>,
+    pub wizard_ok: bool,
+    /// 停用操控包（从 settings 去掉，文件留在发行树）。
+    pub disable: Option<String>,
 }
 
 pub fn render_marketplace(
@@ -894,7 +937,7 @@ pub fn render_marketplace(
     }
 
     match state.page {
-        MarketPage::Browse => render_browse(ui, state),
+        MarketPage::Browse => render_browse(ui, state, &mut result),
         MarketPage::Installed => render_installed(ui, state, &mut result),
     }
 
@@ -911,7 +954,7 @@ pub fn render_marketplace(
     result
 }
 
-fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState) {
+fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut MarketUiResult) {
     let mut search = false;
     ui.horizontal(|ui| {
         let resp = ui.add(
@@ -960,10 +1003,20 @@ fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState) {
         _ => {}
     }
     ui.add_space(8.0);
+    render_control_section(ui, state, result);
+    ui.add_space(8.0);
     ui.label(egui::RichText::new("精选扩展").strong().size(13.0));
+    ui.label(
+        egui::RichText::new("Slim 五包随便携包预置。pi-lens 与 billion-context 仅市场可选。")
+            .weak()
+            .size(11.0),
+    );
     ui.add_space(4.0);
 
-    let filtered = filter_catalog(&state.catalog, &state.query, state.kind_filter);
+    let filtered = filter_catalog(&state.catalog, &state.query, state.kind_filter)
+        .into_iter()
+        .filter(|pkg| preset_packages::origin_of(&pkg.name) != PkgOrigin::Control)
+        .collect::<Vec<_>>();
     if filtered.is_empty() {
         ui.label(
             egui::RichText::new("没有匹配的包")
@@ -975,7 +1028,7 @@ fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState) {
     }
 
     let mut open_name: Option<String> = None;
-    for pkg in filtered {
+    for pkg in &filtered {
         let installed = state.is_installed(&pkg.name);
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
@@ -1063,6 +1116,95 @@ fn truncate_chars(s: &str, max: usize) -> String {
     format!("{}…", s.chars().take(max).collect::<String>())
 }
 
+fn render_control_section(
+    ui: &mut egui::Ui,
+    state: &mut ExtMarketState,
+    result: &mut MarketUiResult,
+) {
+    ui.label(egui::RichText::new("浏览器 / 电脑操控").strong().size(13.0));
+    ui.label(
+        egui::RichText::new(
+            "预置文件默认关闭。一键启用写入本地 path，不跑 npm。真操控烟测是后续里程碑。",
+        )
+        .weak()
+        .size(11.0),
+    );
+    ui.add_space(4.0);
+    let root = preset_packages::bundled_packages_dir();
+    for meta in FEATURED.iter().filter(|m| m.control) {
+        let spec = match preset_packages::spec_by_name(meta.name) {
+            Some(spec) => spec,
+            None => continue,
+        };
+        let enabled = state.is_installed(&spec.name);
+        let present = root
+            .as_ref()
+            .is_some_and(|dir| preset_packages::package_present(dir, spec));
+        let blurb = meta.blurb_zh;
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+            .rounding(egui::Rounding::same(8.0))
+            .fill(ui.visuals().extreme_bg_color)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(egui::RichText::new(&spec.name).strong().size(13.0));
+                            ui.label(
+                                egui::RichText::new("预置 · 默认关")
+                                    .color(egui::Color32::from_rgb(180, 140, 70))
+                                    .size(11.0),
+                            );
+                        });
+                        if !blurb.is_empty() {
+                            ui.label(egui::RichText::new(blurb).size(12.0));
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("v{} · {}", spec.version, spec.license))
+                                .weak()
+                                .size(11.0),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if enabled {
+                            if ui.small_button("停用").clicked() {
+                                result.disable = Some(spec.name.clone());
+                            }
+                            ui.label(
+                                egui::RichText::new("已启用")
+                                    .color(egui::Color32::from_rgb(90, 180, 110))
+                                    .size(12.0),
+                            );
+                        } else {
+                            let can = present && !state.job_busy;
+                            let tip = if present {
+                                "写入 settings.json 的本地 path，然后重启 sidecar"
+                            } else {
+                                "发行树里还没有这份预置文件（开发构建常见）"
+                            };
+                            if ui
+                                .add_enabled(
+                                    can,
+                                    egui::Button::new("一键启用")
+                                        .fill(egui::Color32::from_rgb(46, 140, 90)),
+                                )
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
+                                if spec.needs_permission_wizard {
+                                    state.computer_wizard = true;
+                                } else {
+                                    result.enable = Some(spec.name.clone());
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+        ui.add_space(4.0);
+    }
+}
+
 fn render_installed(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut MarketUiResult) {
     ui.add(
         egui::TextEdit::singleline(&mut state.installed_query)
@@ -1073,6 +1215,7 @@ fn render_installed(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut 
     let action = render_installed_table(ui, &state.installed, &state.installed_query, true);
     match action {
         InstalledAction::Remove(source) => state.confirm_remove = Some(source),
+        InstalledAction::Disable(name) => result.disable = Some(name),
         InstalledAction::Reload => result.restart = true,
         InstalledAction::None => {}
     }
@@ -1082,6 +1225,7 @@ fn render_installed(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut 
 pub enum InstalledAction {
     None,
     Remove(String),
+    Disable(String),
     Reload,
 }
 
@@ -1111,10 +1255,12 @@ pub fn render_installed_table(
 
     if installed.is_empty() {
         ui.label(
-            egui::RichText::new("还没有经 sidecar 安装的 Pi 包。可在「浏览」页确认后安装。")
-                .weak()
-                .italics()
-                .size(12.0),
+            egui::RichText::new(
+                "还没有已启用的 Pi 包。正式便携包会在首次打开时写入 Slim 五包。开发构建若未解压 sidecar/pi-packages，这里会是空的。",
+            )
+            .weak()
+            .italics()
+            .size(12.0),
         );
         return action;
     }
@@ -1135,7 +1281,16 @@ pub fn render_installed_table(
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(&pkg.name).strong().size(13.0));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(egui::RichText::new(&pkg.name).strong().size(13.0));
+                            if let Some(badge) = pkg.origin.badge() {
+                                ui.label(
+                                    egui::RichText::new(badge)
+                                        .color(egui::Color32::from_rgb(80, 160, 220))
+                                        .size(11.0),
+                                );
+                            }
+                        });
                         let ver = pkg.version.as_deref().unwrap_or("—");
                         ui.label(
                             egui::RichText::new(format!(
@@ -1149,17 +1304,30 @@ pub fn render_installed_table(
                             .size(11.0),
                         );
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new("移除")
-                                    .fill(egui::Color32::from_rgb(160, 70, 70)),
-                            )
-                            .clicked()
-                        {
-                            action = InstalledAction::Remove(pkg.source.clone());
-                        }
-                    });
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| match pkg.origin {
+                            PkgOrigin::Slim => {
+                                ui.label(egui::RichText::new("发行包预置").weak().size(11.0));
+                            }
+                            PkgOrigin::Control => {
+                                if ui.small_button("停用").clicked() {
+                                    action = InstalledAction::Disable(pkg.name.clone());
+                                }
+                            }
+                            PkgOrigin::User => {
+                                if ui
+                                    .add(
+                                        egui::Button::new("移除")
+                                            .fill(egui::Color32::from_rgb(160, 70, 70)),
+                                    )
+                                    .clicked()
+                                {
+                                    action = InstalledAction::Remove(pkg.source.clone());
+                                }
+                            }
+                        },
+                    );
                 });
             });
         ui.add_space(4.0);
@@ -1332,6 +1500,65 @@ pub fn render_market_modals(
             state.confirm_remove = None;
         }
     }
+
+    if state.computer_wizard {
+        let mut close = false;
+        let mut confirm = false;
+        egui::Window::new("电脑操控权限向导")
+            .id(egui::Id::new("pi_light_computer_wizard"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 20.0])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("@injaneity/pi-computer-use")
+                        .strong()
+                        .size(15.0),
+                );
+                ui.add_space(6.0);
+                ui.label("启用前请在 Windows 上确认以下权限。本页只做向导壳，不探测系统是否已授权。");
+                ui.add_space(6.0);
+                for item in [
+                    "辅助功能（Accessibility）",
+                    "截屏 / 屏幕录制",
+                    "模拟键盘鼠标输入",
+                    "后台运行",
+                ] {
+                    ui.label(format!("· {item}"));
+                }
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(
+                        "未授权时电脑操控不可用。远程触控不会因为这一步自动打开。真 observe/click/scroll 烟测是后续里程碑。",
+                    )
+                    .weak()
+                    .size(11.0),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new("已了解，启用")
+                                .fill(egui::Color32::from_rgb(46, 140, 90)),
+                        )
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if confirm {
+            result.enable = Some(preset_packages::computer_use_name().to_owned());
+            result.wizard_ok = true;
+            state.computer_wizard = false;
+        } else if close {
+            state.computer_wizard = false;
+        }
+    }
     result
 }
 
@@ -1391,6 +1618,21 @@ mod tests {
         ] {
             assert!(names.iter().any(|n| n == expected), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn featured_contains_control_packages_with_pinned_versions() {
+        let pkgs = featured_packages();
+        for expected in [
+            "pi-browser-use",
+            "pi-chrome-connector",
+            "@injaneity/pi-computer-use",
+        ] {
+            let pkg = pkgs.iter().find(|p| p.name == expected).expect(expected);
+            assert!(!pkg.version.is_empty(), "{expected} missing pin");
+        }
+        let slim = pkgs.iter().find(|p| p.name == "pi-marketplace").unwrap();
+        assert_eq!(slim.version, "0.1.3");
     }
 
     #[test]
