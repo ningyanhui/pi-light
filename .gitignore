@@ -10,6 +10,11 @@ desktop-rust/sidecar/pi/*.zip
 desktop-rust/sidecar/pi/*.tar.gz
 desktop-rust/sidecar/pi/node_modules/
 
+# cloudflared (downloaded at build/release or first-run; lockfile lives in scripts/)
+desktop-rust/sidecar/relay/cloudflared
+desktop-rust/sidecar/relay/cloudflared.exe
+desktop-rust/sidecar/relay/*.download
+
 # Preset Pi packages (tarball extract + node_modules; lockfile lives in scripts/)
 sidecar/pi-packages/*
 !sidecar/pi-packages/README.md

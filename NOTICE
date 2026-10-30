@@ -157,7 +157,43 @@ in the preset tree; they remain market-optional.
 These packages may execute code inside Pi. See README section 6.
 
 ========================================================================
+Third-Party Component Notice: cloudflared (Cloudflare Tunnel)
+========================================================================
+
+This product may download or, in the official Windows portable zip,
+redistribute cloudflared, the Cloudflare Tunnel client.
+
+  cloudflared
+  Copyright (c) Cloudflare, Inc.
+  Repository:   https://github.com/cloudflare/cloudflared
+  License:      Apache License 2.0
+  Version:      2026.10.6
+  Sidecar path: {exe_dir}/sidecar/relay/
+
+  Windows amd64 artifact:
+    File:       cloudflared-windows-amd64.exe
+    URL:        https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-windows-amd64.exe
+    SHA-256:    d521b3bf68982165f0d06d76732f22d9a105ef057ff3ae4c0986f3a23190950f
+    Install as: sidecar/relay/cloudflared.exe
+
+  Linux amd64 artifact (source / first-run download):
+    File:       cloudflared-linux-amd64
+    URL:        https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64
+    SHA-256:    1d356dac769d0dbf62ebe588c4034824bbff98d5790c2f844cc99e0e2f57462d
+    Install as: sidecar/relay/cloudflared
+
+The binary is not committed to git. The Release pipeline and the
+in-app first-run download both verify SHA-256 against
+scripts/cloudflared.lock.json before installing. A mismatch fails the
+release and leaves no unverified file on disk.
+
+cloudflared remains under Apache-2.0. Pi-light does not require a
+Cloudflare account for the default quick tunnel (trycloudflare); named
+tunnels and other relays may. See docs/remote-acceptance.md.
+
+========================================================================
 See ACKNOWLEDGEMENTS.md for full attribution and inspiration credits.
 See THIRD-PARTY-NOTICES for complete dependency license inventory.
 See docs/preset-packages.md for the human-readable pin table.
+See scripts/cloudflared.lock.json for the cloudflared pin.
 ========================================================================

@@ -68,8 +68,47 @@ License:      MIT OR Apache-2.0
 
 Used by the extension marketplace to query the npm registry
 (keywords:pi-package), the same catalog source as pi.dev/packages.
+Also used to first-run download cloudflared when it is not bundled.
 
 This product uses the Apache-2.0 terms of ureq's dual license.
+
+------------------------------------------------------------------------
+Component: qrcode
+------------------------------------------------------------------------
+Repository:   https://github.com/kennytm/qrcode-rust
+Version:      0.14 (pinned in desktop-rust/Cargo.toml)
+License:      MIT OR Apache-2.0
+
+Used to render pairing QR codes in the remote-access settings tab.
+This product uses the Apache-2.0 terms.
+
+------------------------------------------------------------------------
+Component: sha2
+------------------------------------------------------------------------
+Repository:   https://github.com/RustCrypto/hashes
+Version:      0.10 (pinned in desktop-rust/Cargo.toml)
+License:      MIT OR Apache-2.0
+
+Used to verify cloudflared SHA-256 and to hash companion device tokens.
+
+------------------------------------------------------------------------
+Component: getrandom
+------------------------------------------------------------------------
+Repository:   https://github.com/rust-random/getrandom
+Version:      0.2 (pinned in desktop-rust/Cargo.toml)
+License:      MIT OR Apache-2.0
+
+Used to generate pairing codes and device tokens.
+
+------------------------------------------------------------------------
+Component: cloudflared
+------------------------------------------------------------------------
+Repository:   https://github.com/cloudflare/cloudflared
+Version:      2026.10.6 (pinned in scripts/cloudflared.lock.json)
+License:      Apache-2.0
+
+Optional sidecar for Cloudflare Tunnel. SHA-256 of the GitHub release
+assets is recorded in NOTICE. The binary is not stored in git.
 
 ------------------------------------------------------------------------
 Rust Standard Library and Toolchain

@@ -2,10 +2,10 @@
 
 Kotlin + Jetpack Compose 的 **debug 占位 APK**：首页说明占位与诚实限制，设置页为 stub。
 
-M6′ **维持 Option C**。桌面 Host（`desktop-rust` egui + 本机 `pi --mode rpc`）没有长出 Android 真 Host 所需的共享面（无 LAN / HTTP 配对、无 Host API），因此不升 Option A，也不做 Option B 内嵌 Pi。完整会话请用 Windows `desktop-rust/` 客户端。决策见 [`docs/architecture.md`](../docs/architecture.md)。
+桌面 **M5** 已提供本机配对网关与 Cloudflare Tunnel 钩子（见 [`docs/companion-protocol.md`](../docs/companion-protocol.md)）。本目录 APK **仍为 Option C 占位**：不扫码、不连中继、不内嵌 Pi。companion 真连聊天是后续 **M6-lite**。完整会话请用 Windows `desktop-rust/`。决策见 [`docs/architecture.md`](../docs/architecture.md)。
 
-- **不内嵌** Pi runtime（非 Option B）
-- **不实现** Host / LAN 配对（非 Option A）
+- **不内嵌** Pi runtime
+- **不实现** 扫码配对或远程聊天（留给 M6）
 - Release 流水线只跑 `assembleDebug`
 
 ## 本地构建 debug APK

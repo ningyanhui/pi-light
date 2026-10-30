@@ -15,6 +15,7 @@ use pi_light::{
     pi_path::{self, PiProbe},
     pi_rpc::{self, PiRpcClient, PiRpcEvent},
     provider_catalog,
+    remote_access::RemoteAccessState,
     session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
     session_ref::{self, RefCandidate, RefChip, RefChooserState},
     session_store::{self, RpcAttach},
@@ -65,6 +66,8 @@ struct PiLightApp {
     state_path: Option<PathBuf>,
     persist_dirty: bool,
     persist_retry_at: Option<std::time::Instant>,
+    /// v3 M5：远程访问（配对 / Cloudflare Tunnel / 设备列表）。
+    remote: RemoteAccessState,
 }
 
 impl PiLightApp {
@@ -113,6 +116,7 @@ impl PiLightApp {
             state_path,
             persist_dirty: false,
             persist_retry_at: None,
+            remote: RemoteAccessState::load_default(),
         };
         app.try_spawn_rpc();
         app
@@ -461,6 +465,9 @@ impl eframe::App for PiLightApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_rpc_events();
         self.update_ref_chooser();
+        if self.remote.poll() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
 
         // M5′: 键盘导航（在面板渲染前消费按键，避免被 TextEdit 截获）
         if self.ref_chooser.active {
@@ -560,6 +567,7 @@ impl eframe::App for PiLightApp {
             self.rpc_client.is_some(),
             self.pi_probe.is_ready(),
             self.pi_probe.path(),
+            &mut self.remote,
         );
         if let Some(req) = panel_ret.set_model_request {
             self.handle_set_model_request(req);

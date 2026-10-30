@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "name": "cloudflared",
+  "version": "2026.10.6",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/cloudflare/cloudflared",
+  "notes": "Official cloudflared binaries. SHA-256 is of the GitHub release asset. Do not commit the binary. Release and first-run download must fail on mismatch. Official Windows portable zip fetches windows-amd64; source builds may first-run download the current platform.",
+  "artifacts": {
+    "windows-amd64": {
+      "file": "cloudflared-windows-amd64.exe",
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-windows-amd64.exe",
+      "sha256": "d521b3bf68982165f0d06d76732f22d9a105ef057ff3ae4c0986f3a23190950f",
+      "install_name": "cloudflared.exe"
+    },
+    "linux-amd64": {
+      "file": "cloudflared-linux-amd64",
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64",
+      "sha256": "1d356dac769d0dbf62ebe588c4034824bbff98d5790c2f844cc99e0e2f57462d",
+      "install_name": "cloudflared"
+    }
+  }
+}
