@@ -1,6 +1,6 @@
 [package]
 name = "pi-light"
-version = "0.2.2"
+version = "0.3.0-alpha"
 edition = "2021"
 description = "pi-light — 内嵌 Pi 的轻量 Rust Shell (egui/eframe)"
 license = "Apache-2.0"

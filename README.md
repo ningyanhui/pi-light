@@ -9,7 +9,7 @@
 [![Android APK](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-当前版本：**v0.2.2**（Windows 便携包为主路径）。
+当前版本：**v0.3.0-alpha**（Windows 便携包为主路径；GitHub Release 标为 prerelease）。
 
 ---
 
@@ -17,10 +17,10 @@
 
 1. [它是什么](#1-它是什么)
 2. [安装与运行](#2-安装与运行)
-3. [已交付能力](#3-已交付能力)
+3. [能做什么 / 不能做什么](#3-能做什么--不能做什么)
 4. [从源码构建](#4-从源码构建)
 5. [架构要点](#5-架构要点)
-6. [诚实说明](#6-诚实说明)
+6. [已知限制](#6-已知限制)
 7. [许可](#7-许可)
 8. [文档索引](#8-文档索引)
 
@@ -90,9 +90,9 @@ cargo run
 
 ---
 
-## 3. 已交付能力
+## 3. 能做什么 / 不能做什么
 
-相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 补上系统 CJK 字体、应用内 API 密钥和会话恢复。v0.2.2 把第一次打开改成模型与密钥引导。v0.3 起 M0：设置改为左下角齿轮打开的右侧抽屉，七 Tab（模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用），模型页为内置厂商 + 自定义 API，主聊天顶栏有模型下拉。M1：扩展市场可浏览 / 搜索 / 按类型筛选 pi.dev/packages（npm `pi-package`），详情卡确认后经 sidecar 执行 `pi install npm:…`，可列出并卸载已安装包，装后提示重启 sidecar 或 `/reload`。M2：正式便携包预置 Slim 五包（marketplace / mcp-adapter / web-access / memory / subagents），首次打开写入本地 path，不必手敲安装；浏览器 / 电脑三包预置文件默认关闭，市场页可一键启用（电脑操控先过权限向导壳）。M5：远程访问页可生成配对码/二维码、启动或下载 Cloudflare Tunnel（cloudflared，SHA 钉定），并维护可撤销的已授权设备列表。M6-lite：Android companion 可扫码或输码经公网中继配对，并完成一通写入桌面当前 Pi 会话的远程聊天。
+**v0.3.0-alpha** 覆盖两周保底 **M0+M1+M2+M5+M6-lite**：设置抽屉远程页、扩展市场、Slim 五包预置、桌面 Cloudflare Tunnel 配对，以及 Android companion 公网一通远程聊。在此之前，v0.2.0 覆盖 M1′–M5′、便携 bash 与多会话 / 工具卡 / 重试 / cwd；v0.2.1 补上系统 CJK 字体、应用内 API 密钥和会话恢复；v0.2.2 把第一次打开改成模型与密钥引导。
 
 | 能力 | 说明 |
 |------|------|
@@ -120,7 +120,16 @@ cargo run
 | Trace / Token | 底部用量条；工具 Trace 列表 |
 | 便携 bash | 便携包注入 MinGit `PATH`，Pi 跑 shell 命令时使用 |
 
-Android 见第 6 节：M6-lite companion（配对 + 一通远程聊）。
+### 不能做什么（本 alpha 明确不含）
+
+| 项 | 说明 |
+|----|------|
+| M7 三档远程桌面 | 浏览 / 触控 / 全屏未开放。companion 上的「远程桌面」入口标为即将推出 |
+| M3/M4 真能力闸门 | 浏览器五步真操控、电脑 observe/click/scroll 烟测未过。市场页仅有一键启用入口与权限向导壳 |
+| 安装包 / 签名 | 无 NSIS/MSI；Windows zip **无 Authenticode**；Android 是 **debug APK** |
+| 运行时 | **不捆绑 Node.js**；无双后端、不捆绑 dsh；主路径 `desktop-rust/`（非 Tauri `desktop/`） |
+
+Android 见第 6 节：M6-lite companion（配对 + 一通远程聊），不是 Option C 占位壳。
 
 ---
 
@@ -180,11 +189,11 @@ desktop-rust/src/
 
 ---
 
-## 6. 诚实说明
+## 6. 已知限制
 
 - **API 密钥**：设置抽屉的「模型」页可以把提供商 API 密钥写入 Pi 的 `auth.json`（`type: api_key`）。自定义 API 的地址与模型目录写入 `models.json`，密钥仍进 `auth.json`。保存后输入框清空，已存密钥只显示固定掩码 `••••••••`，界面不回显明文，也不在错误信息里打印密钥。OAuth 登录不会被这个表单覆盖。环境变量和 Pi 的 `/login` 仍然可用。文件权限在 Unix 上为 `0600`。
 - **远程访问**：设置抽屉「远程访问」可打开「允许手机远程」，生成本机 loopback 网关，并用 **Cloudflare Tunnel（默认，临时 trycloudflare）** 引出公网 HTTPS。配对码 6 位、TTL 10 分钟，二维码携带配对码与中继 URL；手机端 `POST /v1/pair/claim` 成功后进入已授权设备，可撤销。中继依赖本机网络与公网可达性。临时隧道**不需要** Cloudflare 账号，但主机名每次启动都会变；命名隧道和 Tailscale 需要各自账号。**同一局域网并不能代替公网中继**，不能把「连上家里 Wi‑Fi」当成已满足蜂窝网访问。官方 Windows 包可打入校验过 SHA 的 cloudflared；源码构建可在本页首次下载（失败不留未校验文件）。已授权手机可 `POST /v1/chat` 写入桌面当前 Pi 会话。远程桌面三档（浏览 / 触控 / 全屏）尚未开放。流程见 [`docs/remote-acceptance.md`](./docs/remote-acceptance.md)。
-- **电脑操控**：后续若启用电脑操控扩展，需要操作系统辅助功能 / 截屏 / 模拟输入等权限；未授权时不可用。本里程碑仅在远程页留下说明。
+- **电脑操控**：市场页可一键启用 `@injaneity/pi-computer-use`（预置文件默认关）。需要操作系统辅助功能 / 截屏 / 模拟输入等权限；未授权时不可用。本 alpha **没有**过 observe/click/scroll 真烟测闸门。
 - **第三方 Pi 包**：扩展市场安装的包可执行代码。浏览来自 npm 上带 `pi-package` 关键词的包（与 [pi.dev/packages](https://pi.dev/packages) 同源）。市场安装必须在详情卡点「确认安装 npm:…」后才会调用 sidecar `pi install`；卸载同样要确认。审计目前只看注册表元数据（许可证、关键词、install 脚本），**不**下载 tarball 扫源码，不能发现混淆代码。正式便携包会解压 Slim 五包到 `sidecar/pi-packages/`，首次打开把本地 path 写入 `settings.json`，无需手敲 npm。`pi-lens` 与 `billion-context` **不是**默认包。浏览器 / 电脑三包预置文件默认关闭；电脑操控还要过权限向导壳，未授权时不可用。钉版本与 tarball SHA-256 见 [`NOTICE`](./NOTICE) 与 [`docs/preset-packages.md`](./docs/preset-packages.md)。
 - **会话持久化**：壳把会话列表、消息、输入草稿、工作目录和 Pi 会话文件路径写到 `~/.pi-light/sessions.json`（可用 `PI_LIGHT_STATE_PATH` 改位置）。下次启动读回。若对应会话文件还在，则对 Pi 发 `switch_session`；否则保留壳内记录并 `new_session`。没有会话树 / fork。`#` 引用仍然可用。
 - **中文**：不捆绑字体。Windows 优先加载系统微软雅黑（`msyh.ttc` / `msyh.ttf`）作为 egui 回退。可用 `PI_LIGHT_CJK_FONT` 指定字体文件。

@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.2 + v3 M0–M2 + M5 桌面远程 + **M6-lite companion 聊天** — 右设置抽屉七 Tab；市场 + Slim 预置；远程访问：配对码/二维码、Cloudflare Tunnel、已授权设备；Android 扫码/输码后一通远程聊
+> **当前版本**：v0.3.0-alpha — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊。不含 M7、不含 M3/M4 真能力闸门
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -233,7 +233,8 @@ pi-light-windows-x64/
 | **v3 M1** | 扩展市场浏览 / 搜索 / 类型滤镜；确认后 sidecar `pi install`；list/remove；`/reload` 提示 | ✅ 已合入 |
 | **v3 M2** | Slim 五包预置进 `sidecar/pi-packages/`；NOTICE tarball SHA；操控三包默认关 + 一键启用壳 | ✅ 已合入 |
 | **v3 M5** | 远程访问页：配对码/二维码、Cloudflare Tunnel 状态、已授权设备；本机 claim 钩子 | ✅ 已合入 |
-| **v3 M6-lite** | Android companion：扫码/输码经公网中继配对；`/v1/chat` 写入桌面当前 Pi 会话 | 本 PR |
+| **v3 M6-lite** | Android companion：扫码/输码经公网中继配对；`/v1/chat` 写入桌面当前 Pi 会话 | ✅ 已合入 |
+| **v0.3.0-alpha** | M0+M1+M2+M5+M6-lite 预发布；不含 M7 三档桌面、不含 M3/M4 真能力闸门 | 本发版 |
 
 ---
 
@@ -325,4 +326,4 @@ do_send():
 
 ---
 
-*最后更新：v3 M0（设置抽屉七 Tab、内置厂商 + 自定义 API、主聊天模型下拉）*
+*最后更新：v0.3.0-alpha（R0-alpha 发版准备：M0+M1+M2+M5+M6-lite）*

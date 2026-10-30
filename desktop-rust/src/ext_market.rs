@@ -21,7 +21,7 @@ use crate::preset_packages;
 const NPM_SEARCH: &str = "https://registry.npmjs.org/-/v1/search";
 const NPM_REGISTRY: &str = "https://registry.npmjs.org";
 const CATALOG_URL: &str = "https://pi.dev/packages";
-const USER_AGENT: &str = "pi-light/0.2.2 (+https://github.com/ningyanhui/pi-light)";
+const USER_AGENT: &str = "pi-light/0.3.0-alpha (+https://github.com/ningyanhui/pi-light)";
 
 /// 原型「精选扩展」名单。Slim 五包进发行树；lens / billion-context 仅市场可选。
 const FEATURED: &[FeaturedMeta] = &[
