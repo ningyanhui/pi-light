@@ -60,6 +60,18 @@ License:      MIT OR Apache-2.0
 Same copyright and terms as egui above.
 
 ------------------------------------------------------------------------
+Component: ureq
+------------------------------------------------------------------------
+Repository:   https://github.com/algesten/ureq
+Version:      2.12 (pinned in desktop-rust/Cargo.toml)
+License:      MIT OR Apache-2.0
+
+Used by the extension marketplace to query the npm registry
+(keywords:pi-package), the same catalog source as pi.dev/packages.
+
+This product uses the Apache-2.0 terms of ureq's dual license.
+
+------------------------------------------------------------------------
 Rust Standard Library and Toolchain
 ------------------------------------------------------------------------
 Repository:   https://github.com/rust-lang/rust
