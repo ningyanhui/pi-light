@@ -9,6 +9,7 @@ pub mod fonts;
 pub mod onboarding;
 pub mod pi_path;
 pub mod pi_rpc;
+pub mod provider_catalog;
 pub mod session_insights;
 pub mod session_ref;
 pub mod session_store;

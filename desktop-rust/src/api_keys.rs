@@ -23,6 +23,43 @@ const PROVIDERS: &[(&str, &str, &str)] = &[
     ("groq", "Groq", "GROQ_API_KEY"),
 ];
 
+/// 内置厂商目录：`(id, 显示名, 环境变量)`。
+pub fn builtin_providers() -> &'static [(&'static str, &'static str, &'static str)] {
+    PROVIDERS
+}
+
+pub fn is_builtin_provider(provider: &str) -> bool {
+    PROVIDERS.iter().any(|(id, _, _)| *id == provider)
+}
+
+/// 内置或自定义提供商 ID：字母开头，仅字母数字、短横线、下划线，最长 64。
+pub fn validate_provider_id(provider: &str) -> Result<(), String> {
+    if provider.is_empty() {
+        return Err("Provider ID 不能为空。".to_owned());
+    }
+    if provider.len() > 64 {
+        return Err("Provider ID 过长。".to_owned());
+    }
+    let mut chars = provider.chars();
+    let Some(first) = chars.next() else {
+        return Err("Provider ID 不能为空。".to_owned());
+    };
+    if !first.is_ascii_lowercase() {
+        return Err("Provider ID 须以小写字母开头。".to_owned());
+    }
+    if !provider
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    {
+        return Err("Provider ID 只能用小写字母、数字、短横线和下划线。".to_owned());
+    }
+    Ok(())
+}
+
+fn is_writable_provider_id(provider: &str) -> bool {
+    validate_provider_id(provider).is_ok()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyPresence {
     Absent,
@@ -245,6 +282,14 @@ fn apply_action(
     }
 }
 
+pub fn clear_row_at(
+    form: &mut ApiKeyForm,
+    index: usize,
+    auth_path: Option<&Path>,
+) -> Result<(), String> {
+    clear_row(form, index, auth_path)
+}
+
 fn save_row(form: &mut ApiKeyForm, index: usize, auth_path: Option<&Path>) -> Result<(), String> {
     let row = form
         .rows
@@ -283,8 +328,8 @@ fn clear_row(form: &mut ApiKeyForm, index: usize, auth_path: Option<&Path>) -> R
 
 pub fn upsert_api_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
     validate_literal_key(key)?;
-    if !is_known_provider(provider) {
-        return Err("未知提供商，未写入。".to_owned());
+    if !is_writable_provider_id(provider) {
+        return Err("提供商 ID 不合法，未写入。".to_owned());
     }
     let mut root = read_root(path)?;
     if matches!(
@@ -309,8 +354,8 @@ pub fn upsert_api_key(path: &Path, provider: &str, key: &str) -> Result<(), Stri
 }
 
 pub fn delete_api_key(path: &Path, provider: &str) -> Result<(), String> {
-    if !is_known_provider(provider) {
-        return Err("未知提供商，未改写。".to_owned());
+    if !is_writable_provider_id(provider) {
+        return Err("提供商 ID 不合法，未改写。".to_owned());
     }
     let mut root = read_root(path)?;
     if matches!(
@@ -339,10 +384,6 @@ fn validate_literal_key(key: &str) -> Result<(), String> {
         return Err("密钥不能包含换行，未写入。".to_owned());
     }
     Ok(())
-}
-
-fn is_known_provider(provider: &str) -> bool {
-    PROVIDERS.iter().any(|(id, _, _)| *id == provider)
 }
 
 fn scan_presence(path: &Path) -> std::collections::BTreeMap<String, KeyPresence> {
@@ -522,8 +563,30 @@ mod tests {
         let path = dir.path().join("missing").join("auth.json");
         assert!(upsert_api_key(&path, "openai", "!echo hi").is_err());
         assert!(upsert_api_key(&path, "openai", "sk\nleak").is_err());
-        assert!(upsert_api_key(&path, "not-a-provider", "sk-abc").is_err());
+        assert!(upsert_api_key(&path, "not a provider", "sk-abc").is_err());
+        assert!(upsert_api_key(&path, "OpenAI", "sk-abc").is_err());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn upsert_allows_custom_provider_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        upsert_api_key(&path, "my-gateway", "sk-custom-key").unwrap();
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["my-gateway"]["type"], "api_key");
+        assert_eq!(value["my-gateway"]["key"], "sk-custom-key");
+    }
+
+    #[test]
+    fn validate_provider_id_rules() {
+        assert!(validate_provider_id("openai").is_ok());
+        assert!(validate_provider_id("my-gateway").is_ok());
+        assert!(validate_provider_id("1abc").is_err());
+        assert!(validate_provider_id("a/b").is_err());
+        assert!(validate_provider_id("OpenAI").is_err());
+        assert!(is_builtin_provider("anthropic"));
+        assert!(!is_builtin_provider("my-gateway"));
     }
 
     #[test]
