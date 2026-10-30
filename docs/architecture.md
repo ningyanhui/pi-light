@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.2 — 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹；M6′ 维持 Android Option C
+> **当前版本**：v0.2.2 + v3 M0 IA — 右设置抽屉七 Tab、内置厂商 + 自定义 API、主聊天模型下拉；Skills/MCP/记忆沿用；扩展市场与远程访问为入口壳
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -23,13 +23,14 @@
 │  │ 恢复/新建 │ │  流式聊天 + 工具卡片 + Token/Trace                 │ │
 │  │ 工作目录  │ │  输入框 + 发送 / 停止 / 重试                       │ │
 │  └──────────┘ └──────────────────────────────────────────────────┘ │
-│  顶栏：标题 + 状态灯 + 当前模型 + 目录名                             │
-│  底栏左下角：⚙ 设置（对话框：模型与密钥 / Skills / MCP / 记忆 / 高级）│
+│  顶栏：标题 + 状态灯 + 模型下拉 + 目录名                             │
+│  底栏左下角：⚙ 设置（右侧抽屉：模型 / Skills / MCP / 扩展市场 /     │
+│                      记忆 / 远程访问 / 通用）                         │
 │  底栏右侧：重新探测                                                  │
 │                                                                       │
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
-│  admin_panel 模块：设置对话框（模型与密钥 / Skills / MCP / 记忆 / 高级）   │
+│  admin_panel 模块：设置抽屉（七 Tab）+ provider_catalog（厂商/自定义 API） │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ std::process::Command（stdin/stdout piped）
                              │ 后台线程读 stdout → mpsc channel
@@ -66,9 +67,10 @@ pi-light/
 │   │   ├── chat.rs               # 聊天状态机（M2′）
 │   │   ├── session_store.rs      # 会话历史落盘与启动恢复
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
-│   │   ├── admin_panel.rs        # 管理面（M4′）
+│   │   ├── admin_panel.rs        # 设置抽屉（七 Tab）
 │   │   ├── api_keys.rs           # 应用内 API 密钥（写入 auth.json，保存后掩码）
-│   │   ├── onboarding.rs         # 首次打开：模型引导 / 缺程序说明
+│   │   ├── provider_catalog.rs   # 内置厂商 + 自定义 API / models.json
+│   │   ├── onboarding.rs         # 首次打开：只引导配置模型与密钥
 │   │   └── bin/mock_pi.rs        # 集成测试用 Pi 替身
 │   └── tests/rpc_smoke.rs        # 集成烟测
 ├── android/                      # Option C 占位壳
@@ -94,10 +96,11 @@ pi-light/
 | `chat` | 聊天状态机 + `SessionHub`（多会话）；重试上一条 prompt；可导出快照 |
 | `session_store` | 把会话列表、消息、草稿、工作目录写入 `~/.pi-light/sessions.json`，启动时读回 |
 | `fonts` | 系统 CJK 字体作为 egui 回退；Windows 优先 `msyh.ttc` |
-| `api_keys` | 设置页写入 Pi `auth.json` 的 API 密钥；保存后掩码，不回显明文 |
+| `api_keys` | 设置页写入 Pi `auth.json` 的 API 密钥；保存后掩码，不回显明文；允许自定义 provider id |
+| `provider_catalog` | 内置厂商卡片 + 自定义 API 表单；读写 `models.json` 的 `providers` 对象 |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace（含 args 预览） |
-| `admin_panel` | 左下角对话框：模型与密钥 / Skills / MCP / 记忆 / 高级。密钥写入 `auth.json` 后只显示掩码 |
-| `onboarding` | 首次打开主路径：Pi 就绪时进入模型与密钥；未就绪时安装说明保持折叠 |
+| `admin_panel` | 左下角齿轮打开右侧抽屉。Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用。密钥写入 `auth.json` 后只显示掩码 |
+| `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
@@ -151,7 +154,7 @@ pi-light-windows-x64/
 |-----------|------|
 | `settings.json` | defaultProvider / defaultModel 读写；`skills` 数组排除列表读写（M4′+） |
 | `mcp.json` | MCP 服务列表；官方 `enabled` 字段读写，兼容旧 `disabled`（M4′+） |
-| `models.json` | 自定义端点（只读展示） |
+| `models.json` | 自定义 API 提供商（`providers` 对象：baseUrl / api / models）；M0 可写 |
 | `auth.json` | API 凭据。设置页可写入 `api_key`；界面不读回明文。OAuth 条目不在此覆盖 |
 | `skills/` | 用户级 skills 目录（M4′+ 发现 + settings 推导启用状态） |
 | `AGENTS.md` / `CLAUDE.md` | 用户级记忆指令（M4′+ 摘要展示 + 内联编辑写回） |
@@ -193,7 +196,8 @@ pi-light-windows-x64/
 | **R0 / v0.1.0** | Release（Win 便携 zip + 签名策略） | ✅ 已发布 |
 | **v0.2.0** | 文档换轨 + 便携 bash + Claude 对标缺口合入后的发版 | ✅ 已发布 |
 | **v0.2.1** | 中文显示、应用内密钥、会话恢复、设置页顺序 | ✅ 已发布 |
-| **v0.2.2** | 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹 | 本发版 |
+| **v0.2.2** | 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹 | ✅ 已发布 |
+| **v3 M0** | 设置抽屉七 Tab；厂商 + 自定义 API；主聊天模型下拉；firstrun 只配密钥；扩展市场/远程为壳 | 进行中 |
 
 ---
 
@@ -217,7 +221,7 @@ Option A 需要的最小面（LAN / HTTP 配对、可被手机连上的 Host API
 
 | 类目 | 限制说明 |
 |------|---------|
-| API Key | 设置对话框的「模型与密钥」可写入 `auth.json` 的字面 API 密钥。保存后只显示固定掩码，不回显明文，错误信息也不包含密钥。OAuth 不在此覆盖。环境变量与 `/login` 仍可用 |
+| API Key | 设置抽屉的「模型」页可写入 `auth.json` 的字面 API 密钥。保存后只显示固定掩码，不回显明文，错误信息也不包含密钥。OAuth 不在此覆盖。环境变量与 `/login` 仍可用 |
 | 会话持久化 | `~/.pi-light/sessions.json` 保存壳内会话并在启动时恢复。Pi 会话文件仍在则 `switch_session`，否则 `new_session` 并保留壳内记录。无会话树 / fork |
 | Token 用量 | 依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」 |
 
@@ -274,4 +278,4 @@ do_send():
 
 ---
 
-*最后更新：v0.2.2（首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹）*
+*最后更新：v3 M0（设置抽屉七 Tab、内置厂商 + 自定义 API、主聊天模型下拉）*

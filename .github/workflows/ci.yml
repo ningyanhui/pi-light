@@ -121,3 +121,25 @@ jobs:
       - name: cargo fmt --check
         working-directory: desktop-rust
         run: cargo fmt --check
+
+  # -----------------------------------------------------------------------
+  # 文案禁词（远程桌面不得使用已废弃命名）
+  # -----------------------------------------------------------------------
+  forbidden-words:
+    name: forbidden-words
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: reject banned remote-desktop wording
+        run: |
+          set -euo pipefail
+          # 禁词拆开写，避免本文件命中扫描。
+          needle="$(printf '%s%s' $'\u6e38\u620f' $'\u6a21\u5f0f')"
+          if grep -RIn --exclude-dir=.git --exclude-dir=target \
+            --include='*.rs' --include='*.md' --include='*.yml' --include='*.toml' \
+            --include='*.json' --include='*.kt' --include='*.xml' \
+            -- "$needle" .; then
+            echo "forbidden phrase found"
+            exit 1
+          fi
+          echo "ok: no banned remote-desktop wording"

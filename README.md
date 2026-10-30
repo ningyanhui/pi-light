@@ -61,11 +61,12 @@ SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 为准。Release 流水线校验
 
 ### 第一次打开
 
-官方便携包已经带好 Pi。第一次运行的主界面是**模型与 API 密钥**，不是安装步骤。
+官方便携包已经带好 Pi。第一次运行的主界面是**配置模型 / API 密钥**，不是安装步骤，也没有把指定 Pi 程序的方式当作默认路径。
 
-- 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，会打开设置对话框的「模型与密钥」。确认后再点「进入对话」。
-- 在「模型与密钥」里填写提供商 API 密钥。保存后写入 Pi 的 `auth.json`，输入框清空，已存密钥只显示掩码 `••••••••`，不回显明文。环境变量和 `/login` 仍然可用。
-- 设置入口在窗口**左下角**。对话框里有模型与密钥、Skills、MCP、记忆。自己指定 Pi 程序（环境变量、sidecar 目录、PATH）在「高级」页，不是第一屏。
+- 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，左侧欢迎「配置模型」，右侧打开设置抽屉的「模型」页。确认后可点「进入对话」。
+- 在「模型」页从内置厂商列表或「自定义模型 API」填写密钥与端点。保存后写入 Pi 的 `auth.json`（自定义端点另写 `models.json`），输入框清空，已存密钥只显示掩码 `••••••••`，不回显明文。OAuth 登录不会被覆盖。环境变量和 `/login` 仍然可用。
+- 设置入口在窗口**左下角**齿轮，打开**右侧抽屉**。七个 Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用。自己指定 Pi 程序（环境变量、sidecar 目录、PATH）收在「通用」页的折叠高级区，不是第一屏。
+- 主聊天顶栏有模型下拉，可选当前 Pi 上报的可用模型。
 - 若这次没找到 Pi：主界面说明便携包应已包含它，并提供「重新探测」。
 
 ### Pi 程序位置（高级）
@@ -89,7 +90,7 @@ cargo run
 
 ## 3. 已交付能力
 
-相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 补上系统 CJK 字体、应用内 API 密钥和会话恢复。v0.2.2 把第一次打开改成模型与密钥引导，设置改为左下角对话框，Skills / MCP 以卡片列出，主界面使用自绘闪电底纹。
+相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 补上系统 CJK 字体、应用内 API 密钥和会话恢复。v0.2.2 把第一次打开改成模型与密钥引导。v0.3 起 M0：设置改为左下角齿轮打开的右侧抽屉，七 Tab（模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用），模型页为内置厂商 + 自定义 API，主聊天顶栏有模型下拉。
 
 | 能力 | 说明 |
 |------|------|
@@ -99,8 +100,9 @@ cargo run
 | 工具卡片 | 名称 / 状态 / 耗时 / 参数预览（`tool_execution_*`） |
 | 停止 / 重试 | 生成中停止；空闲时可重发上一条 prompt |
 | `#` 引用 | 输入 `#` 引用当前会话消息或本机历史会话文件，chip 拼入 prompt |
-| 设置 | 左下角齿轮打开对话框：模型与密钥、Skills、MCP、记忆。首次打开优先模型与密钥；Pi 程序位置在「高级」 |
-| API 密钥 | 「模型与密钥」写入 Pi `auth.json`；保存后输入框清空，已存密钥只显示掩码 `••••••••` |
+| 设置抽屉 | 左下角齿轮打开右侧抽屉。Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用。首次打开优先「模型」；Pi 程序位置在「通用」折叠区 |
+| 模型 | 默认模型下拉；内置厂商卡片 + 自定义 API（Provider ID / Base URL / 协议 / 模型目录）；主聊天顶栏同步下拉 |
+| API 密钥 | 「模型」页写入 Pi `auth.json`；自定义端点写入 `models.json`；保存后输入框清空，已存密钥只显示掩码 `••••••••` |
 | 会话恢复 | 会话列表与消息写入 `~/.pi-light/sessions.json`，下次启动读回；Pi 会话文件仍在则 `switch_session` |
 | 中文显示 | Windows 用系统微软雅黑等 CJK 字体作为 egui 回退，避免方框；不捆绑字体文件 |
 | Skills | 卡片列表；开关写回 `settings.json` 的 `skills` 数组；改后重启 sidecar |
@@ -153,9 +155,10 @@ desktop-rust/src/
 ├── chat.rs              # 聊天状态机 + SessionHub
 ├── session_store.rs     # 会话历史落盘与启动恢复
 ├── session_insights.rs  # Token / Trace
-├── admin_panel.rs       # 设置对话框
+├── admin_panel.rs       # 设置抽屉（七 Tab）
 ├── api_keys.rs          # 应用内 API 密钥（掩码，不回显明文）
-├── onboarding.rs        # 首次打开：模型与密钥引导
+├── provider_catalog.rs  # 内置厂商 + 自定义 API / models.json
+├── onboarding.rs        # 首次打开：只引导配置模型与密钥
 ├── session_ref.rs       # # 引用
 └── bin/mock_pi.rs       # 测试替身
 ```
@@ -166,10 +169,13 @@ desktop-rust/src/
 
 ## 6. 诚实说明
 
-- **API 密钥**：设置对话框的「模型与密钥」可以把提供商 API 密钥写入 Pi 的 `auth.json`（`type: api_key`）。保存后输入框清空，已存密钥只显示固定掩码 `••••••••`，界面不回显明文，也不在错误信息里打印密钥。OAuth 登录不会被这个表单覆盖。环境变量和 Pi 的 `/login` 仍然可用。文件权限在 Unix 上为 `0600`。
+- **API 密钥**：设置抽屉的「模型」页可以把提供商 API 密钥写入 Pi 的 `auth.json`（`type: api_key`）。自定义 API 的地址与模型目录写入 `models.json`，密钥仍进 `auth.json`。保存后输入框清空，已存密钥只显示固定掩码 `••••••••`，界面不回显明文，也不在错误信息里打印密钥。OAuth 登录不会被这个表单覆盖。环境变量和 Pi 的 `/login` 仍然可用。文件权限在 Unix 上为 `0600`。
+- **远程访问**：抽屉已预留「远程访问」页。公网中继（默认计划 Cloudflare Tunnel，可选 Tailscale / 自建）与手机配对将在后续里程碑提供。中继依赖网络与账号，不能假定同一局域网即可用。本里程碑不提供真实配对或中继。
+- **电脑操控**：后续若启用电脑操控扩展，需要操作系统辅助功能 / 截屏 / 模拟输入等权限；未授权时不可用。本里程碑仅在远程页留下说明。
+- **第三方 Pi 包**：扩展市场安装的包可执行代码，安装前应阅读权限与审计说明并确认。本里程碑「扩展市场」仅为入口壳，不执行浏览或 `pi install`。
 - **会话持久化**：壳把会话列表、消息、输入草稿、工作目录和 Pi 会话文件路径写到 `~/.pi-light/sessions.json`（可用 `PI_LIGHT_STATE_PATH` 改位置）。下次启动读回。若对应会话文件还在，则对 Pi 发 `switch_session`；否则保留壳内记录并 `new_session`。没有会话树 / fork。`#` 引用仍然可用。
 - **中文**：不捆绑字体。Windows 优先加载系统微软雅黑（`msyh.ttc` / `msyh.ttf`）作为 egui 回退。可用 `PI_LIGHT_CJK_FONT` 指定字体文件。
-- **Android = Option C**：桌面 Host 没有长出 Android 真 Host 所需的共享面（仍是本机 stdin/stdout spawn，无 LAN / HTTP 配对 API）。M6′ **不升 Option A**，Android 继续是 debug 占位 APK（`assembleDebug`，不内嵌 Pi）。决策记录见 [`docs/architecture.md`](./docs/architecture.md)。
+- **Android**：当前仍是 debug 占位 APK（`assembleDebug`，不内嵌 Pi）。桌面 Host 尚未提供公网配对 API。决策记录见 [`docs/architecture.md`](./docs/architecture.md)。
 - **Token 用量**：依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；未上报时显示「用量未知 / 不支持」。
 - **不做**：双后端切换、捆绑 dsh / Node runtime、CDP、Taskboard、把 Tauri `desktop/` 当主路径。
 

@@ -71,4 +71,12 @@ mod tests {
             FirstRunSurface::PiMissing
         );
     }
+
+    #[test]
+    fn first_run_default_path_is_model_or_missing_not_install_wizard() {
+        // 首次引导只走模型配置或「未找到 Pi」；安装方式不是默认主路径。
+        assert_ne!(first_run_surface(true, false), FirstRunSurface::Chat);
+        assert_eq!(first_run_surface(true, false), FirstRunSurface::ModelSetup);
+        assert_eq!(first_run_surface(false, false), FirstRunSurface::PiMissing);
+    }
 }

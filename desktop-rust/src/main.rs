@@ -8,12 +8,13 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use pi_light::{
-    admin_panel::{self, AdminPanelState, AdminTab, SetModelRequest},
+    admin_panel::{self, write_settings_model, AdminPanelState, AdminTab, SetModelRequest},
     chat::{ChatMessage, ChatState, SessionHub},
     fonts,
     onboarding::{self, FirstRunSurface},
     pi_path::{self, PiProbe},
     pi_rpc::{self, PiRpcClient, PiRpcEvent},
+    provider_catalog,
     session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
     session_ref::{self, RefCandidate, RefChip, RefChooserState},
     session_store::{self, RpcAttach},
@@ -509,16 +510,28 @@ impl eframe::App for PiLightApp {
                     ui.weak("生成中");
                 }
                 ui.separator();
-                if let Some(model) = self
-                    .admin
-                    .model_config
-                    .live_model
-                    .as_ref()
-                    .filter(|model| !model.is_empty())
-                {
-                    ui.weak(truncate_display(model, 36));
-                } else {
-                    ui.weak("模型未上报");
+                let current = provider_catalog::current_model_spec(
+                    self.admin.model_config.live_model.as_deref(),
+                    self.admin.model_config.default_provider.as_deref(),
+                    self.admin.model_config.default_model.as_deref(),
+                );
+                let models = self.admin.model_config.available_models.clone();
+                if let Some(spec) = provider_catalog::show_model_combo(
+                    ui,
+                    "header_model_combo",
+                    &current,
+                    &models,
+                    220.0,
+                ) {
+                    if let Some((provider, model_id)) = provider_catalog::parse_model_spec(&spec) {
+                        if let Some(path) = self.admin.model_config.settings_path.clone() {
+                            if write_settings_model(&path, &provider, &model_id).is_ok() {
+                                self.admin.model_config.default_provider = Some(provider.clone());
+                                self.admin.model_config.default_model = Some(model_id.clone());
+                            }
+                        }
+                        self.handle_set_model_request(SetModelRequest { provider, model_id });
+                    }
                 }
                 ui.separator();
                 let folder = self
@@ -970,7 +983,9 @@ impl PiLightApp {
                     .min_size(egui::vec2(96.0, 28.0));
                     if ui
                         .add(gear)
-                        .on_hover_text("模型、密钥、Skills、MCP")
+                        .on_hover_text(
+                            "设置抽屉：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用",
+                        )
                         .clicked()
                     {
                         toggle_settings = true;
@@ -1001,34 +1016,58 @@ impl PiLightApp {
 
     fn show_model_onboarding(&mut self, ctx: &egui::Context) {
         let spawn_note = self.spawn_error.clone();
-        let settings_open = self.admin.open;
         let mut dismiss = false;
         let mut open_models = false;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             paint_lightning_backdrop(ui);
             ui.add_space(48.0);
-            centered_column(ui, 520.0, |ui| {
+            centered_column(ui, 480.0, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("⚡").size(28.0).color(amber()));
+                    ui.heading("pi-light");
+                });
+                ui.label(
+                    egui::RichText::new("欢迎使用 pi-light")
+                        .strong()
+                        .size(26.0)
+                        .color(egui::Color32::WHITE),
+                );
+                ui.label(
+                    egui::RichText::new("配置模型后即可开始对话")
+                        .weak()
+                        .size(14.0),
+                );
+                ui.add_space(16.0);
                 soft_card(ui, |ui| {
                     ui.label(
-                        egui::RichText::new("配置模型与密钥")
+                        egui::RichText::new("配置模型")
                             .strong()
-                            .size(22.0)
+                            .size(16.0)
                             .color(amber()),
                     );
-                    ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new("Pi 已经就绪。先在设置里确认模型和 API 密钥，再开始对话。")
-                            .size(14.0),
+                        egui::RichText::new("选择或添加模型提供商，填入 API 密钥后即可使用。")
+                            .size(13.0),
                     );
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "在设置里填写提供商密钥。保存后写入 Pi 的 auth.json，输入框清空，已存密钥只显示掩码。",
-                        )
-                        .weak()
-                        .size(12.0),
-                    );
+                    ui.add_space(10.0);
+                    egui::Frame::none()
+                        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+                        .rounding(egui::Rounding::same(8.0))
+                        .stroke(egui::Stroke::new(
+                            1.0_f32,
+                            egui::Color32::from_rgb(60, 64, 80),
+                        ))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("暂无可用模型").strong().size(14.0));
+                            ui.label(
+                                egui::RichText::new(
+                                    "添加模型提供商以开始对话。密钥保存后只显示掩码。",
+                                )
+                                .weak()
+                                .size(12.0),
+                            );
+                        });
                     if let Some(note) = &spawn_note {
                         ui.add_space(8.0);
                         ui.colored_label(
@@ -1037,16 +1076,21 @@ impl PiLightApp {
                         );
                     }
                     ui.add_space(14.0);
+                    if primary_button(ui, "+ 配置模型").clicked() {
+                        open_models = true;
+                    }
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if !settings_open && ui.button("打开设置").clicked() {
-                            open_models = true;
-                        }
-                        if !settings_open {
-                            ui.add_space(8.0);
-                        }
-                        if primary_button(ui, "进入对话").clicked() {
-                            dismiss = true;
-                        }
+                        ui.label(
+                            egui::RichText::new("密钥仅写入本机，不会上传到云端。")
+                                .weak()
+                                .size(11.0),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("进入对话").clicked() {
+                                dismiss = true;
+                            }
+                        });
                     });
                 });
             });
@@ -1056,11 +1100,13 @@ impl PiLightApp {
             self.admin.open = true;
             self.admin.active_tab = AdminTab::Models;
             self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+            self.admin.add_provider.open_builtin(None);
         }
         if dismiss {
             self.onboarding_dismissed = true;
             self.admin.open = false;
             self.admin.opened_pass = None;
+            self.admin.add_provider.close();
         }
     }
 
@@ -1460,7 +1506,7 @@ fn pi_dot_color(probe: &PiProbe, rpc_alive: bool) -> (egui::Color32, &'static st
     if !probe.is_ready() {
         return (
             egui::Color32::from_rgb(200, 90, 70),
-            "Pi 未就绪。恢复说明在主界面和设置底部的「高级」里。",
+            "Pi 未就绪。恢复说明在主界面折叠区和设置「通用」页。",
         );
     }
     if rpc_alive {

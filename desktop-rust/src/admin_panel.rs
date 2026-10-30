@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// M4′+ 管理面 — Skills / MCP / 记忆 / 模型 四类，壳侧全量落地
+// 设置抽屉 — 七 Tab 壳（M0 IA）+ Skills / MCP / 记忆落地
 //
 // 数据来源：
 //   - Pi agent 目录（默认 ~/.pi/agent/，可被 PI_CODING_AGENT_DIR 覆盖）
 //   - 项目 .pi/ 目录
 //   - ~/.agents/skills/ 与 .agents/skills/（Agent Skills 规范路径）
-//   - 模型与密钥：settings.json 写默认模型；「模型与密钥」页写入 auth.json（保存后只显示掩码）
+//   - 模型与密钥：settings.json 写默认模型；「模型」页写入 auth.json / models.json
+//     （保存后只显示掩码）
 //
 // 落地项：
+//   - 右抽屉 + Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用
 //   - Skills 开关：读写 settings.json `skills` 数组（-id 排除 / +id 加回）
-//   - Skills 状态：由排除列表推导 Enabled/Disabled，无 Unknown
 //   - MCP 字段对齐：官方 `enabled: false` 主字段，兼容旧 `disabled` 读取，写回删 `disabled`
 //   - 记忆内联编辑：TextEdit + 保存写回 + 取消
-//   - 模型切换：Pi 就绪则 set_model RPC；不就绪则写 settings.json；写后可重启 sidecar
+//   - 模型：内置厂商 + 自定义 API；Pi 就绪则 set_model RPC；写 settings.json 后可重启 sidecar
 
 use std::{
     fs, io,
@@ -22,7 +23,8 @@ use std::{
 
 use eframe::egui;
 
-use crate::api_keys::{self, ApiKeyForm};
+use crate::api_keys::ApiKeyForm;
+use crate::provider_catalog::{self, AddProviderForm, CustomProvider};
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
 
@@ -32,18 +34,32 @@ pub enum AdminTab {
     Models,
     Skills,
     Mcp,
+    Marketplace,
     Memory,
-    Advanced,
+    RemoteAccess,
+    General,
 }
 
 impl AdminTab {
+    pub const ALL: [AdminTab; 7] = [
+        AdminTab::Models,
+        AdminTab::Skills,
+        AdminTab::Mcp,
+        AdminTab::Marketplace,
+        AdminTab::Memory,
+        AdminTab::RemoteAccess,
+        AdminTab::General,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
-            AdminTab::Models => "模型与密钥",
+            AdminTab::Models => "模型",
             AdminTab::Skills => "Skills",
             AdminTab::Mcp => "MCP",
+            AdminTab::Marketplace => "扩展市场",
             AdminTab::Memory => "记忆",
-            AdminTab::Advanced => "高级",
+            AdminTab::RemoteAccess => "远程访问",
+            AdminTab::General => "通用",
         }
     }
 }
@@ -155,17 +171,11 @@ pub struct ModelConfig {
     pub default_model: Option<String>,
     /// settings.json 路径（用于写回）。若 Pi agent 目录已知则始终 Some，无论文件是否存在。
     pub settings_path: Option<PathBuf>,
-    pub custom_endpoints: Vec<CustomEndpoint>,
+    pub custom_providers: Vec<CustomProvider>,
     pub auth_status: AuthStatus,
     pub live_model: Option<String>,
     pub available_models: Vec<String>,
     pub switch_input: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct CustomEndpoint {
-    pub name: String,
-    pub base_url: String,
 }
 
 /// API 密钥配置状态（只展示状态，不展示明文）。
@@ -265,6 +275,7 @@ pub struct AdminPanelState {
     pub model_state: DiscoveryState,
     pub model_config: ModelConfig,
     pub api_keys: ApiKeyForm,
+    pub add_provider: AddProviderForm,
 
     pub last_error: Option<String>,
     /// 由 toggle 或模型写入触发；main.rs 消费后重启 sidecar。
@@ -322,9 +333,11 @@ impl AdminPanelState {
         match tab {
             AdminTab::Skills => self.toggle_skill(id),
             AdminTab::Mcp => self.toggle_mcp(id),
-            AdminTab::Memory | AdminTab::Models | AdminTab::Advanced => {
-                Err("此页不支持直接开关。".to_owned())
-            }
+            AdminTab::Memory
+            | AdminTab::Models
+            | AdminTab::Marketplace
+            | AdminTab::RemoteAccess
+            | AdminTab::General => Err("此页不支持直接开关。".to_owned()),
         }
     }
 
@@ -428,10 +441,10 @@ impl AdminPanelState {
 
     // ── UI ────────────────────────────────────────────────────────────────
 
-    /// 以居中对话框渲染设置。入口在窗口左下角，不占右侧栏。
+    /// 以右侧抽屉渲染设置。入口在窗口左下角齿轮。
     ///
-    /// `pi_connected`：当前是否有存活的 Pi RPC 连接（影响模型切换按钮文案）。
-    /// `pi_ready`：是否已探测到 Pi 程序。未就绪时，「高级」页会说明这一点。
+    /// `pi_connected`：当前是否有存活的 Pi RPC 连接（影响模型切换）。
+    /// `pi_ready`：是否已探测到 Pi 程序。未就绪时，「通用」页会说明这一点。
     pub fn show_panel(
         &mut self,
         ctx: &egui::Context,
@@ -440,6 +453,7 @@ impl AdminPanelState {
         pi_ready: bool,
     ) -> AdminPanelReturn {
         if !self.open {
+            self.add_provider.close();
             return AdminPanelReturn::default();
         }
 
@@ -462,7 +476,7 @@ impl AdminPanelState {
         dim.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(150));
 
         let armed = self.opened_pass.is_some_and(|opened| pass > opened);
-        if armed {
+        if armed && !self.add_provider.open {
             let mut close_from_outside = false;
             egui::Area::new(egui::Id::new("pi_light_settings_blocker"))
                 .order(egui::Order::Middle)
@@ -481,45 +495,71 @@ impl AdminPanelState {
             if close_from_outside {
                 self.open = false;
                 self.opened_pass = None;
+                self.add_provider.close();
                 return AdminPanelReturn::default();
             }
         }
 
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            self.open = false;
-            self.opened_pass = None;
-            return AdminPanelReturn::default();
+            if self.add_provider.open {
+                self.add_provider.close();
+            } else {
+                self.open = false;
+                self.opened_pass = None;
+                return AdminPanelReturn::default();
+            }
         }
 
         // 用局部变量收集面板内产生的操作请求，避免在 egui 闭包中同时借用 self。
         let mut model_request: Option<SetModelRequest> = None;
         let mut want_restart_from_model = false;
-        let mut key_result = api_keys::KeyUiResult::default();
         // 记忆编辑器动作
         let mut memory_want_save = false;
         let mut memory_want_cancel = false;
         let mut memory_open_path: Option<PathBuf> = None;
         let mut mcp_add: Option<(String, String)> = None;
-        let mut still_open = true;
+        let mut close_drawer = false;
+        let mut models_result = provider_catalog::ModelsTabResult::default();
 
-        egui::Window::new("设置")
-            .id(egui::Id::new("pi_light_settings_window"))
-            .open(&mut still_open)
+        let footer_h = 40.0;
+        let drawer_w = (screen.width() * 0.58).clamp(440.0, 680.0);
+        let drawer_h = (screen.height() - footer_h - 16.0).max(360.0);
+        let drawer_pos = egui::pos2(screen.right() - drawer_w - 8.0, screen.top() + 8.0);
+
+        egui::Window::new("设置抽屉")
+            .id(egui::Id::new("pi_light_settings_drawer"))
+            .title_bar(false)
             .collapsible(false)
-            .resizable(true)
-            .default_size(egui::vec2(860.0, 560.0))
-            .min_size(egui::vec2(680.0, 440.0))
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .resizable(false)
+            .movable(false)
+            .constrain(false)
+            .fixed_pos(drawer_pos)
+            .fixed_size(egui::vec2(drawer_w, drawer_h))
             .order(egui::Order::Foreground)
-            .vscroll(false)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(16.0, 12.0))
+                    .rounding(egui::Rounding::same(10.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("模型、密钥、Skills 与 MCP")
-                            .weak()
-                            .size(12.0),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.vertical(|ui| {
+                        let heading = if self.active_tab == AdminTab::Models {
+                            "模型设置"
+                        } else {
+                            "设置"
+                        };
+                        ui.label(egui::RichText::new(heading).strong().size(20.0));
+                        ui.label(
+                            egui::RichText::new(drawer_subtitle(self.active_tab))
+                                .weak()
+                                .size(12.0),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        if ui.button("×").on_hover_text("关闭").clicked() {
+                            close_drawer = true;
+                        }
                         if ui
                             .button("刷新")
                             .on_hover_text("重新扫描本机配置")
@@ -528,6 +568,24 @@ impl AdminPanelState {
                             self.rediscover();
                         }
                     });
+                });
+                ui.add_space(8.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    for tab in AdminTab::ALL {
+                        let selected = self.active_tab == tab;
+                        let text = if selected {
+                            egui::RichText::new(tab.label()).strong()
+                        } else {
+                            egui::RichText::new(tab.label())
+                        };
+                        if ui
+                            .add(egui::SelectableLabel::new(selected, text))
+                            .clicked()
+                        {
+                            self.active_tab = tab;
+                        }
+                    }
                 });
                 ui.separator();
 
@@ -541,171 +599,185 @@ impl AdminPanelState {
                     ui.add_space(4.0);
                 }
 
-                let body_h = ui.available_height().max(360.0);
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(156.0);
-                        ui.set_min_height(body_h);
-                        ui.add_space(4.0);
-                        for tab in [
-                            AdminTab::Models,
-                            AdminTab::Skills,
-                            AdminTab::Mcp,
-                            AdminTab::Memory,
-                            AdminTab::Advanced,
-                        ] {
-                            let selected = self.active_tab == tab;
-                            if ui
-                                .add_sized(
-                                    [148.0, 32.0],
-                                    egui::SelectableLabel::new(selected, tab.label()),
-                                )
-                                .clicked()
-                            {
-                                self.active_tab = tab;
+                let body_h = ui.available_height().max(280.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("settings_body")
+                    .auto_shrink([false; 2])
+                    .max_height(body_h)
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        match self.active_tab {
+                            AdminTab::Skills => {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.skill_query)
+                                        .hint_text("筛选 Skills")
+                                        .desired_width(f32::INFINITY),
+                                );
+                                let query = self.skill_query.clone();
+                                let toggle_id = render_item_list(
+                                    ui,
+                                    "Skills",
+                                    &mut self.skill_items,
+                                    SKILLS_EMPTY_MSG,
+                                    &query,
+                                );
+                                if let Some(id) = toggle_id {
+                                    if let Err(e) = self.toggle_skill(&id) {
+                                        self.last_error = Some(e);
+                                    }
+                                }
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "开关写回 settings.json。新的 Skill 放到发现目录后点「刷新」。",
+                                    )
+                                    .weak()
+                                    .size(11.0),
+                                );
+                            }
+                            AdminTab::Mcp => {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.mcp_query)
+                                        .hint_text("筛选名称或命令")
+                                        .desired_width(f32::INFINITY),
+                                );
+                                let query = self.mcp_query.clone();
+                                let toggle_id = render_item_list(
+                                    ui,
+                                    "MCP 服务",
+                                    &mut self.mcp_items,
+                                    MCP_EMPTY_MSG,
+                                    &query,
+                                );
+                                if let Some(id) = toggle_id {
+                                    if let Err(e) = self.toggle_mcp(&id) {
+                                        self.last_error = Some(e);
+                                    }
+                                }
+                                ui.add_space(10.0);
+                                ui.label(egui::RichText::new("添加服务").strong().size(13.0));
+                                ui.label(
+                                    egui::RichText::new(
+                                        "写入 Pi 的 mcp.json。服务仍由 Pi 启动，这里不另起运行时。",
+                                    )
+                                    .weak()
+                                    .size(11.0),
+                                );
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.mcp_new_id)
+                                            .hint_text("名称")
+                                            .desired_width(140.0),
+                                    );
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.mcp_new_command)
+                                            .hint_text("命令，例如 npx")
+                                            .desired_width(ui.available_width().max(160.0)),
+                                    );
+                                });
+                                if ui.button("写入 mcp.json").clicked() {
+                                    mcp_add = Some((
+                                        self.mcp_new_id.clone(),
+                                        self.mcp_new_command.clone(),
+                                    ));
+                                }
+                            }
+                            AdminTab::Memory => {
+                                if let Some(editor) = &mut self.memory_editor {
+                                    let (save, cancel) = render_memory_editor(ui, editor);
+                                    memory_want_save = save;
+                                    memory_want_cancel = cancel;
+                                    ui.separator();
+                                }
+                                let open_path = render_memory_list(
+                                    ui,
+                                    &self.memory_entries,
+                                    self.session_memory_text.as_deref(),
+                                    self.memory_editor
+                                        .as_ref()
+                                        .map(|editor| editor.source_path.as_path()),
+                                );
+                                memory_open_path = open_path;
+                            }
+                            AdminTab::Models => {
+                                let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
+                                let models_path = pi_agent_dir().map(|dir| dir.join("models.json"));
+                                let current = provider_catalog::current_model_spec(
+                                    self.model_config.live_model.as_deref(),
+                                    self.model_config.default_provider.as_deref(),
+                                    self.model_config.default_model.as_deref(),
+                                );
+                                let available = self.model_config.available_models.clone();
+                                let custom = self.model_config.custom_providers.clone();
+                                models_result = provider_catalog::render_models_tab(
+                                    ui,
+                                    provider_catalog::ModelsTabInput {
+                                        form: &mut self.api_keys,
+                                        add: &mut self.add_provider,
+                                        custom: &custom,
+                                        current_spec: &current,
+                                        available_models: &available,
+                                        auth_path: auth_path.as_deref(),
+                                        models_path: models_path.as_deref(),
+                                    },
+                                );
+                            }
+                            AdminTab::Marketplace => render_marketplace_stub(ui),
+                            AdminTab::RemoteAccess => render_remote_stub(ui),
+                            AdminTab::General => {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(if pi_ready {
+                                        "Pi 已经找到。只有要改用别的程序时才看下面。"
+                                    } else {
+                                        "还没有找到 Pi。便携包一般已经带好，不必先做这些。"
+                                    })
+                                    .size(13.0),
+                                );
+                                ui.add_space(8.0);
+                                egui::CollapsingHeader::new("高级：自己指定 Pi 程序")
+                                    .default_open(false)
+                                    .id_salt("general_pi_recovery")
+                                    .show(ui, |ui| {
+                                        show_pi_binary_recovery(ui);
+                                    });
                             }
                         }
                     });
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt("settings_body")
-                        .auto_shrink([false; 2])
-                        .max_height(body_h)
-                        .show(ui, |ui| {
-                            ui.set_min_width(480.0);
-                            match self.active_tab {
-                                AdminTab::Skills => {
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.skill_query)
-                                            .hint_text("筛选 Skills")
-                                            .desired_width(f32::INFINITY),
-                                    );
-                                    let query = self.skill_query.clone();
-                                    let toggle_id = render_item_list(
-                                        ui,
-                                        "Skills",
-                                        &mut self.skill_items,
-                                        SKILLS_EMPTY_MSG,
-                                        &query,
-                                    );
-                                    if let Some(id) = toggle_id {
-                                        if let Err(e) = self.toggle_skill(&id) {
-                                            self.last_error = Some(e);
-                                        }
-                                    }
-                                    ui.add_space(6.0);
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "开关写回 settings.json。新的 Skill 放到发现目录后点「刷新」。",
-                                        )
-                                        .weak()
-                                        .size(11.0),
-                                    );
-                                }
-                                AdminTab::Mcp => {
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.mcp_query)
-                                            .hint_text("筛选名称或命令")
-                                            .desired_width(f32::INFINITY),
-                                    );
-                                    let query = self.mcp_query.clone();
-                                    let toggle_id = render_item_list(
-                                        ui,
-                                        "MCP 服务",
-                                        &mut self.mcp_items,
-                                        MCP_EMPTY_MSG,
-                                        &query,
-                                    );
-                                    if let Some(id) = toggle_id {
-                                        if let Err(e) = self.toggle_mcp(&id) {
-                                            self.last_error = Some(e);
-                                        }
-                                    }
-                                    ui.add_space(10.0);
-                                    ui.label(egui::RichText::new("添加服务").strong().size(13.0));
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "写入 Pi 的 mcp.json。服务仍由 Pi 启动，这里不另起运行时。",
-                                        )
-                                        .weak()
-                                        .size(11.0),
-                                    );
-                                    ui.add_space(4.0);
-                                    ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.mcp_new_id)
-                                                .hint_text("名称")
-                                                .desired_width(140.0),
-                                        );
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.mcp_new_command)
-                                                .hint_text("命令，例如 npx")
-                                                .desired_width(ui.available_width().max(160.0)),
-                                        );
-                                    });
-                                    if ui.button("写入 mcp.json").clicked() {
-                                        mcp_add = Some((
-                                            self.mcp_new_id.clone(),
-                                            self.mcp_new_command.clone(),
-                                        ));
-                                    }
-                                }
-                                AdminTab::Memory => {
-                                    if let Some(editor) = &mut self.memory_editor {
-                                        let (save, cancel) = render_memory_editor(ui, editor);
-                                        memory_want_save = save;
-                                        memory_want_cancel = cancel;
-                                        ui.separator();
-                                    }
-                                    let open_path = render_memory_list(
-                                        ui,
-                                        &self.memory_entries,
-                                        self.session_memory_text.as_deref(),
-                                        self.memory_editor
-                                            .as_ref()
-                                            .map(|editor| editor.source_path.as_path()),
-                                    );
-                                    memory_open_path = open_path;
-                                }
-                                AdminTab::Models => {
-                                    let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
-                                    key_result = api_keys::render(
-                                        ui,
-                                        &mut self.api_keys,
-                                        auth_path.as_deref(),
-                                    );
-                                    ui.add_space(12.0);
-                                    ui.separator();
-                                    let (req, want_restart, write_error) =
-                                        render_models(ui, &mut self.model_config, pi_connected);
-                                    model_request = req;
-                                    want_restart_from_model = want_restart;
-                                    if let Some(err) = write_error {
-                                        self.last_error = Some(err);
-                                    }
-                                }
-                                AdminTab::Advanced => {
-                                    ui.add_space(4.0);
-                                    ui.label(
-                                        egui::RichText::new(if pi_ready {
-                                            "Pi 已经找到。只有要改用别的程序时才看下面。"
-                                        } else {
-                                            "还没有找到 Pi。便携包一般已经带好，不必先做这些。"
-                                        })
-                                        .size(13.0),
-                                    );
-                                    ui.add_space(8.0);
-                                    show_pi_binary_recovery(ui);
-                                }
-                            }
-                        });
-                });
             });
 
-        if !still_open {
+        if close_drawer {
             self.open = false;
             self.opened_pass = None;
+            self.add_provider.close();
         }
+
+        let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
+        let models_path = pi_agent_dir().map(|dir| dir.join("models.json"));
+        let add_result = provider_catalog::render_add_provider(
+            ctx,
+            &mut self.add_provider,
+            &mut self.api_keys,
+            auth_path.as_deref(),
+            models_path.as_deref(),
+        );
+        apply_models_result(
+            &mut self.model_config,
+            &mut self.last_error,
+            &mut model_request,
+            &mut want_restart_from_model,
+            models_result,
+            pi_connected,
+        );
+        apply_models_result(
+            &mut self.model_config,
+            &mut self.last_error,
+            &mut model_request,
+            &mut want_restart_from_model,
+            add_result,
+            pi_connected,
+        );
 
         if let Some((id, command)) = mcp_add {
             match pi_agent_dir() {
@@ -762,19 +834,109 @@ impl AdminPanelState {
             }
         }
 
-        if key_result.restart {
-            self.last_error = None;
-            self.sidecar_restart_needed = true;
-        } else if let Some(err) = key_result.error {
-            self.last_error = Some(err);
-        }
-
         let restart_sidecar =
             std::mem::take(&mut self.sidecar_restart_needed) || want_restart_from_model;
 
         AdminPanelReturn {
             set_model_request: model_request,
             restart_sidecar,
+        }
+    }
+}
+
+fn drawer_subtitle(tab: AdminTab) -> &'static str {
+    match tab {
+        AdminTab::Models => "管理模型提供商、API 密钥和默认模型。",
+        AdminTab::Skills => "发现目录中的 Skills，开关写回 settings.json。",
+        AdminTab::Mcp => "管理 Pi 的 MCP 服务列表。",
+        AdminTab::Marketplace => "浏览与安装 Pi 包（后续里程碑）。",
+        AdminTab::Memory => "查看与编辑记忆文件。",
+        AdminTab::RemoteAccess => "手机配对与公网中继（后续里程碑）。",
+        AdminTab::General => "通用与高级选项。",
+    }
+}
+
+fn render_marketplace_stub(ui: &mut egui::Ui) {
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("扩展市场").strong().size(16.0));
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(
+            "浏览 pi.dev/packages、确认后经 sidecar 执行 pi install，以及精选预置包，将在后续里程碑提供。本页为入口壳。",
+        )
+        .size(13.0),
+    );
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(
+            "第三方 Pi 包可执行代码。安装前应阅读权限与审计说明并确认。本里程碑不执行安装。",
+        )
+        .weak()
+        .size(12.0),
+    );
+}
+
+fn render_remote_stub(ui: &mut egui::Ui) {
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("远程访问").strong().size(16.0));
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(
+            "配对码 / 二维码、已授权设备，以及公网中继将在后续里程碑提供。本页为入口壳。",
+        )
+        .size(13.0),
+    );
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(
+            "默认中继计划为 Cloudflare Tunnel；亦可后配 Tailscale 或自建。中继依赖网络与账号，不假定同一局域网即可用。",
+        )
+        .weak()
+        .size(12.0),
+    );
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(
+            "远程桌面三档（浏览 / 触控 / 全屏）尚未开放。电脑操控需要操作系统权限。",
+        )
+        .weak()
+        .size(12.0),
+    );
+}
+
+fn apply_models_result(
+    cfg: &mut ModelConfig,
+    last_error: &mut Option<String>,
+    model_request: &mut Option<SetModelRequest>,
+    want_restart: &mut bool,
+    result: provider_catalog::ModelsTabResult,
+    pi_connected: bool,
+) {
+    if let Some(err) = result.error {
+        *last_error = Some(err);
+    }
+    if result.restart {
+        *want_restart = true;
+        if let Some(dir) = pi_agent_dir() {
+            cfg.custom_providers = provider_catalog::load_providers(&dir.join("models.json"));
+        }
+    }
+    if let Some((provider, model_id)) = result.set_model {
+        if result.write_default {
+            if let Some(path) = cfg.settings_path.clone() {
+                match write_settings_model(&path, &provider, &model_id) {
+                    Ok(()) => {
+                        cfg.default_provider = Some(provider.clone());
+                        cfg.default_model = Some(model_id.clone());
+                    }
+                    Err(e) => *last_error = Some(format!("保存设置失败：{e}")),
+                }
+            }
+        }
+        if pi_connected {
+            *model_request = Some(SetModelRequest { provider, model_id });
+        } else {
+            *want_restart = true;
         }
     }
 }
@@ -1267,13 +1429,13 @@ fn render_models(
     ui.add_space(8.0);
 
     // ── 自定义端点 ────────────────────────────────────────────────────────
-    if !cfg.custom_endpoints.is_empty() {
+    if !cfg.custom_providers.is_empty() {
         ui.label(
             egui::RichText::new("自定义端点（models.json）")
                 .strong()
                 .size(12.0),
         );
-        for ep in &cfg.custom_endpoints {
+        for ep in &cfg.custom_providers {
             ui.label(
                 egui::RichText::new(format!("  {} — {}", ep.name, ep.base_url))
                     .monospace()
@@ -1801,11 +1963,9 @@ pub fn discover_model_config() -> ModelConfig {
         })
         .unwrap_or((None, None));
 
-    let custom_endpoints = models_path
+    let custom_providers = models_path
         .as_ref()
-        .and_then(|p| fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| parse_custom_endpoints(&v))
+        .map(|p| provider_catalog::load_providers(p))
         .unwrap_or_default();
 
     let auth_status = detect_auth_status(auth_path.as_deref());
@@ -1815,7 +1975,7 @@ pub fn discover_model_config() -> ModelConfig {
         default_model,
         // 始终提供写入路径（即使文件不存在；write_settings_model 会创建它）
         settings_path,
-        custom_endpoints,
+        custom_providers,
         auth_status,
         live_model: None,
         available_models: Vec::new(),
@@ -1842,19 +2002,6 @@ fn detect_auth_status(auth_path: Option<&Path>) -> AuthStatus {
         }
     }
     AuthStatus::NotConfigured
-}
-
-fn parse_custom_endpoints(val: &serde_json::Value) -> Option<Vec<CustomEndpoint>> {
-    let arr = val.as_array()?;
-    let eps = arr
-        .iter()
-        .filter_map(|item| {
-            let name = item.get("name")?.as_str()?.to_owned();
-            let base_url = item.get("baseUrl")?.as_str()?.to_owned();
-            Some(CustomEndpoint { name, base_url })
-        })
-        .collect();
-    Some(eps)
 }
 
 // ── Config write-back ─────────────────────────────────────────────────────
@@ -2243,6 +2390,9 @@ mod tests {
     fn toggle_memory_always_err() {
         let mut panel = AdminPanelState::default();
         assert!(panel.toggle_item(AdminTab::Memory, "x").is_err());
+        assert!(panel.toggle_item(AdminTab::Marketplace, "x").is_err());
+        assert!(panel.toggle_item(AdminTab::RemoteAccess, "x").is_err());
+        assert!(panel.toggle_item(AdminTab::General, "x").is_err());
     }
 
     #[test]
@@ -2401,11 +2551,16 @@ mod tests {
 
     #[test]
     fn tab_labels() {
-        assert_eq!(AdminTab::Models.label(), "模型与密钥");
+        assert_eq!(AdminTab::Models.label(), "模型");
         assert_eq!(AdminTab::Skills.label(), "Skills");
         assert_eq!(AdminTab::Mcp.label(), "MCP");
+        assert_eq!(AdminTab::Marketplace.label(), "扩展市场");
         assert_eq!(AdminTab::Memory.label(), "记忆");
-        assert_eq!(AdminTab::Advanced.label(), "高级");
+        assert_eq!(AdminTab::RemoteAccess.label(), "远程访问");
+        assert_eq!(AdminTab::General.label(), "通用");
+        assert_eq!(AdminTab::ALL.len(), 7);
+        assert!(AdminTab::ALL.contains(&AdminTab::Marketplace));
+        assert!(AdminTab::ALL.contains(&AdminTab::RemoteAccess));
     }
 
     #[test]
