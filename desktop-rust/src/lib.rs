@@ -2,9 +2,12 @@
 // pi-light library root — exports core modules for integration testing.
 
 pub mod admin_panel;
+pub mod api_keys;
 pub mod bash_path;
 pub mod chat;
+pub mod fonts;
 pub mod pi_path;
 pub mod pi_rpc;
 pub mod session_insights;
 pub mod session_ref;
+pub mod session_store;

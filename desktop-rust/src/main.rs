@@ -10,10 +10,12 @@ use eframe::egui;
 use pi_light::{
     admin_panel::{AdminPanelState, SetModelRequest},
     chat::{ChatMessage, ChatState, SessionHub},
+    fonts,
     pi_path::{self, PiProbe},
     pi_rpc::{self, PiRpcClient, PiRpcEvent},
     session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
     session_ref::{self, RefCandidate, RefChip, RefChooserState},
+    session_store::{self, RpcAttach},
 };
 
 fn main() -> eframe::Result<()> {
@@ -53,18 +55,37 @@ struct PiLightApp {
     workdir_draft: String,
     workdir_error: Option<String>,
     workdir_editing: bool,
+    /// 壳侧会话文件。None 表示没有可写的用户目录。
+    state_path: Option<PathBuf>,
+    persist_dirty: bool,
+    persist_retry_at: Option<std::time::Instant>,
 }
 
 impl PiLightApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        fonts::install_system_cjk(&cc.egui_ctx);
         let probe = pi_path::probe();
         let egui_ctx = cc.egui_ctx.clone();
-        let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let fallback_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let state_path = session_store::default_path();
+        let (sessions, workdir) = match state_path
+            .as_ref()
+            .and_then(|path| session_store::load(path))
+        {
+            Some(loaded) => {
+                let workdir = loaded
+                    .workdir
+                    .filter(|path| path.is_dir())
+                    .unwrap_or(fallback_dir);
+                (loaded.sessions, workdir)
+            }
+            None => (SessionHub::new(), fallback_dir),
+        };
         let workdir_draft = workdir.to_string_lossy().into_owned();
         let mut app = Self {
             pi_probe: probe,
             rpc_client: None,
-            sessions: SessionHub::new(),
+            sessions,
             spawn_error: None,
             egui_ctx,
             admin: AdminPanelState::default(),
@@ -75,6 +96,9 @@ impl PiLightApp {
             workdir_draft,
             workdir_error: None,
             workdir_editing: false,
+            state_path,
+            persist_dirty: false,
+            persist_retry_at: None,
         };
         app.try_spawn_rpc();
         app
@@ -83,7 +107,6 @@ impl PiLightApp {
     fn try_spawn_rpc(&mut self) {
         self.rpc_client = None;
         self.spawn_error = None;
-        self.sessions.reset_all();
         self.ref_chooser.close();
         self.ref_chips.clear();
 
@@ -91,11 +114,27 @@ impl PiLightApp {
             let ctx = self.egui_ctx.clone();
             match PiRpcClient::spawn(path, Some(&self.workdir), move || ctx.request_repaint()) {
                 Ok(mut client) => {
-                    // Fresh first slot: match previous `--no-session` launch UX.
-                    let _ = client.send_new_session();
+                    let attach =
+                        session_store::rpc_attach(self.sessions.active().session_file.as_deref());
+                    let detached = matches!(attach, RpcAttach::NewSession)
+                        && !self.sessions.active_chat().messages.is_empty();
+                    match attach {
+                        RpcAttach::SwitchTo(session_path) => {
+                            let _ = client.send_switch_session(&session_path);
+                        }
+                        RpcAttach::NewSession => {
+                            let _ = client.send_new_session();
+                        }
+                    }
                     let _ = client.request_get_state();
                     let _ = client.request_available_models();
                     self.rpc_client = Some(client);
+                    if detached {
+                        self.sessions.active_chat_mut().set_error(
+                            "已恢复本机会话记录。Pi 侧会话文件不在，模型上下文从新会话开始。"
+                                .to_owned(),
+                        );
+                    }
                 }
                 Err(e) => {
                     self.spawn_error = Some(format!("启动 Pi 失败：{e}"));
@@ -125,6 +164,8 @@ impl PiLightApp {
                 self.workdir_draft = self.workdir.to_string_lossy().into_owned();
                 self.workdir_error = None;
                 self.workdir_editing = false;
+                self.touch_sessions();
+                self.persist_sessions(true);
                 self.try_spawn_rpc();
             }
             Err(e) => {
@@ -139,6 +180,10 @@ impl PiLightApp {
         if user_text.is_empty() && self.ref_chips.is_empty() {
             return;
         }
+        if self.rpc_client.is_none() {
+            return;
+        }
+        self.touch_sessions();
         if let Some(client) = &mut self.rpc_client {
             let chips = std::mem::take(&mut self.ref_chips);
             let effective_prompt = session_ref::build_prompt_text(&chips, &user_text);
@@ -165,6 +210,7 @@ impl PiLightApp {
                     .set_error(format!("发送失败：{e}"));
             }
         }
+        self.persist_sessions(true);
     }
 
     fn do_abort(&mut self) {
@@ -181,6 +227,10 @@ impl PiLightApp {
             Some(p) => p,
             None => return,
         };
+        if self.rpc_client.is_none() {
+            return;
+        }
+        self.touch_sessions();
         if let Some(client) = &mut self.rpc_client {
             let chat = self.sessions.active_chat_mut();
             chat.drop_trailing_assistant();
@@ -198,6 +248,7 @@ impl PiLightApp {
         self.ref_chooser.close();
         self.ref_chips.clear();
         self.sessions.create_new();
+        self.touch_sessions();
         if let Some(client) = &mut self.rpc_client {
             if let Err(e) = client.send_new_session() {
                 self.sessions
@@ -207,6 +258,7 @@ impl PiLightApp {
             }
             let _ = client.request_get_state();
         }
+        self.persist_sessions(true);
     }
 
     fn do_switch_session(&mut self, index: usize) {
@@ -224,6 +276,7 @@ impl PiLightApp {
         if !self.sessions.switch_to(index) {
             return;
         }
+        self.touch_sessions();
         self.ref_chooser.close();
         self.ref_chips.clear();
         if let Some(path) = file {
@@ -237,11 +290,13 @@ impl PiLightApp {
                 let _ = client.request_get_state();
             }
         }
+        self.persist_sessions(true);
     }
 
     fn drain_rpc_events(&mut self) {
         if let Some(client) = &mut self.rpc_client {
             let events = client.drain_events();
+            let had_events = !events.is_empty();
             for event in events {
                 let is_exit = matches!(&event, PiRpcEvent::ProcessExited { .. });
                 let request_stats = matches!(&event, PiRpcEvent::AgentSettled { aborted: false });
@@ -282,6 +337,43 @@ impl PiLightApp {
                     self.rpc_client = None;
                     break;
                 }
+            }
+            if had_events {
+                self.touch_sessions();
+            }
+        }
+    }
+
+    fn touch_sessions(&mut self) {
+        self.persist_dirty = true;
+    }
+
+    fn persist_sessions(&mut self, force: bool) {
+        if !self.persist_dirty {
+            return;
+        }
+        if self.sessions.any_streaming() && !force {
+            return;
+        }
+        if !force {
+            if let Some(when) = self.persist_retry_at {
+                if std::time::Instant::now() < when {
+                    return;
+                }
+            }
+        }
+        let Some(path) = self.state_path.clone() else {
+            self.persist_dirty = false;
+            return;
+        };
+        match session_store::save(&path, &self.sessions, &self.workdir) {
+            Ok(()) => {
+                self.persist_dirty = false;
+                self.persist_retry_at = None;
+            }
+            Err(_) => {
+                self.persist_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
             }
         }
     }
@@ -386,19 +478,36 @@ impl eframe::App for PiLightApp {
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("pi-light");
-                ui.weak("— 内嵌 Pi 的轻量 Rust Shell");
-
                 let (dot_color, dot_tip) = pi_dot_color(&self.pi_probe, self.rpc_client.is_some());
                 ui.colored_label(dot_color, "●").on_hover_text(dot_tip);
-
                 if self.sessions.active_is_streaming() {
-                    ui.weak("● 生成中…");
+                    ui.weak("生成中");
                 }
+                ui.separator();
+                if let Some(model) = self
+                    .admin
+                    .model_config
+                    .live_model
+                    .as_ref()
+                    .filter(|model| !model.is_empty())
+                {
+                    ui.weak(truncate_display(model, 36));
+                } else {
+                    ui.weak("模型未上报");
+                }
+                ui.separator();
+                let folder = self
+                    .workdir
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(".");
+                ui.weak(folder)
+                    .on_hover_text(self.workdir.to_string_lossy());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .button("⟳ 重新探测")
-                        .on_hover_text("重新扫描 Pi 二进制并重启 RPC 连接")
+                        .on_hover_text("重新扫描 Pi 二进制并重连当前会话")
                         .clicked()
                     {
                         self.reprobe();
@@ -411,7 +520,7 @@ impl eframe::App for PiLightApp {
                     };
                     if ui
                         .selectable_label(self.admin.open, admin_label)
-                        .on_hover_text("打开 / 关闭设置（Skills / MCP / 记忆 / 模型）")
+                        .on_hover_text("密钥、模型、Skills、MCP、记忆")
                         .clicked()
                     {
                         self.admin.open = !self.admin.open;
@@ -437,6 +546,11 @@ impl eframe::App for PiLightApp {
         } else {
             show_not_ready_screen(ctx, &self.pi_probe);
         }
+        self.persist_sessions(false);
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.persist_sessions(true);
     }
 }
 
@@ -459,26 +573,37 @@ impl PiLightApp {
                     ui.label(egui::RichText::new("会话").strong().size(13.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let btn = ui.add_enabled(!streaming, egui::Button::new("＋"));
-                        if btn.on_hover_text("新建会话（Pi new_session）").clicked() {
+                        if btn.on_hover_text("新建会话").clicked() {
                             want_new = true;
                         }
                     });
                 });
-                ui.label(egui::RichText::new("历史文件请用 # 引用").weak().size(10.0));
+                ui.label(
+                    egui::RichText::new("关闭后保留，下次启动恢复")
+                        .weak()
+                        .size(10.0),
+                );
                 ui.separator();
 
-                for (i, session) in self.sessions.list().iter().enumerate() {
-                    let selected = i == active;
-                    let resp = ui.add_enabled(
-                        !streaming || selected,
-                        egui::SelectableLabel::new(selected, &session.title),
-                    );
-                    if resp.clicked() {
-                        switch_to = Some(i);
-                    }
-                }
+                let list_height = (ui.available_height() - 96.0).max(48.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("session_list_scroll")
+                    .max_height(list_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (i, session) in self.sessions.list().iter().enumerate() {
+                            let selected = i == active;
+                            let resp = ui.add_enabled(
+                                !streaming || selected,
+                                egui::SelectableLabel::new(selected, &session.title),
+                            );
+                            if resp.clicked() {
+                                switch_to = Some(i);
+                            }
+                        }
+                    });
 
-                ui.add_space(16.0);
+                ui.add_space(8.0);
                 ui.separator();
                 ui.label(egui::RichText::new("工作目录").strong().size(12.0));
                 if self.workdir_editing {
