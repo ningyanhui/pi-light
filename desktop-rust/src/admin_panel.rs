@@ -6,7 +6,7 @@
 //   - Pi agent 目录（默认 ~/.pi/agent/，可被 PI_CODING_AGENT_DIR 覆盖）
 //   - 项目 .pi/ 目录
 //   - ~/.agents/skills/ 与 .agents/skills/（Agent Skills 规范路径）
-//   - 模型/API 密钥状态：settings.json + auth.json + 环境变量
+//   - 模型：settings.json；API 密钥在「密钥」页写入 auth.json（保存后只显示掩码）
 //
 // 落地项：
 //   - Skills 开关：读写 settings.json `skills` 数组（-id 排除 / +id 加回）
@@ -22,25 +22,39 @@ use std::{
 
 use eframe::egui;
 
+use crate::api_keys::{self, ApiKeyForm};
+
 // ── Tabs ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AdminTab {
     #[default]
+    Keys,
+    Models,
     Skills,
     Mcp,
     Memory,
-    Models,
 }
 
 impl AdminTab {
     pub fn label(self) -> &'static str {
         match self {
+            AdminTab::Keys => "密钥",
+            AdminTab::Models => "模型",
             AdminTab::Skills => "Skills",
             AdminTab::Mcp => "MCP",
             AdminTab::Memory => "记忆",
-            AdminTab::Models => "模型",
         }
+    }
+
+    fn all() -> [Self; 5] {
+        [
+            Self::Keys,
+            Self::Models,
+            Self::Skills,
+            Self::Mcp,
+            Self::Memory,
+        ]
     }
 }
 
@@ -260,6 +274,7 @@ pub struct AdminPanelState {
 
     pub model_state: DiscoveryState,
     pub model_config: ModelConfig,
+    pub api_keys: ApiKeyForm,
 
     pub last_error: Option<String>,
     /// 由 toggle 或模型写入触发；main.rs 消费后重启 sidecar。
@@ -283,6 +298,9 @@ impl AdminPanelState {
 
         self.model_config = discover_model_config();
         self.model_state = DiscoveryState::Ready;
+
+        let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
+        self.api_keys.refresh(auth_path.as_deref());
     }
 
     pub fn rediscover(&mut self) {
@@ -308,7 +326,9 @@ impl AdminPanelState {
         match tab {
             AdminTab::Skills => self.toggle_skill(id),
             AdminTab::Mcp => self.toggle_mcp(id),
-            AdminTab::Memory | AdminTab::Models => Err("此 tab 条目不支持直接开关。".to_owned()),
+            AdminTab::Keys | AdminTab::Memory | AdminTab::Models => {
+                Err("此 tab 条目不支持直接开关。".to_owned())
+            }
         }
     }
 
@@ -420,6 +440,7 @@ impl AdminPanelState {
         // 用局部变量收集面板内产生的操作请求，避免在 egui 闭包中同时借用 self。
         let mut model_request: Option<SetModelRequest> = None;
         let mut want_restart_from_model = false;
+        let mut key_result = api_keys::KeyUiResult::default();
         // 记忆编辑器动作
         let mut memory_want_save = false;
         let mut memory_want_cancel = false;
@@ -451,12 +472,7 @@ impl AdminPanelState {
 
                 // 标签栏
                 ui.horizontal_wrapped(|ui| {
-                    for tab in [
-                        AdminTab::Skills,
-                        AdminTab::Mcp,
-                        AdminTab::Memory,
-                        AdminTab::Models,
-                    ] {
+                    for tab in AdminTab::all() {
                         if ui
                             .selectable_label(self.active_tab == tab, tab.label())
                             .clicked()
@@ -534,6 +550,11 @@ impl AdminPanelState {
                                 model_request = req;
                                 want_restart_from_model = want_restart;
                             }
+                            AdminTab::Keys => {
+                                let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
+                                key_result =
+                                    api_keys::render(ui, &mut self.api_keys, auth_path.as_deref());
+                            }
                         }
                     });
             });
@@ -571,6 +592,13 @@ impl AdminPanelState {
                     self.last_error = Some(format!("读取文件失败：{e}"));
                 }
             }
+        }
+
+        if key_result.restart {
+            self.last_error = None;
+            self.sidecar_restart_needed = true;
+        } else if let Some(err) = key_result.error {
+            self.last_error = Some(err);
         }
 
         let restart_sidecar =
@@ -975,44 +1003,41 @@ fn render_models(
     );
     ui.add_space(8.0);
 
-    // ── API 密钥状态 ──────────────────────────────────────────────────────
-    ui.label(egui::RichText::new("API 密钥状态").strong().size(12.0));
+    // ── API 密钥概况（编辑在「密钥」页，这里不展示明文）────────────────
+    ui.label(egui::RichText::new("API 密钥").strong().size(12.0));
     match &cfg.auth_status {
         AuthStatus::EnvVar(var) => {
             ui.label(
-                egui::RichText::new(format!("  ✓ 通过环境变量配置：{var}=***"))
+                egui::RichText::new(format!("  环境变量 {var} 已设置（不显示值）"))
                     .color(egui::Color32::from_rgb(60, 160, 80))
                     .size(12.0),
             );
         }
-        AuthStatus::FileExists(path) => {
+        AuthStatus::FileExists(_) => {
             ui.label(
-                egui::RichText::new(format!("  ✓ auth.json 存在：{}", path.display()))
+                egui::RichText::new("  auth.json 已有凭据（不显示明文）")
                     .color(egui::Color32::from_rgb(60, 160, 80))
                     .size(12.0),
-            );
-            ui.label(
-                egui::RichText::new("  （内容不展示；如需重新登录，在 Pi 中运行 /login）")
-                    .weak()
-                    .size(10.0),
             );
         }
         AuthStatus::NotConfigured => {
             ui.label(
-                egui::RichText::new("  ✗ 未检测到 API 密钥（环境变量或 auth.json）")
+                egui::RichText::new("  尚未检测到密钥")
                     .color(egui::Color32::from_rgb(210, 120, 60))
                     .size(12.0),
             );
-            ui.label(
-                egui::RichText::new("  在 Pi 中运行 /login 进行认证，或设置对应环境变量。")
-                    .weak()
-                    .size(11.0),
-            );
         }
         AuthStatus::Unknown => {
-            ui.label(egui::RichText::new("  ○ 状态未知").weak().size(12.0));
+            ui.label(egui::RichText::new("  状态未知").weak().size(12.0));
         }
     }
+    ui.label(
+        egui::RichText::new(
+            "在「密钥」页写入或替换。保存后只显示掩码。环境变量与 Pi /login 仍然可用。",
+        )
+        .weak()
+        .size(11.0),
+    );
     ui.add_space(8.0);
 
     // ── 自定义端点 ────────────────────────────────────────────────────────
@@ -1844,7 +1869,7 @@ mod tests {
     fn panel_defaults() {
         let panel = AdminPanelState::default();
         assert!(!panel.open);
-        assert_eq!(panel.active_tab, AdminTab::Skills);
+        assert_eq!(panel.active_tab, AdminTab::Keys);
     }
 
     #[test]
@@ -2086,10 +2111,11 @@ mod tests {
 
     #[test]
     fn tab_labels() {
+        assert_eq!(AdminTab::Keys.label(), "密钥");
+        assert_eq!(AdminTab::Models.label(), "模型");
         assert_eq!(AdminTab::Skills.label(), "Skills");
         assert_eq!(AdminTab::Mcp.label(), "MCP");
         assert_eq!(AdminTab::Memory.label(), "记忆");
-        assert_eq!(AdminTab::Models.label(), "模型");
     }
 
     #[test]

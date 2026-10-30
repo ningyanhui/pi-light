@@ -147,6 +147,25 @@ impl ChatSession {
     }
 }
 
+/// 可落盘的会话快照。不含流式中的临时标记；未完成的助手文本会并进 messages。
+#[derive(Debug, Clone)]
+pub struct ExportedHub {
+    pub active: usize,
+    pub next_id: u64,
+    pub sessions: Vec<ExportedSession>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportedSession {
+    pub id: u64,
+    pub title: String,
+    pub session_file: Option<String>,
+    pub session_id: Option<String>,
+    pub last_sent_prompt: Option<String>,
+    pub input: String,
+    pub messages: Vec<ChatMessage>,
+}
+
 /// Live session list + per-slot chat state.
 pub struct SessionHub {
     sessions: Vec<ChatSession>,
@@ -240,9 +259,77 @@ impl SessionHub {
         }
     }
 
-    /// After Pi respawn / cwd change: one fresh slot.
+    /// 清空为本进程内的单个空槽。启动恢复不走这里。
     pub fn reset_all(&mut self) {
         *self = Self::new();
+    }
+
+    pub fn to_exported(&self) -> ExportedHub {
+        let sessions = self
+            .sessions
+            .iter()
+            .zip(self.chats.iter())
+            .map(|(session, chat)| {
+                let mut messages = chat.messages.clone();
+                if !chat.streaming_buf.is_empty() {
+                    messages.push(ChatMessage::Assistant(chat.streaming_buf.clone()));
+                }
+                ExportedSession {
+                    id: session.id,
+                    title: session.title.clone(),
+                    session_file: session.session_file.clone(),
+                    session_id: session.session_id.clone(),
+                    last_sent_prompt: chat.last_sent_prompt.clone(),
+                    input: chat.input.clone(),
+                    messages,
+                }
+            })
+            .collect();
+        ExportedHub {
+            active: self.active,
+            next_id: self.next_id,
+            sessions,
+        }
+    }
+
+    pub fn from_exported(exported: ExportedHub) -> Self {
+        if exported.sessions.is_empty() {
+            return Self::new();
+        }
+        let mut max_id = 0u64;
+        let mut sessions = Vec::new();
+        let mut chats = Vec::new();
+        for session in exported.sessions {
+            max_id = max_id.max(session.id);
+            let title = if session.title.trim().is_empty() {
+                format!("会话 {}", session.id)
+            } else {
+                session.title
+            };
+            sessions.push(ChatSession {
+                id: session.id,
+                title,
+                session_file: session.session_file,
+                session_id: session.session_id,
+            });
+            chats.push(ChatState {
+                messages: session.messages,
+                input: session.input,
+                last_sent_prompt: session.last_sent_prompt,
+                ..ChatState::default()
+            });
+        }
+        let mut next_id = exported.next_id.max(max_id.saturating_add(1));
+        if next_id == 0 {
+            next_id = 1;
+        }
+        let active = exported.active.min(sessions.len() - 1);
+        Self {
+            sessions,
+            chats,
+            active,
+            next_id,
+        }
     }
 }
 
@@ -355,6 +442,27 @@ mod tests {
         }
         assert_eq!(hub.active().title, "in first");
         assert_eq!(hub.list().len(), 2);
+    }
+
+    #[test]
+    fn export_keeps_streaming_partial_as_message_on_import() {
+        let mut hub = SessionHub::new();
+        hub.active_chat_mut().push_user("hi".to_owned());
+        hub.active_chat_mut().begin_streaming();
+        hub.active_chat_mut().append_delta("partial");
+        hub.set_active_session_file(Some("s.jsonl".to_owned()), Some("id".to_owned()));
+        hub.active_chat_mut().input = "draft".to_owned();
+        let loaded = SessionHub::from_exported(hub.to_exported());
+        assert_eq!(loaded.list().len(), 1);
+        assert_eq!(loaded.active().session_file.as_deref(), Some("s.jsonl"));
+        assert_eq!(loaded.active_chat().messages.len(), 2);
+        assert!(!loaded.active_chat().is_streaming);
+        assert_eq!(loaded.active_chat().input, "draft");
+        if let ChatMessage::Assistant(text) = &loaded.active_chat().messages[1] {
+            assert_eq!(text, "partial");
+        } else {
+            panic!("expected partial assistant text");
+        }
     }
 
     #[test]
