@@ -11,6 +11,7 @@
 //
 // 落地项：
 //   - 右抽屉 + Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用
+//   - 远程访问 UI 在 remote_access.rs（M5）
 //   - Skills 开关：读写 settings.json `skills` 数组（-id 排除 / +id 加回）
 //   - MCP 字段对齐：官方 `enabled: false` 主字段，兼容旧 `disabled` 读取，写回删 `disabled`
 //   - 记忆内联编辑：TextEdit + 保存写回 + 取消
@@ -524,6 +525,7 @@ impl AdminPanelState {
     /// `pi_connected`：当前是否有存活的 Pi RPC 连接（影响模型切换）。
     /// `pi_ready`：是否已探测到 Pi 程序。未就绪时，「通用」页会说明这一点。
     /// `pi_bin`：sidecar 路径，供扩展市场 `pi install` / `pi remove` 使用。
+    /// `remote`：M5 远程访问状态（配对 / 中继 / 设备）。抽屉关闭时仍由主循环 poll。
     pub fn show_panel(
         &mut self,
         ctx: &egui::Context,
@@ -531,6 +533,7 @@ impl AdminPanelState {
         pi_connected: bool,
         pi_ready: bool,
         pi_bin: Option<&Path>,
+        remote: &mut crate::remote_access::RemoteAccessState,
     ) -> AdminPanelReturn {
         if !self.open {
             self.add_provider.close();
@@ -832,7 +835,9 @@ impl AdminPanelState {
                                     pi_ready,
                                 );
                             }
-                            AdminTab::RemoteAccess => render_remote_stub(ui),
+                            AdminTab::RemoteAccess => {
+                                crate::remote_access::render_tab(ui, remote);
+                            }
                             AdminTab::General => {
                                 ui.add_space(4.0);
                                 ui.label(
@@ -995,37 +1000,9 @@ fn drawer_subtitle(tab: AdminTab) -> &'static str {
         AdminTab::Mcp => "管理 Pi 的 MCP 服务列表。",
         AdminTab::Marketplace => "浏览 pi.dev/packages，确认后经 sidecar 安装或卸载。",
         AdminTab::Memory => "查看与编辑记忆文件。",
-        AdminTab::RemoteAccess => "手机配对与公网中继（后续里程碑）。",
+        AdminTab::RemoteAccess => "手机配对、Cloudflare Tunnel 与已授权设备。",
         AdminTab::General => "通用与高级选项。",
     }
-}
-
-fn render_remote_stub(ui: &mut egui::Ui) {
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("远程访问").strong().size(16.0));
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            "配对码 / 二维码、已授权设备，以及公网中继将在后续里程碑提供。本页为入口壳。",
-        )
-        .size(13.0),
-    );
-    ui.add_space(8.0);
-    ui.label(
-        egui::RichText::new(
-            "默认中继计划为 Cloudflare Tunnel；亦可后配 Tailscale 或自建。中继依赖网络与账号，不假定同一局域网即可用。",
-        )
-        .weak()
-        .size(12.0),
-    );
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            "远程桌面三档（浏览 / 触控 / 全屏）尚未开放。电脑操控需要操作系统权限。",
-        )
-        .weak()
-        .size(12.0),
-    );
 }
 
 fn apply_models_result(
@@ -2686,6 +2663,7 @@ mod tests {
         assert!(AdminTab::ALL.contains(&AdminTab::Marketplace));
         assert!(AdminTab::ALL.contains(&AdminTab::RemoteAccess));
         assert!(drawer_subtitle(AdminTab::Marketplace).contains("sidecar"));
+        assert!(drawer_subtitle(AdminTab::RemoteAccess).contains("Cloudflare"));
     }
 
     #[test]

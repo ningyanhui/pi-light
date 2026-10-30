@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.2 + v3 M0 IA + M1 扩展市场 + **M2 Slim 预置** — 右设置抽屉七 Tab；市场浏览 / 确认安装；发行树预置 Slim 五包 + 操控三包（默认关）；远程访问仍为入口壳
+> **当前版本**：v0.2.2 + v3 M0–M2 + **M5 桌面远程** — 右设置抽屉七 Tab；市场 + Slim 预置；远程访问：配对码/二维码、Cloudflare Tunnel、已授权设备
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -31,6 +31,7 @@
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
 │  admin_panel 模块：设置抽屉（七 Tab）+ provider_catalog + ext_market / pi_pkg │
+│  remote_access + relay_mgr + remote_gateway：配对 / Cloudflare Tunnel / 设备   │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ std::process::Command（stdin/stdout piped）
                              │ 后台线程读 stdout → mpsc channel
@@ -74,15 +75,22 @@ pi-light/
 │   │   ├── api_keys.rs           # 应用内 API 密钥（写入 auth.json，保存后掩码）
 │   │   ├── provider_catalog.rs   # 内置厂商 + 自定义 API / models.json
 │   │   ├── onboarding.rs         # 首次打开：只引导配置模型与密钥
+│   │   ├── remote_access.rs      # 远程访问页（配对码 / QR / 设备）
+│   │   ├── remote_gateway.rs     # 本机 loopback 控制面
+│   │   ├── relay_mgr.rs          # cloudflared 探测 / 下载 / 隧道
 │   │   └── bin/mock_pi.rs        # 集成测试用 Pi 替身
 │   └── tests/rpc_smoke.rs        # 集成烟测
 ├── android/                      # Option C 占位壳
 ├── docs/
 │   ├── architecture.md
 │   ├── preset-packages.md        # Slim / 操控包钉版本与 tarball SHA-256
+│   ├── remote-acceptance.md      # M5 公网配对与中继验收
+│   ├── companion-protocol.md     # M6 消费的 claim / chat 钩子
 │   └── signing.md                # Windows 签名策略与 Authenticode 占位
 ├── scripts/
 │   ├── fetch-pi-sidecar.ps1      # Pi sidecar 下载/SHA-256 校验
+│   ├── fetch-cloudflared.ps1     # cloudflared 下载/SHA-256 校验
+│   ├── cloudflared.lock.json     # cloudflared 版本与 SHA 钉定
 │   ├── fetch-bash-sidecar.ps1    # MinGit 下载/SHA-256 校验（便携 bash）
 │   ├── fetch-pi-packages.py      # 预置 npm 包：下载、SHA-256、解压
 │   └── preset-packages.lock.json # Slim + 操控包钉版本
@@ -110,6 +118,9 @@ pi-light/
 | `preset_packages` | 嵌入 lockfile；Slim 本地 path 写入 settings；操控包启用/停用；computer-use 权限向导闸门 |
 | `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
+| `remote_access` | 远程访问页：允许手机远程、配对码/QR（TTL 10 分钟）、设备列表撤销、中继选项 |
+| `remote_gateway` | 本机 `127.0.0.1` HTTP：`/health`、`/v1/pair/info`、`POST /v1/pair/claim`；`/v1/chat` 返回 501 |
+| `relay_mgr` | cloudflared 探测顺序、SHA 校验下载、trycloudflare / 命名隧道启停与状态 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
 ---
@@ -143,7 +154,7 @@ MinGit 提供便携 bash/MSYS 环境，Pi 运行 shell 命令时自动使用。
 ```
 pi-light-windows-x64/
 ├── pi-light.exe                  # 主程序，用户唯一入口
-├── NOTICE                        # SHA-256 + 版权声明（Pi、MinGit、预置包）
+├── NOTICE                        # SHA-256 + 版权声明（Pi、MinGit、预置包、cloudflared）
 ├── LICENSE                       # Apache-2.0
 ├── preset-packages.md            # 预置包人类可读钉表
 └── sidecar/
@@ -153,16 +164,18 @@ pi-light-windows-x64/
     │   ├── usr/bin/              # sh.exe；Release 复制为 bash.exe 供 Pi 查找
     │   ├── mingw64/bin/          # 工具链
     │   └── cmd/                  # git.exe
-    └── pi-packages/              # npm tarball 解压树（Pi 本地 path 包）
-        ├── preset-lock.json
-        ├── pi-marketplace/
-        ├── pi-mcp-adapter/
-        ├── pi-web-access/
-        ├── pi-memory/
-        ├── pi-subagents/
-        ├── pi-browser-use/         # 默认不写入 settings
-        ├── pi-chrome-connector/
-        └── @injaneity/pi-computer-use/
+    ├── pi-packages/              # npm tarball 解压树（Pi 本地 path 包）
+    │   ├── preset-lock.json
+    │   ├── pi-marketplace/
+    │   ├── pi-mcp-adapter/
+    │   ├── pi-web-access/
+    │   ├── pi-memory/
+    │   ├── pi-subagents/
+    │   ├── pi-browser-use/         # 默认不写入 settings
+    │   ├── pi-chrome-connector/
+    │   └── @injaneity/pi-computer-use/
+    └── relay/
+        └── cloudflared.exe       # Cloudflare Tunnel（Apache-2.0；SHA 见 NOTICE）
 ```
 
 ### Pi agent 目录（M4′ 发现路径）
@@ -218,23 +231,24 @@ pi-light-windows-x64/
 | **v0.2.2** | 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹 | ✅ 已发布 |
 | **v3 M0** | 设置抽屉七 Tab；厂商 + 自定义 API；主聊天模型下拉；firstrun 只配密钥 | ✅ 已合入 |
 | **v3 M1** | 扩展市场浏览 / 搜索 / 类型滤镜；确认后 sidecar `pi install`；list/remove；`/reload` 提示 | ✅ 已合入 |
-| **v3 M2** | Slim 五包预置进 `sidecar/pi-packages/`；NOTICE tarball SHA；操控三包默认关 + 一键启用壳 | 本 PR |
+| **v3 M2** | Slim 五包预置进 `sidecar/pi-packages/`；NOTICE tarball SHA；操控三包默认关 + 一键启用壳 | ✅ 已合入 |
+| **v3 M5** | 远程访问页：配对码/二维码、Cloudflare Tunnel 状态、已授权设备；本机 claim 钩子 | 本 PR |
 
 ---
 
-## M6′ 决策：维持 Android Option C
+## M6′ / Android：占位 APK，桌面钩子已在 M5 长出
 
-桌面 Host（`desktop-rust` egui + Pi RPC）**没有**长出 Android 真 Host 所需的共享面，因此 **不升 Option A**。
+v3 **M5** 已在桌面提供：
 
-Option A 需要的最小面（LAN / HTTP 配对、可被手机连上的 Host API、非本机 stdin/stdout 的会话通道）在 tip 上均不存在：
+- 本机 loopback HTTP 网关（`remote_gateway`）
+- 配对码 / 二维码 / `POST /v1/pair/claim`
+- Cloudflare Tunnel 公网出口（`relay_mgr`）
 
-- `pi_rpc` 只做 `std::process::Command` 拉起本机 `pi --mode rpc`，JSONL 走 stdin/stdout
-- 仓库内无 HTTP 服务、无 WebSocket、无配对协议、无 Android 可调用的 Host crate
-- 正式 sidecar 是 Windows x64 的 `pi-windows-x64.zip`，不能原样塞进 APK
+这是 companion 真连所需的 Host 面，供 **M6-lite** 消费（见 `docs/companion-protocol.md`）。
 
-按 StayNing：零大改则跳过。强行做 A 等于新写一层 Host 协议 + 手机联网，超出「接线」。
+**本里程碑仍不把 Android 升为真 companion**：`android/` 继续是 Kotlin Compose debug 占位壳，CI / Release 只跑 `assembleDebug`，不内嵌 Pi、不扫码、不连中继。完整会话以 Windows `desktop-rust/` 为准。M6 再把 APK 接到上述钩子。
 
-**Android 继续 Option C**：`android/` 为 Kotlin Compose debug 占位壳，CI / Release 只跑 `assembleDebug`，不内嵌 Pi、不连桌面。完整会话以 Windows `desktop-rust/` 为准。
+Pi sidecar 仍是 Windows x64 的 `pi-windows-x64.zip`，不能原样塞进 APK。`pi_rpc` 仍只托管本机 `pi --mode rpc`。
 
 ---
 
@@ -255,6 +269,15 @@ Option A 需要的最小面（LAN / HTTP 配对、可被手机连上的 Host API
 | 跨会话引用 | 仅支持在同一 Pi 进程会话内直接发送；不支持跨实例或远程会话引用 |
 | 消息分支树 | M5′ 不实现消息分支树 UI；若 Pi 官方支持则后续里程碑跟进 |
 | Taskboard 布局 | 不实现 Taskboard；不引入 CDP / 双后端 / dsh |
+
+## v3 M5 诚实限制
+
+| 类目 | 限制说明 |
+|------|---------|
+| 中继 | 依赖本机网络与公网可达性。临时 trycloudflare 无需 Cloudflare 账号，主机名每次启动会变。命名隧道 / Tailscale 需要账号。同一局域网不能代替公网中继 |
+| 配对握手 | 桌面校验配对码后自动授权。手机 UI 与远程聊天是 M6。`/v1/chat` 返回 501 |
+| 远程桌面 | 浏览 / 触控 / 全屏未开放 |
+| cloudflared | 未钉平台（如 macOS）不提供应用内下载，只探测 PATH / 环境变量 |
 
 ## M5′ `#` 引用工作流
 

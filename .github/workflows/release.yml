@@ -110,6 +110,7 @@ jobs:
           New-Item -ItemType Directory -Path "$root/sidecar/pi" -Force | Out-Null
           New-Item -ItemType Directory -Path "$root/sidecar/bash" -Force | Out-Null
           New-Item -ItemType Directory -Path "$root/sidecar/pi-packages" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$root/sidecar/relay" -Force | Out-Null
           Copy-Item -LiteralPath $piLightExe -Destination "$root/pi-light.exe"
           Copy-Item "NOTICE" "$root/NOTICE"
           Copy-Item "LICENSE" "$root/LICENSE"
@@ -157,6 +158,21 @@ jobs:
           }
           if (Test-Path "pi-light-windows-x64/sidecar/pi-packages/billion-context") {
             throw "billion-context must not be shipped in the default preset tree"
+          }
+
+      - name: Fetch cloudflared (SHA-256 verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & ./scripts/fetch-cloudflared.ps1 -DestDir "pi-light-windows-x64/sidecar/relay"
+          $exe = "pi-light-windows-x64/sidecar/relay/cloudflared.exe"
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "cloudflared.exe missing after fetch"
+          }
+          $expected = ((Get-Content -LiteralPath "scripts/cloudflared.lock.json" -Raw | ConvertFrom-Json).artifacts.'windows-amd64'.sha256).ToLowerInvariant()
+          $got = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($got -ne $expected) {
+            throw "cloudflared SHA-256 mismatch after fetch: expected $expected got $got"
           }
 
       - name: Create Windows zip
