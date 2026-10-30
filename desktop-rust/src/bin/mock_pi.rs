@@ -11,9 +11,15 @@
 // Usage (in tests):  PI_LIGHT_PI_BIN=<path-to-mock-pi> cargo test
 // Or let tests discover it via CARGO_BIN_EXE_mock-pi automatically.
 
+use std::env;
 use std::io::{self, BufRead, BufWriter, Write};
 
 fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if handle_package_cli(&args) {
+        return;
+    }
+
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -63,6 +69,35 @@ fn main() {
             "switch_session" => handle_session_command(&mut out, cmd_id, "switch_session"),
             _ => handle_generic(&mut out, cmd_id, cmd_type),
         }
+    }
+}
+
+/// M1：模拟 `pi install` / `pi list` / `pi remove`，供包管理单测与 UI 后台线程使用。
+fn handle_package_cli(args: &[String]) -> bool {
+    match args.first().map(String::as_str) {
+        Some("install") => {
+            let source = args.get(1).map(String::as_str).unwrap_or("");
+            if source.is_empty() {
+                eprintln!("mock-pi: missing install source");
+                std::process::exit(2);
+            }
+            println!("mock-pi installed {source}");
+            true
+        }
+        Some("remove") | Some("uninstall") => {
+            let source = args.get(1).map(String::as_str).unwrap_or("");
+            if source.is_empty() {
+                eprintln!("mock-pi: missing remove source");
+                std::process::exit(2);
+            }
+            println!("mock-pi removed {source}");
+            true
+        }
+        Some("list") => {
+            println!("No packages installed.");
+            true
+        }
+        _ => false,
     }
 }
 

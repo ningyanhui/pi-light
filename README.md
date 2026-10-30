@@ -90,7 +90,7 @@ cargo run
 
 ## 3. 已交付能力
 
-相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 补上系统 CJK 字体、应用内 API 密钥和会话恢复。v0.2.2 把第一次打开改成模型与密钥引导。v0.3 起 M0：设置改为左下角齿轮打开的右侧抽屉，七 Tab（模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用），模型页为内置厂商 + 自定义 API，主聊天顶栏有模型下拉。
+相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 补上系统 CJK 字体、应用内 API 密钥和会话恢复。v0.2.2 把第一次打开改成模型与密钥引导。v0.3 起 M0：设置改为左下角齿轮打开的右侧抽屉，七 Tab（模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用），模型页为内置厂商 + 自定义 API，主聊天顶栏有模型下拉。M1：扩展市场可浏览 / 搜索 / 按类型筛选 pi.dev/packages（npm `pi-package`），详情卡确认后经 sidecar 执行 `pi install npm:…`，可列出并卸载已安装包，装后提示重启 sidecar 或 `/reload`。
 
 | 能力 | 说明 |
 |------|------|
@@ -105,8 +105,9 @@ cargo run
 | API 密钥 | 「模型」页写入 Pi `auth.json`；自定义端点写入 `models.json`；保存后输入框清空，已存密钥只显示掩码 `••••••••` |
 | 会话恢复 | 会话列表与消息写入 `~/.pi-light/sessions.json`，下次启动读回；Pi 会话文件仍在则 `switch_session` |
 | 中文显示 | Windows 用系统微软雅黑等 CJK 字体作为 egui 回退，避免方框；不捆绑字体文件 |
-| Skills | 卡片列表；开关写回 `settings.json` 的 `skills` 数组；改后重启 sidecar |
+| Skills | 卡片列表；开关写回 `settings.json` 的 `skills` 数组；改后重启 sidecar。页内列出已安装 Pi 包，可移除 |
 | MCP | 卡片列表；读写官方 `enabled`（兼容旧 `disabled`）；新增写入 `mcp.json`；改后重启 sidecar |
+| 扩展市场 | 浏览 / 搜索 / Extension·Skill·Prompt·Theme 滤镜；精选列表；详情卡含元数据审计；确认后 `pi install npm:…`；已安装 list/remove；脚注来源 pi.dev/packages |
 | 主界面底纹 | 深色底上自绘闪电折线，不引用外部图片 |
 | 记忆 | Project / User / Session 三层；内联编辑写回文件 |
 | 工作目录 | 会话栏查看 / 切换 cwd；入口单次校验后 spawn Pi |
@@ -156,6 +157,8 @@ desktop-rust/src/
 ├── session_store.rs     # 会话历史落盘与启动恢复
 ├── session_insights.rs  # Token / Trace
 ├── admin_panel.rs       # 设置抽屉（七 Tab）
+├── ext_market.rs        # 扩展市场浏览 / 详情 / 确认安装
+├── pi_pkg.rs            # sidecar `pi install` / `list` / `remove` + settings.json 解析
 ├── api_keys.rs          # 应用内 API 密钥（掩码，不回显明文）
 ├── provider_catalog.rs  # 内置厂商 + 自定义 API / models.json
 ├── onboarding.rs        # 首次打开：只引导配置模型与密钥
@@ -172,7 +175,7 @@ desktop-rust/src/
 - **API 密钥**：设置抽屉的「模型」页可以把提供商 API 密钥写入 Pi 的 `auth.json`（`type: api_key`）。自定义 API 的地址与模型目录写入 `models.json`，密钥仍进 `auth.json`。保存后输入框清空，已存密钥只显示固定掩码 `••••••••`，界面不回显明文，也不在错误信息里打印密钥。OAuth 登录不会被这个表单覆盖。环境变量和 Pi 的 `/login` 仍然可用。文件权限在 Unix 上为 `0600`。
 - **远程访问**：抽屉已预留「远程访问」页。公网中继（默认计划 Cloudflare Tunnel，可选 Tailscale / 自建）与手机配对将在后续里程碑提供。中继依赖网络与账号，不能假定同一局域网即可用。本里程碑不提供真实配对或中继。
 - **电脑操控**：后续若启用电脑操控扩展，需要操作系统辅助功能 / 截屏 / 模拟输入等权限；未授权时不可用。本里程碑仅在远程页留下说明。
-- **第三方 Pi 包**：扩展市场安装的包可执行代码，安装前应阅读权限与审计说明并确认。本里程碑「扩展市场」仅为入口壳，不执行浏览或 `pi install`。
+- **第三方 Pi 包**：扩展市场安装的包可执行代码。浏览来自 npm 上带 `pi-package` 关键词的包（与 [pi.dev/packages](https://pi.dev/packages) 同源）。安装必须在详情卡点「确认安装 npm:…」后才会调用 sidecar `pi install`；卸载同样要确认。审计目前只看注册表元数据（许可证、关键词、install 脚本），**不**下载 tarball 扫源码，不能发现混淆代码。精选预置打进发行包是后续里程碑，本页不会静默装包。
 - **会话持久化**：壳把会话列表、消息、输入草稿、工作目录和 Pi 会话文件路径写到 `~/.pi-light/sessions.json`（可用 `PI_LIGHT_STATE_PATH` 改位置）。下次启动读回。若对应会话文件还在，则对 Pi 发 `switch_session`；否则保留壳内记录并 `new_session`。没有会话树 / fork。`#` 引用仍然可用。
 - **中文**：不捆绑字体。Windows 优先加载系统微软雅黑（`msyh.ttc` / `msyh.ttf`）作为 egui 回退。可用 `PI_LIGHT_CJK_FONT` 指定字体文件。
 - **Android**：当前仍是 debug 占位 APK（`assembleDebug`，不内嵌 Pi）。桌面 Host 尚未提供公网配对 API。决策记录见 [`docs/architecture.md`](./docs/architecture.md)。

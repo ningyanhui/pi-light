@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.2 + v3 M0 IA — 右设置抽屉七 Tab、内置厂商 + 自定义 API、主聊天模型下拉；Skills/MCP/记忆沿用；扩展市场与远程访问为入口壳
+> **当前版本**：v0.2.2 + v3 M0 IA + **M1 扩展市场** — 右设置抽屉七 Tab、内置厂商 + 自定义 API；市场浏览 / 确认安装 / list-remove；远程访问仍为入口壳
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -30,7 +30,7 @@
 │                                                                       │
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
-│  admin_panel 模块：设置抽屉（七 Tab）+ provider_catalog（厂商/自定义 API） │
+│  admin_panel 模块：设置抽屉（七 Tab）+ provider_catalog + ext_market / pi_pkg │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ std::process::Command（stdin/stdout piped）
                              │ 后台线程读 stdout → mpsc channel
@@ -68,6 +68,8 @@ pi-light/
 │   │   ├── session_store.rs      # 会话历史落盘与启动恢复
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
 │   │   ├── admin_panel.rs        # 设置抽屉（七 Tab）
+│   │   ├── ext_market.rs         # 扩展市场 UI（浏览 / 详情 / 确认安装）
+│   │   ├── pi_pkg.rs             # `pi install` / `list` / `remove` + settings.json
 │   │   ├── api_keys.rs           # 应用内 API 密钥（写入 auth.json，保存后掩码）
 │   │   ├── provider_catalog.rs   # 内置厂商 + 自定义 API / models.json
 │   │   ├── onboarding.rs         # 首次打开：只引导配置模型与密钥
@@ -100,6 +102,8 @@ pi-light/
 | `provider_catalog` | 内置厂商卡片 + 自定义 API 表单；读写 `models.json` 的 `providers` 对象 |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace（含 args 预览） |
 | `admin_panel` | 左下角齿轮打开右侧抽屉。Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用。密钥写入 `auth.json` 后只显示掩码 |
+| `ext_market` | 扩展市场：npm `pi-package` 目录、类型滤镜、详情卡、元数据审计、确认安装 |
+| `pi_pkg` | 经 sidecar 执行 `pi install` / `pi list` / `pi remove`；解析 `settings.json` `packages` |
 | `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
@@ -152,7 +156,7 @@ pi-light-windows-x64/
 
 | 文件/目录 | 用途 |
 |-----------|------|
-| `settings.json` | defaultProvider / defaultModel 读写；`skills` 数组排除列表读写（M4′+） |
+| `settings.json` | defaultProvider / defaultModel；`skills` 排除列表；`packages` 已安装 Pi 包（M1 经 sidecar 读写） |
 | `mcp.json` | MCP 服务列表；官方 `enabled` 字段读写，兼容旧 `disabled`（M4′+） |
 | `models.json` | 自定义 API 提供商（`providers` 对象：baseUrl / api / models）；M0 可写 |
 | `auth.json` | API 凭据。设置页可写入 `api_key`；界面不读回明文。OAuth 条目不在此覆盖 |
@@ -197,7 +201,8 @@ pi-light-windows-x64/
 | **v0.2.0** | 文档换轨 + 便携 bash + Claude 对标缺口合入后的发版 | ✅ 已发布 |
 | **v0.2.1** | 中文显示、应用内密钥、会话恢复、设置页顺序 | ✅ 已发布 |
 | **v0.2.2** | 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹 | ✅ 已发布 |
-| **v3 M0** | 设置抽屉七 Tab；厂商 + 自定义 API；主聊天模型下拉；firstrun 只配密钥；扩展市场/远程为壳 | 进行中 |
+| **v3 M0** | 设置抽屉七 Tab；厂商 + 自定义 API；主聊天模型下拉；firstrun 只配密钥 | ✅ 已合入 |
+| **v3 M1** | 扩展市场浏览 / 搜索 / 类型滤镜；确认后 sidecar `pi install`；list/remove；`/reload` 提示 | 本 PR |
 
 ---
 

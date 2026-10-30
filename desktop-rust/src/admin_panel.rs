@@ -24,6 +24,8 @@ use std::{
 use eframe::egui;
 
 use crate::api_keys::ApiKeyForm;
+use crate::ext_market::{self, ExtMarketState, InstalledAction};
+use crate::pi_pkg::{self, InstalledPackage};
 use crate::provider_catalog::{self, AddProviderForm, CustomProvider};
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
@@ -284,6 +286,9 @@ pub struct AdminPanelState {
     pub mcp_query: String,
     pub mcp_new_id: String,
     pub mcp_new_command: String,
+    /// 扩展市场（M1）：浏览 / 确认安装 / 已安装列表。
+    pub market: ExtMarketState,
+    pub installed_packages: Vec<InstalledPackage>,
     /// 打开对话框的帧号。同一帧内的点击不当作「点到外面」。
     pub opened_pass: Option<u64>,
 }
@@ -305,6 +310,12 @@ impl AdminPanelState {
 
         self.model_config = discover_model_config();
         self.model_state = DiscoveryState::Ready;
+
+        self.installed_packages = pi_pkg::load_installed_packages(
+            pi_agent_dir().map(|d| d.join("settings.json")).as_deref(),
+            pi_project_dir().map(|d| d.join("settings.json")).as_deref(),
+        );
+        self.market.installed = self.installed_packages.clone();
 
         let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
         self.api_keys.refresh(auth_path.as_deref());
@@ -445,12 +456,14 @@ impl AdminPanelState {
     ///
     /// `pi_connected`：当前是否有存活的 Pi RPC 连接（影响模型切换）。
     /// `pi_ready`：是否已探测到 Pi 程序。未就绪时，「通用」页会说明这一点。
+    /// `pi_bin`：sidecar 路径，供扩展市场 `pi install` / `pi remove` 使用。
     pub fn show_panel(
         &mut self,
         ctx: &egui::Context,
         session_memory_hint: Option<&str>,
         pi_connected: bool,
         pi_ready: bool,
+        pi_bin: Option<&Path>,
     ) -> AdminPanelReturn {
         if !self.open {
             self.add_provider.close();
@@ -476,7 +489,9 @@ impl AdminPanelState {
         dim.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(150));
 
         let armed = self.opened_pass.is_some_and(|opened| pass > opened);
-        if armed && !self.add_provider.open {
+        let market_modal_open =
+            self.market.detail.is_some() || self.market.confirm_remove.is_some();
+        if armed && !self.add_provider.open && !market_modal_open {
             let mut close_from_outside = false;
             egui::Area::new(egui::Id::new("pi_light_settings_blocker"))
                 .order(egui::Order::Middle)
@@ -503,6 +518,10 @@ impl AdminPanelState {
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if self.add_provider.open {
                 self.add_provider.close();
+            } else if self.market.detail.is_some() {
+                self.market.detail = None;
+            } else if self.market.confirm_remove.is_some() {
+                self.market.confirm_remove = None;
             } else {
                 self.open = false;
                 self.opened_pass = None;
@@ -520,6 +539,16 @@ impl AdminPanelState {
         let mut mcp_add: Option<(String, String)> = None;
         let mut close_drawer = false;
         let mut models_result = provider_catalog::ModelsTabResult::default();
+        let mut market_result = ext_market::MarketUiResult::default();
+        let mut skills_pkg_action = InstalledAction::None;
+        if self.market.poll() {
+            self.sidecar_restart_needed = true;
+            self.installed_packages = pi_pkg::load_installed_packages(
+                pi_agent_dir().map(|d| d.join("settings.json")).as_deref(),
+                pi_project_dir().map(|d| d.join("settings.json")).as_deref(),
+            );
+            self.market.installed = self.installed_packages.clone();
+        }
 
         let footer_h = 40.0;
         let drawer_w = (screen.width() * 0.58).clamp(440.0, 680.0);
@@ -634,6 +663,13 @@ impl AdminPanelState {
                                     .weak()
                                     .size(11.0),
                                 );
+                                ui.add_space(12.0);
+                                skills_pkg_action = ext_market::render_installed_table(
+                                    ui,
+                                    &self.installed_packages,
+                                    "",
+                                    true,
+                                );
                             }
                             AdminTab::Mcp => {
                                 ui.add(
@@ -723,7 +759,14 @@ impl AdminPanelState {
                                     },
                                 );
                             }
-                            AdminTab::Marketplace => render_marketplace_stub(ui),
+                            AdminTab::Marketplace => {
+                                market_result = ext_market::render_marketplace(
+                                    ui,
+                                    &mut self.market,
+                                    &self.installed_packages,
+                                    pi_ready,
+                                );
+                            }
                             AdminTab::RemoteAccess => render_remote_stub(ui),
                             AdminTab::General => {
                                 ui.add_space(4.0);
@@ -778,6 +821,30 @@ impl AdminPanelState {
             add_result,
             pi_connected,
         );
+
+        if let Some(err) = market_result.error {
+            self.last_error = Some(err);
+        }
+        if market_result.restart {
+            self.sidecar_restart_needed = true;
+        }
+        match skills_pkg_action {
+            InstalledAction::Remove(source) => self.market.confirm_remove = Some(source),
+            InstalledAction::Reload => {
+                self.sidecar_restart_needed = true;
+                self.market.reload_hint = Some(
+                    "已请求重启 sidecar。新包在重启后生效，也可在对话中输入 /reload。".to_owned(),
+                );
+            }
+            InstalledAction::None => {}
+        }
+        let modal_result = ext_market::render_market_modals(ctx, &mut self.market, pi_bin);
+        if let Some(err) = modal_result.error {
+            self.last_error = Some(err);
+        }
+        if modal_result.restart {
+            self.sidecar_restart_needed = true;
+        }
 
         if let Some((id, command)) = mcp_add {
             match pi_agent_dir() {
@@ -849,31 +916,11 @@ fn drawer_subtitle(tab: AdminTab) -> &'static str {
         AdminTab::Models => "管理模型提供商、API 密钥和默认模型。",
         AdminTab::Skills => "发现目录中的 Skills，开关写回 settings.json。",
         AdminTab::Mcp => "管理 Pi 的 MCP 服务列表。",
-        AdminTab::Marketplace => "浏览与安装 Pi 包（后续里程碑）。",
+        AdminTab::Marketplace => "浏览 pi.dev/packages，确认后经 sidecar 安装或卸载。",
         AdminTab::Memory => "查看与编辑记忆文件。",
         AdminTab::RemoteAccess => "手机配对与公网中继（后续里程碑）。",
         AdminTab::General => "通用与高级选项。",
     }
-}
-
-fn render_marketplace_stub(ui: &mut egui::Ui) {
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("扩展市场").strong().size(16.0));
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            "浏览 pi.dev/packages、确认后经 sidecar 执行 pi install，以及精选预置包，将在后续里程碑提供。本页为入口壳。",
-        )
-        .size(13.0),
-    );
-    ui.add_space(8.0);
-    ui.label(
-        egui::RichText::new(
-            "第三方 Pi 包可执行代码。安装前应阅读权限与审计说明并确认。本里程碑不执行安装。",
-        )
-        .weak()
-        .size(12.0),
-    );
 }
 
 fn render_remote_stub(ui: &mut egui::Ui) {
@@ -2561,6 +2608,17 @@ mod tests {
         assert_eq!(AdminTab::ALL.len(), 7);
         assert!(AdminTab::ALL.contains(&AdminTab::Marketplace));
         assert!(AdminTab::ALL.contains(&AdminTab::RemoteAccess));
+        assert!(drawer_subtitle(AdminTab::Marketplace).contains("sidecar"));
+    }
+
+    #[test]
+    fn discover_reads_installed_packages() {
+        let dir = TempDir::new().unwrap();
+        let settings = dir.path().join("settings.json");
+        fs::write(&settings, r#"{"packages":["npm:pi-memory@0.4.2"]}"#).unwrap();
+        let pkgs = crate::pi_pkg::parse_settings_packages(&settings, crate::pi_pkg::PkgScope::User);
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "pi-memory");
     }
 
     #[test]

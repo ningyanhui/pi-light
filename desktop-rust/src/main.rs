@@ -559,6 +559,7 @@ impl eframe::App for PiLightApp {
             None,
             self.rpc_client.is_some(),
             self.pi_probe.is_ready(),
+            self.pi_probe.path(),
         );
         if let Some(req) = panel_ret.set_model_request {
             self.handle_set_model_request(req);
