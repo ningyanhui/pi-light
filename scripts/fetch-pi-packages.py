@@ -42,6 +42,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import shutil
 import ssl
 import subprocess
@@ -188,11 +189,31 @@ def package_has_deps(pkg_dir: Path) -> bool:
     return bool(deps)
 
 
+def resolve_npm() -> str:
+    """Locate npm. Windows GHA exposes npm.cmd; CreateProcess cannot run .cmd."""
+    npm = shutil.which("npm")
+    if npm is None and os.name == "nt":
+        npm = shutil.which("npm.cmd")
+    if not npm:
+        raise SystemExit("npm not found on PATH; cannot --install-deps")
+    return npm
+
+
 def npm_install(pkg_dir: Path) -> None:
-    cmd = ["npm", "install", "--omit=dev", "--legacy-peer-deps"]
-    print(f"npm install in {pkg_dir} ...")
+    npm = resolve_npm()
+    args = [npm, "install", "--omit=dev", "--legacy-peer-deps"]
+    print(f"npm install in {pkg_dir} ({npm}) ...")
     try:
-        subprocess.run(cmd, cwd=str(pkg_dir), check=True)
+        if os.name == "nt":
+            # .cmd/.bat must go through cmd.exe; list2cmdline quotes paths with spaces.
+            subprocess.run(
+                subprocess.list2cmdline(args),
+                cwd=str(pkg_dir),
+                check=True,
+                shell=True,
+            )
+        else:
+            subprocess.run(args, cwd=str(pkg_dir), check=True)
     except FileNotFoundError as exc:
         raise SystemExit("npm not found on PATH; cannot --install-deps") from exc
     except subprocess.CalledProcessError as exc:
@@ -222,7 +243,7 @@ def check_docs(lock: dict[str, Any], notice: Path, docs: Path) -> None:
     print(f"docs ok: {notice} and {docs} list every lockfile spec + SHA-256")
 
 
-def fetch_one(pkg: dict[str, Any], dest_root: Path | None, install_deps: bool) -> None:
+def fetch_one(pkg: dict[str, Any], dest_root: Path | None) -> Path | None:
     spec = f"{pkg['name']}@{pkg['version']}"
     expected = str(pkg["sha256"]).lower()
     print(f"fetch {spec}")
@@ -234,15 +255,14 @@ def fetch_one(pkg: dict[str, Any], dest_root: Path | None, install_deps: bool) -
         )
     print(f"  sha256 ok ({len(blob)} bytes)")
     if dest_root is None:
-        return
+        return None
     dest = dest_root.joinpath(*Path(str(pkg["dir"])).parts)
     if dest.exists():
         shutil.rmtree(dest)
     extract_tarball(blob, dest)
     if not (dest / "package.json").is_file():
         raise SystemExit(f"{spec}: package.json missing after extract into {dest}")
-    if install_deps and package_has_deps(dest):
-        npm_install(dest)
+    return dest
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -293,13 +313,23 @@ def main(argv: list[str] | None = None) -> int:
     dest = None if args.verify_only else (Path(args.dest) if args.dest else None)
     if not args.verify_only and dest is None:
         raise SystemExit("--dest is required unless --verify-only")
+    if bool(args.install_deps) and not args.verify_only:
+        npm = resolve_npm()
+        print(f"npm for --install-deps: {npm}")
     if dest is not None:
         dest.mkdir(parents=True, exist_ok=True)
         (dest / "preset-lock.json").write_text(
             lock_path.read_text(encoding="utf-8"), encoding="utf-8"
         )
+    extracted: list[Path] = []
     for pkg in packages:
-        fetch_one(pkg, dest, install_deps=bool(args.install_deps) and not args.verify_only)
+        dest_dir = fetch_one(pkg, dest)
+        if dest_dir is not None:
+            extracted.append(dest_dir)
+    if bool(args.install_deps) and not args.verify_only:
+        for dest_dir in extracted:
+            if package_has_deps(dest_dir):
+                npm_install(dest_dir)
     print(f"ok: {len(packages)} package(s)")
     return 0
 
