@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "source": "npm",
+  "registry": "https://registry.npmjs.org",
+  "pi_sidecar": "v1.4.0",
+  "notes": "Canonical pin for M2 preset packages. SHA-256 is of the npm tarball. Release must fail on mismatch. pi-lens and billion-context are market-optional and must not appear here as default_enabled.",
+  "packages": [
+    {
+      "name": "pi-marketplace",
+      "version": "0.1.3",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pi-marketplace/-/pi-marketplace-0.1.3.tgz",
+      "sha256": "3c852b0d3b368fb9a5e86104fd4376a3037d3b1c1e688887e296b72025beea7b",
+      "integrity": "sha512-HQHM3W5zYB5WOOQvZw7HtxDiM4jfMaWvo+pUELnw99+VX55FvhAss4a0NdFOeC5exIAHqIj03jhAMcSSy4AkSA==",
+      "dir": "pi-marketplace",
+      "role": "slim",
+      "default_enabled": true,
+      "needs_permission_wizard": false
+    },
+    {
+      "name": "pi-mcp-adapter",
+      "version": "7.0.0",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pi-mcp-adapter/-/pi-mcp-adapter-7.0.0.tgz",
+      "sha256": "1cd1eab457c0303a4574e04731c566162ef21d98614d1341751e0ad27648ed73",
+      "integrity": "sha512-/7g2R11VEZYmYgsstTKJ6kTIbluOLI/w72cVq0e9UAhquLLEFG7NUfdFfGyNZ18YhmiIU84iKioKuBH4YHTXdg==",
+      "dir": "pi-mcp-adapter",
+      "role": "slim",
+      "default_enabled": true,
+      "needs_permission_wizard": false
+    },
+    {
+      "name": "pi-web-access",
+      "version": "0.46.0",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pi-web-access/-/pi-web-access-0.46.0.tgz",
+      "sha256": "14f9ec9ed276d54118996788f268e537070aac05d5f0a3a9333869698d5a94ad",
+      "integrity": "sha512-UfeJKU0TPmQU/3hmfAC5Ot/e5Ib0uHkg2+VHM7Ae4kVilLZf7ocGqHFzBzOkYuGLZ87LobzkrhwTAq8lO/N7cQ==",
+      "dir": "pi-web-access",
+      "role": "slim",
+      "default_enabled": true,
+      "needs_permission_wizard": false
+    },
+    {
+      "name": "pi-memory",
+      "version": "0.4.2",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pi-memory/-/pi-memory-0.4.2.tgz",
+      "sha256": "ac4826a4b16bb75e81871aa4ccaccb7701fd09cbd7ed6bf785ad99bd3ca60e3f",
+      "integrity": "sha512-voH+1MalADyVN23p79g4atdtPxzr1bDcfk1y0uCJL0xfodiSzNA5V5CcmODBTtHlrQzDT+AgasYPlgNWg8YPRQ==",
+      "dir": "pi-memory",
+      "role": "slim",
+      "default_enabled": true,
+      "needs_permission_wizard": false
+    },
+    {
+      "name": "pi-subagents",
+      "version": "0.84.0",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pi-subagents/-/pi-subagents-0.84.0.tgz",
+      "sha256": "f9c038aac95d860c7adb77f02919b5016f410f8670f41a8cb911b56598742a02",
+      "integrity": "sha512-IagE1hcBxLi82jTxTmcy/pIWckBuqhMH1GfAOe6/aIMVfnopMybCbcTMUS5K0CNy4tqSwHGleaXabaDmJS1QOg==",
+      "dir": "pi-subagents",
+      "role": "slim",
+      "default_enabled": true,
+      "needs_permission_wizard": false
+    },
+    {
+      "name": "pi-browser-use",
+      "version": "0.12.15",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pi-browser-use/-/pi-browser-use-0.12.15.tgz",
+      "sha256": "0d194a3fccace45784bc1f34f81760442beb61e99fa71415b5b0eee0d015487a",
+      "integrity": "sha512-Rc23rIG7FfXCwKL9toQ/FES4D2Bgznwh3WmdNIS1HnLVfJiaxwjyT/8x4eA6atkl6lx1a4vJbCt8FXyWb3BIGA==",
+      "dir": "pi-browser-use",
+      "role": "control",
+      "default_enabled": false,
+      "needs_permission_wizard": false
+    },
+    {
+      "name": "pi-chrome-connector",
+      "version": "0.2.2",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pi-chrome-connector/-/pi-chrome-connector-0.2.2.tgz",
+      "sha256": "4e050fb8fe0baffcae601b4fd96ee08dc7f8ecbbb8fed486327f2bc167ca9065",
+      "integrity": "sha512-zupvZEyFCyzbuqhVUf4uM7CHR0S2uRfywqh2BGbUPFITH5ebag1NoI6IZ9hfQxnibMSIQN7u6LdLSgJnrDNmYw==",
+      "dir": "pi-chrome-connector",
+      "role": "control",
+      "default_enabled": false,
+      "needs_permission_wizard": false
+    },
+    {
+      "name": "@injaneity/pi-computer-use",
+      "version": "0.5.1",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@injaneity/pi-computer-use/-/pi-computer-use-0.5.1.tgz",
+      "sha256": "ec7fff45a3febbab2b5c302db1171f5f10d6ca85aacd892a9f422028246dcb79",
+      "integrity": "sha512-eBYKTUYfLeaCE33TF6CBb0rklXbgS/4GNDsnl+cBTXv6HTkkMc/Gq/ft3RdcDL0hiRmQBwU9Ohx9jWz4r/l9xQ==",
+      "dir": "@injaneity/pi-computer-use",
+      "role": "control",
+      "default_enabled": false,
+      "needs_permission_wizard": true
+    }
+  ],
+  "market_optional_excluded_from_default": [
+    "pi-lens",
+    "billion-context"
+  ]
+}

@@ -10,9 +10,10 @@ pi-light 通过 **sidecar** 启动官方 Pi 进程（`pi.exe --mode rpc`）。�
 {exe_dir}/
 ├── pi-light.exe
 └── sidecar/
-    └── pi/
-        ├── pi.exe          ← spawn 入口
-        └── …               ← Pi 发行包内其它文件（theme、examples 等）
+    ├── pi/
+    │   ├── pi.exe          ← spawn 入口
+    │   └── …               ← Pi 发行包内其它文件（theme、examples 等）
+    └── pi-packages/        ← M2 预置 npm 包（见 pi-packages/README.md）
 ```
 
 路径探测顺序见 [AGENTS.md](../../AGENTS.md) 与 `desktop-rust/src/pi_path.rs`：环境变量 `PI_LIGHT_PI_BIN` → 内嵌 `sidecar/pi/` →（可选）PATH。
@@ -50,8 +51,9 @@ GitHub Actions [Release 工作流](../../.github/workflows/release.yml) 在 **Wi
 
 1. `cargo build --release` 生成 `pi-light.exe`
 2. 运行 `scripts/fetch-pi-sidecar.ps1`，将校验通过的 Pi 解压到打包目录的 `sidecar/pi/`
-3. 复制根目录 `NOTICE`、`LICENSE`
-4. 打 zip：`pi-light-windows-x64.zip`（**不** commit 进 main）
+3. 运行 `scripts/fetch-pi-packages.py --install-deps --check-docs`，将校验通过的预置包解压到 `sidecar/pi-packages/`
+4. 复制根目录 `NOTICE`、`LICENSE`、`docs/preset-packages.md`
+5. 打 zip：`pi-light-windows-x64.zip`（**不** commit 进 main）
 
 校验失败时 workflow **失败**，不会上传含 Pi 的 zip。
 

@@ -10,6 +10,12 @@ desktop-rust/sidecar/pi/*.zip
 desktop-rust/sidecar/pi/*.tar.gz
 desktop-rust/sidecar/pi/node_modules/
 
+# Preset Pi packages (tarball extract + node_modules; lockfile lives in scripts/)
+sidecar/pi-packages/*
+!sidecar/pi-packages/README.md
+desktop-rust/sidecar/pi-packages/*
+!desktop-rust/sidecar/pi-packages/README.md
+
 # OS generated
 .DS_Store
 Thumbs.db

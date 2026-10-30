@@ -28,6 +28,25 @@ impl PkgScope {
     }
 }
 
+/// 包来源：发行树预置、操控预置或用户自行安装。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PkgOrigin {
+    Slim,
+    Control,
+    #[default]
+    User,
+}
+
+impl PkgOrigin {
+    pub fn badge(self) -> Option<&'static str> {
+        match self {
+            PkgOrigin::Slim => Some("预置"),
+            PkgOrigin::Control => Some("操控"),
+            PkgOrigin::User => None,
+        }
+    }
+}
+
 /// settings.json / `pi list` 中的一条已安装包。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledPackage {
@@ -37,6 +56,7 @@ pub struct InstalledPackage {
     pub scope: PkgScope,
     pub filtered: bool,
     pub installed_path: Option<String>,
+    pub origin: PkgOrigin,
 }
 
 /// 规范化 `npm:<name>` / `npm:<name>@<ver>` 规格。
@@ -142,7 +162,18 @@ fn package_from_value(entry: &serde_json::Value, scope: PkgScope) -> Option<Inst
 }
 
 fn installed_from_source(source: &str, scope: PkgScope, filtered: bool) -> InstalledPackage {
-    let (name, version) = display_name_version(source);
+    let (mut name, mut version) = display_name_version(source);
+    if looks_like_path(source) {
+        if let Some((pkg_name, pkg_ver)) = read_package_json_identity(Path::new(source.trim())) {
+            if !pkg_name.is_empty() {
+                name = pkg_name;
+            }
+            if version.is_none() {
+                version = pkg_ver;
+            }
+        }
+    }
+    let origin = crate::preset_packages::origin_of(&name);
     InstalledPackage {
         source: source.to_owned(),
         name,
@@ -150,7 +181,24 @@ fn installed_from_source(source: &str, scope: PkgScope, filtered: bool) -> Insta
         scope,
         filtered,
         installed_path: None,
+        origin,
     }
+}
+
+fn read_package_json_identity(dir: &Path) -> Option<(String, Option<String>)> {
+    let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let name = val
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let version = val
+        .get("version")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    Some((name, version))
 }
 
 /// 解析 `pi list` 的人类可读输出（chalk 无色时的纯文本）。
@@ -197,14 +245,48 @@ pub fn parse_list_output(text: &str) -> Vec<InstalledPackage> {
     out
 }
 
+pub fn looks_like_path(source: &str) -> bool {
+    let s = source.trim();
+    if s.starts_with("npm:") || s.starts_with("git:") || s.starts_with("github:") {
+        return false;
+    }
+    s.starts_with('.')
+        || s.starts_with('/')
+        || s.starts_with('\\')
+        || s.contains('/')
+        || s.contains('\\')
+        || (s.len() >= 2 && s.as_bytes().get(1) == Some(&b':'))
+}
+
 pub fn display_name_version(source: &str) -> (String, Option<String>) {
-    let rest = source
-        .trim()
+    let trimmed = source.trim();
+    if looks_like_path(trimmed) {
+        return path_display_name(trimmed);
+    }
+    let rest = trimmed
         .strip_prefix("npm:")
-        .or_else(|| source.trim().strip_prefix("git:"))
-        .unwrap_or(source.trim());
+        .or_else(|| trimmed.strip_prefix("git:"))
+        .unwrap_or(trimmed);
     let (name, ver) = split_name_version(rest);
     (name.to_owned(), ver.map(str::to_owned))
+}
+
+fn path_display_name(source: &str) -> (String, Option<String>) {
+    let normalized = source.replace('\\', "/");
+    let trimmed = normalized.trim_end_matches('/');
+    let mut parts: Vec<&str> = trimmed.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return (source.to_owned(), None);
+    }
+    let last = parts.pop().unwrap_or("");
+    let name = if last.starts_with('@') {
+        last.to_owned()
+    } else if let Some(scope) = parts.last().copied().filter(|p| p.starts_with('@')) {
+        format!("{scope}/{last}")
+    } else {
+        last.to_owned()
+    };
+    (name, None)
 }
 
 fn split_name_version(spec: &str) -> (&str, Option<&str>) {
@@ -447,6 +529,18 @@ mod tests {
         assert_eq!(pkgs[0].scope, PkgScope::User);
         assert_eq!(pkgs[1].name, "pi-lens");
         assert_eq!(pkgs[1].scope, PkgScope::Project);
+    }
+
+    #[test]
+    fn path_source_uses_package_folder_name() {
+        let (name, ver) = display_name_version(r"C:\app\sidecar\pi-packages\pi-marketplace");
+        assert_eq!(name, "pi-marketplace");
+        assert!(ver.is_none());
+        let (scoped, _) =
+            display_name_version("/opt/pi-light/sidecar/pi-packages/@injaneity/pi-computer-use");
+        assert_eq!(scoped, "@injaneity/pi-computer-use");
+        assert!(!looks_like_path("npm:pi-memory@0.4.2"));
+        assert!(looks_like_path("/tmp/pi-packages/pi-memory"));
     }
 
     #[test]

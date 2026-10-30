@@ -48,6 +48,14 @@ jobs:
             ~/.cargo/git
           key: release-win-registry-${{ hashFiles('Cargo.toml', 'desktop-rust/Cargo.toml') }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: cargo build --release (pi-light bin)
         run: cargo build --release -p pi-light --bin pi-light
 
@@ -101,9 +109,11 @@ jobs:
           if (Test-Path $root) { Remove-Item -Recurse -Force $root }
           New-Item -ItemType Directory -Path "$root/sidecar/pi" -Force | Out-Null
           New-Item -ItemType Directory -Path "$root/sidecar/bash" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$root/sidecar/pi-packages" -Force | Out-Null
           Copy-Item -LiteralPath $piLightExe -Destination "$root/pi-light.exe"
           Copy-Item "NOTICE" "$root/NOTICE"
           Copy-Item "LICENSE" "$root/LICENSE"
+          Copy-Item "docs/preset-packages.md" "$root/preset-packages.md"
 
           # Fetch Pi sidecar (SHA-256 verified inside the script)
           & ./scripts/fetch-pi-sidecar.ps1 -DestDir "$root/sidecar/pi"
@@ -113,6 +123,41 @@ jobs:
               -DestDir "$root/sidecar/bash" `
               -MinGitUrl "$env:PI_LIGHT_MINGIT_URL" `
               -ExpectedSha256 "$env:PI_LIGHT_MINGIT_SHA256"
+
+      - name: Fetch preset Pi packages (SHA-256 verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python scripts/fetch-pi-packages.py `
+            --dest "pi-light-windows-x64/sidecar/pi-packages" `
+            --install-deps `
+            --check-docs
+          $required = @(
+            "pi-marketplace",
+            "pi-mcp-adapter",
+            "pi-web-access",
+            "pi-memory",
+            "pi-subagents",
+            "pi-browser-use",
+            "pi-chrome-connector"
+          )
+          foreach ($name in $required) {
+            $dir = Join-Path "pi-light-windows-x64/sidecar/pi-packages" $name
+            $manifest = Join-Path $dir "package.json"
+            if (-not (Test-Path -LiteralPath $manifest)) {
+              throw "missing preset package: $manifest"
+            }
+          }
+          $computer = "pi-light-windows-x64/sidecar/pi-packages/@injaneity/pi-computer-use/package.json"
+          if (-not (Test-Path -LiteralPath $computer)) {
+            throw "missing preset package: $computer"
+          }
+          if (Test-Path "pi-light-windows-x64/sidecar/pi-packages/pi-lens") {
+            throw "pi-lens must not be shipped in the default preset tree"
+          }
+          if (Test-Path "pi-light-windows-x64/sidecar/pi-packages/billion-context") {
+            throw "billion-context must not be shipped in the default preset tree"
+          }
 
       - name: Create Windows zip
         shell: pwsh

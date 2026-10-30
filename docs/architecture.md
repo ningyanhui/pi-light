@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.2 + v3 M0 IA + **M1 扩展市场** — 右设置抽屉七 Tab、内置厂商 + 自定义 API；市场浏览 / 确认安装 / list-remove；远程访问仍为入口壳
+> **当前版本**：v0.2.2 + v3 M0 IA + M1 扩展市场 + **M2 Slim 预置** — 右设置抽屉七 Tab；市场浏览 / 确认安装；发行树预置 Slim 五包 + 操控三包（默认关）；远程访问仍为入口壳
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -68,8 +68,9 @@ pi-light/
 │   │   ├── session_store.rs      # 会话历史落盘与启动恢复
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
 │   │   ├── admin_panel.rs        # 设置抽屉（七 Tab）
-│   │   ├── ext_market.rs         # 扩展市场 UI（浏览 / 详情 / 确认安装）
+│   │   ├── ext_market.rs         # 扩展市场 UI（浏览 / 详情 / 确认安装 / 一键启用）
 │   │   ├── pi_pkg.rs             # `pi install` / `list` / `remove` + settings.json
+│   │   ├── preset_packages.rs    # Slim/操控 lockfile、settings 本地 path 同步
 │   │   ├── api_keys.rs           # 应用内 API 密钥（写入 auth.json，保存后掩码）
 │   │   ├── provider_catalog.rs   # 内置厂商 + 自定义 API / models.json
 │   │   ├── onboarding.rs         # 首次打开：只引导配置模型与密钥
@@ -78,11 +79,13 @@ pi-light/
 ├── android/                      # Option C 占位壳
 ├── docs/
 │   ├── architecture.md
+│   ├── preset-packages.md        # Slim / 操控包钉版本与 tarball SHA-256
 │   └── signing.md                # Windows 签名策略与 Authenticode 占位
 ├── scripts/
 │   ├── fetch-pi-sidecar.ps1      # Pi sidecar 下载/SHA-256 校验
 │   ├── fetch-bash-sidecar.ps1    # MinGit 下载/SHA-256 校验（便携 bash）
-│   └── verify_pi_sha256.sh       # Linux/macOS CI 辅助校验
+│   ├── fetch-pi-packages.py      # 预置 npm 包：下载、SHA-256、解压
+│   └── preset-packages.lock.json # Slim + 操控包钉版本
 └── .github/workflows/            # CI / Release / Android APK
 ```
 
@@ -102,8 +105,9 @@ pi-light/
 | `provider_catalog` | 内置厂商卡片 + 自定义 API 表单；读写 `models.json` 的 `providers` 对象 |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace（含 args 预览） |
 | `admin_panel` | 左下角齿轮打开右侧抽屉。Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用。密钥写入 `auth.json` 后只显示掩码 |
-| `ext_market` | 扩展市场：npm `pi-package` 目录、类型滤镜、详情卡、元数据审计、确认安装 |
+| `ext_market` | 扩展市场：npm `pi-package` 目录、类型滤镜、详情卡、元数据审计、确认安装；操控三包一键启用 |
 | `pi_pkg` | 经 sidecar 执行 `pi install` / `pi list` / `pi remove`；解析 `settings.json` `packages` |
+| `preset_packages` | 嵌入 lockfile；Slim 本地 path 写入 settings；操控包启用/停用；computer-use 权限向导闸门 |
 | `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
@@ -139,15 +143,26 @@ MinGit 提供便携 bash/MSYS 环境，Pi 运行 shell 命令时自动使用。
 ```
 pi-light-windows-x64/
 ├── pi-light.exe                  # 主程序，用户唯一入口
-├── NOTICE                        # SHA-256 + 版权声明（Pi 和 MinGit）
+├── NOTICE                        # SHA-256 + 版权声明（Pi、MinGit、预置包）
 ├── LICENSE                       # Apache-2.0
+├── preset-packages.md            # 预置包人类可读钉表
 └── sidecar/
     ├── pi/
     │   └── pi.exe                # Pi sidecar（MIT，由 earendil-works/pi 发布）
-    └── bash/                     # MinGit（GPL-2.0 + 例外，便携 bash/MSYS 环境）
-        ├── usr/bin/              # sh.exe；Release 复制为 bash.exe 供 Pi 查找
-        ├── mingw64/bin/          # 工具链
-        └── cmd/                  # git.exe
+    ├── bash/                     # MinGit（GPL-2.0 + 例外，便携 bash/MSYS 环境）
+    │   ├── usr/bin/              # sh.exe；Release 复制为 bash.exe 供 Pi 查找
+    │   ├── mingw64/bin/          # 工具链
+    │   └── cmd/                  # git.exe
+    └── pi-packages/              # npm tarball 解压树（Pi 本地 path 包）
+        ├── preset-lock.json
+        ├── pi-marketplace/
+        ├── pi-mcp-adapter/
+        ├── pi-web-access/
+        ├── pi-memory/
+        ├── pi-subagents/
+        ├── pi-browser-use/         # 默认不写入 settings
+        ├── pi-chrome-connector/
+        └── @injaneity/pi-computer-use/
 ```
 
 ### Pi agent 目录（M4′ 发现路径）
@@ -156,7 +171,7 @@ pi-light-windows-x64/
 
 | 文件/目录 | 用途 |
 |-----------|------|
-| `settings.json` | defaultProvider / defaultModel；`skills` 排除列表；`packages` 已安装 Pi 包（M1 经 sidecar 读写） |
+| `settings.json` | defaultProvider / defaultModel；`skills` 排除列表；`packages` 已安装 Pi 包（M1 经 sidecar 读写；M2 Slim 为本地 path） |
 | `mcp.json` | MCP 服务列表；官方 `enabled` 字段读写，兼容旧 `disabled`（M4′+） |
 | `models.json` | 自定义 API 提供商（`providers` 对象：baseUrl / api / models）；M0 可写 |
 | `auth.json` | API 凭据。设置页可写入 `api_key`；界面不读回明文。OAuth 条目不在此覆盖 |
@@ -202,7 +217,8 @@ pi-light-windows-x64/
 | **v0.2.1** | 中文显示、应用内密钥、会话恢复、设置页顺序 | ✅ 已发布 |
 | **v0.2.2** | 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹 | ✅ 已发布 |
 | **v3 M0** | 设置抽屉七 Tab；厂商 + 自定义 API；主聊天模型下拉；firstrun 只配密钥 | ✅ 已合入 |
-| **v3 M1** | 扩展市场浏览 / 搜索 / 类型滤镜；确认后 sidecar `pi install`；list/remove；`/reload` 提示 | 本 PR |
+| **v3 M1** | 扩展市场浏览 / 搜索 / 类型滤镜；确认后 sidecar `pi install`；list/remove；`/reload` 提示 | ✅ 已合入 |
+| **v3 M2** | Slim 五包预置进 `sidecar/pi-packages/`；NOTICE tarball SHA；操控三包默认关 + 一键启用壳 | 本 PR |
 
 ---
 

@@ -26,6 +26,7 @@ use eframe::egui;
 use crate::api_keys::ApiKeyForm;
 use crate::ext_market::{self, ExtMarketState, InstalledAction};
 use crate::pi_pkg::{self, InstalledPackage};
+use crate::preset_packages;
 use crate::provider_catalog::{self, AddProviderForm, CustomProvider};
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
@@ -311,11 +312,8 @@ impl AdminPanelState {
         self.model_config = discover_model_config();
         self.model_state = DiscoveryState::Ready;
 
-        self.installed_packages = pi_pkg::load_installed_packages(
-            pi_agent_dir().map(|d| d.join("settings.json")).as_deref(),
-            pi_project_dir().map(|d| d.join("settings.json")).as_deref(),
-        );
-        self.market.installed = self.installed_packages.clone();
+        self.sync_preset_packages();
+        self.reload_installed_packages();
 
         let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
         self.api_keys.refresh(auth_path.as_deref());
@@ -440,6 +438,75 @@ impl AdminPanelState {
         }
     }
 
+    fn sync_preset_packages(&mut self) {
+        if let (Some(root), Some(agent)) = (preset_packages::bundled_packages_dir(), pi_agent_dir())
+        {
+            let settings = agent.join("settings.json");
+            match preset_packages::sync_slim_into_settings(&settings, &root) {
+                Ok(true) => {
+                    self.sidecar_restart_needed = true;
+                    self.market.reload_hint.get_or_insert_with(|| {
+                        "已写入发行包 Slim 预置。重启 sidecar 后生效。".to_owned()
+                    });
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    self.last_error = Some(format!("同步预置包失败：{err}"));
+                }
+            }
+        }
+    }
+
+    fn reload_installed_packages(&mut self) {
+        self.installed_packages = pi_pkg::load_installed_packages(
+            pi_agent_dir().map(|d| d.join("settings.json")).as_deref(),
+            pi_project_dir().map(|d| d.join("settings.json")).as_deref(),
+        );
+        self.market.installed = self.installed_packages.clone();
+    }
+
+    fn apply_control_enable(&mut self, name: &str, wizard_ok: bool) {
+        match (preset_packages::bundled_packages_dir(), pi_agent_dir()) {
+            (Some(root), Some(agent)) => {
+                match preset_packages::enable_control(
+                    &agent.join("settings.json"),
+                    &root,
+                    name,
+                    wizard_ok,
+                ) {
+                    Ok(()) => {
+                        self.reload_installed_packages();
+                        self.sidecar_restart_needed = true;
+                        self.market.reload_hint = Some(format!(
+                            "已启用 {name}。重启 sidecar 后生效，也可在对话中输入 /reload。"
+                        ));
+                    }
+                    Err(err) => self.last_error = Some(err),
+                }
+            }
+            _ => {
+                self.last_error = Some("找不到预置目录或 Pi 配置目录，无法启用。".to_owned());
+            }
+        }
+    }
+
+    fn apply_control_disable(&mut self, name: &str) {
+        match pi_agent_dir() {
+            Some(agent) => match preset_packages::disable_named(&agent.join("settings.json"), name)
+            {
+                Ok(_) => {
+                    self.reload_installed_packages();
+                    self.sidecar_restart_needed = true;
+                    self.market.reload_hint = Some(format!("已停用 {name}。"));
+                }
+                Err(err) => self.last_error = Some(err),
+            },
+            None => {
+                self.last_error = Some("找不到 Pi 配置目录，无法停用。".to_owned());
+            }
+        }
+    }
+
     /// 日常配置表单（模型与密钥状态）。首次打开的主界面与设置页共用这一份。
     pub fn show_everyday_setup(
         &mut self,
@@ -522,6 +589,8 @@ impl AdminPanelState {
                 self.market.detail = None;
             } else if self.market.confirm_remove.is_some() {
                 self.market.confirm_remove = None;
+            } else if self.market.computer_wizard {
+                self.market.computer_wizard = false;
             } else {
                 self.open = false;
                 self.opened_pass = None;
@@ -543,11 +612,7 @@ impl AdminPanelState {
         let mut skills_pkg_action = InstalledAction::None;
         if self.market.poll() {
             self.sidecar_restart_needed = true;
-            self.installed_packages = pi_pkg::load_installed_packages(
-                pi_agent_dir().map(|d| d.join("settings.json")).as_deref(),
-                pi_project_dir().map(|d| d.join("settings.json")).as_deref(),
-            );
-            self.market.installed = self.installed_packages.clone();
+            self.reload_installed_packages();
         }
 
         let footer_h = 40.0;
@@ -830,6 +895,9 @@ impl AdminPanelState {
         }
         match skills_pkg_action {
             InstalledAction::Remove(source) => self.market.confirm_remove = Some(source),
+            InstalledAction::Disable(name) => {
+                market_result.disable = Some(name);
+            }
             InstalledAction::Reload => {
                 self.sidecar_restart_needed = true;
                 self.market.reload_hint = Some(
@@ -844,6 +912,15 @@ impl AdminPanelState {
         }
         if modal_result.restart {
             self.sidecar_restart_needed = true;
+        }
+        let enable = market_result.enable.or(modal_result.enable);
+        let wizard_ok = market_result.wizard_ok || modal_result.wizard_ok;
+        let disable = market_result.disable.or(modal_result.disable);
+        if let Some(name) = enable {
+            self.apply_control_enable(&name, wizard_ok);
+        }
+        if let Some(name) = disable {
+            self.apply_control_disable(&name);
         }
 
         if let Some((id, command)) = mcp_add {
