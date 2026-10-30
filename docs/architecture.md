@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.2.1 — 系统 CJK 字体、应用内密钥、会话恢复；M6′ 维持 Android Option C
+> **当前版本**：v0.2.2 — 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹；M6′ 维持 Android Option C
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -189,10 +189,11 @@ pi-light-windows-x64/
 | **便携 bash / R0+** | 单 exe 便携包：内嵌 MinGit bash；`bash_path` 模块；PATH 注入；signing.md 完善 | ✅ 已合入 |
 | **Claude 对标缺口** | 多会话列表、工具卡片、停止/重试、设置可达、cwd 切换 | ✅ 已合入（#11） |
 | **M6′** | Android：仅当 Host 已自然长出共享面时升 Option A | **维持 C**（见下节） |
-| **Android C** | `android/` debug 占位 APK（`assembleDebug`） | ✅ 已合入；v0.2.1 仍为此路径 |
+| **Android C** | `android/` debug 占位 APK（`assembleDebug`） | ✅ 已合入；v0.2.2 仍为此路径 |
 | **R0 / v0.1.0** | Release（Win 便携 zip + 签名策略） | ✅ 已发布 |
 | **v0.2.0** | 文档换轨 + 便携 bash + Claude 对标缺口合入后的发版 | ✅ 已发布 |
-| **v0.2.1** | 中文显示、应用内密钥、会话恢复、设置页顺序 | 本发版 |
+| **v0.2.1** | 中文显示、应用内密钥、会话恢复、设置页顺序 | ✅ 已发布 |
+| **v0.2.2** | 首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹 | 本发版 |
 
 ---
 
@@ -216,7 +217,7 @@ Option A 需要的最小面（LAN / HTTP 配对、可被手机连上的 Host API
 
 | 类目 | 限制说明 |
 |------|---------|
-| API Key | 设置页可写入 `auth.json` 的字面 API 密钥。保存后只显示固定掩码，不回显明文，错误信息也不包含密钥。OAuth 不在此覆盖。环境变量与 `/login` 仍可用 |
+| API Key | 设置对话框的「模型与密钥」可写入 `auth.json` 的字面 API 密钥。保存后只显示固定掩码，不回显明文，错误信息也不包含密钥。OAuth 不在此覆盖。环境变量与 `/login` 仍可用 |
 | 会话持久化 | `~/.pi-light/sessions.json` 保存壳内会话并在启动时恢复。Pi 会话文件仍在则 `switch_session`，否则 `new_session` 并保留壳内记录。无会话树 / fork |
 | Token 用量 | 依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」 |
 
@@ -273,4 +274,4 @@ do_send():
 
 ---
 
-*最后更新：v0.2.1（中文显示、应用内密钥、会话恢复）*
+*最后更新：v0.2.2（首次模型与密钥引导、左下角设置对话框、Skills/MCP 卡片、自绘闪电底纹）*

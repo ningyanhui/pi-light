@@ -9,7 +9,7 @@
 [![Android APK](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-当前版本：**v0.2.1**（Windows 便携包为主路径）。
+当前版本：**v0.2.2**（Windows 便携包为主路径）。
 
 ---
 
@@ -89,7 +89,7 @@ cargo run
 
 ## 3. 已交付能力
 
-相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 在此之上补上系统 CJK 字体、应用内 API 密钥和会话恢复。
+相对 v0.1.0，v0.2.0 覆盖 M1′–M5′、便携 bash，以及 Claude Desktop 对标缺口（多会话 / 工具卡 / 重试 / cwd）。v0.2.1 补上系统 CJK 字体、应用内 API 密钥和会话恢复。v0.2.2 把第一次打开改成模型与密钥引导，设置改为左下角对话框，Skills / MCP 以卡片列出，主界面使用自绘闪电底纹。
 
 | 能力 | 说明 |
 |------|------|
@@ -103,8 +103,9 @@ cargo run
 | API 密钥 | 「模型与密钥」写入 Pi `auth.json`；保存后输入框清空，已存密钥只显示掩码 `••••••••` |
 | 会话恢复 | 会话列表与消息写入 `~/.pi-light/sessions.json`，下次启动读回；Pi 会话文件仍在则 `switch_session` |
 | 中文显示 | Windows 用系统微软雅黑等 CJK 字体作为 egui 回退，避免方框；不捆绑字体文件 |
-| Skills | 本机发现；读写 `settings.json` 的 `skills` 数组；改后重启 sidecar |
-| MCP | 发现 `mcp.json`；读写官方 `enabled`（兼容旧 `disabled`）；改后重启 sidecar |
+| Skills | 卡片列表；开关写回 `settings.json` 的 `skills` 数组；改后重启 sidecar |
+| MCP | 卡片列表；读写官方 `enabled`（兼容旧 `disabled`）；新增写入 `mcp.json`；改后重启 sidecar |
+| 主界面底纹 | 深色底上自绘闪电折线，不引用外部图片 |
 | 记忆 | Project / User / Session 三层；内联编辑写回文件 |
 | 工作目录 | 会话栏查看 / 切换 cwd；入口单次校验后 spawn Pi |
 | Trace / Token | 底部用量条；工具 Trace 列表 |
@@ -152,8 +153,9 @@ desktop-rust/src/
 ├── chat.rs              # 聊天状态机 + SessionHub
 ├── session_store.rs     # 会话历史落盘与启动恢复
 ├── session_insights.rs  # Token / Trace
-├── admin_panel.rs       # 设置面
+├── admin_panel.rs       # 设置对话框
 ├── api_keys.rs          # 应用内 API 密钥（掩码，不回显明文）
+├── onboarding.rs        # 首次打开：模型与密钥引导
 ├── session_ref.rs       # # 引用
 └── bin/mock_pi.rs       # 测试替身
 ```

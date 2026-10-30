@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (e.g. v0.2.1)"
+        description: "Release tag to publish (e.g. v0.2.2)"
         required: true
-        default: "v0.2.1"
+        default: "v0.2.2"
       draft:
         description: "Create as draft release"
         type: boolean
@@ -216,7 +216,7 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: pi-light ${{ steps.meta.outputs.tag }}
-          body_path: .github/release-notes/v0.2.1.md
+          body_path: .github/release-notes/v0.2.2.md
           draft: ${{ steps.meta.outputs.draft }}
           prerelease: false
           files: |
