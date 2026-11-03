@@ -14,14 +14,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pilight.android.BuildConfig
 import com.pilight.android.CompanionViewModel
-import com.pilight.android.data.RelayRegion
 import com.pilight.android.data.TimeoutOptions
 import com.pilight.android.ui.theme.PurpleBright
 import com.pilight.android.ui.theme.PurplePrimary
@@ -57,17 +54,11 @@ fun SettingsScreen(
     val home by vm.home.collectAsStateWithLifecycle()
     val security by vm.security.collectAsStateWithLifecycle()
     var pickTimeout by remember { mutableStateOf(false) }
-    var pickRegion by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = {
                 Text("安全设置", fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth())
-            },
-            actions = {
-                IconButton(onClick = { }) {
-                    Icon(Icons.Outlined.MoreVert, contentDescription = "更多")
-                }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
         )
@@ -121,11 +112,8 @@ fun SettingsScreen(
             )
             ListItem(
                 leadingContent = { Icon(Icons.Outlined.Language, contentDescription = null, tint = PurplePrimary) },
-                headlineContent = { Text("中继区域") },
-                supportingContent = { Text("选择中继服务器的地理区域以优化连接延迟。当前仍使用桌面给出的公网中继 URL。") },
-                trailingContent = {
-                    TextButton(onClick = { pickRegion = true }) { Text(security.relayRegion.label) }
-                },
+                headlineContent = { Text("连接方式") },
+                supportingContent = { Text("使用桌面端提供的公网中继地址。中继区域由桌面端和服务商决定，手机端暂不单独切换路由。") },
                 colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
             )
             ListItem(
@@ -187,25 +175,6 @@ fun SettingsScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { pickTimeout = false }) { Text("关闭") } },
-        )
-    }
-    if (pickRegion) {
-        AlertDialog(
-            onDismissRequest = { pickRegion = false },
-            title = { Text("中继区域") },
-            text = {
-                Column {
-                    RelayRegion.entries.forEach { region ->
-                        TextButton(
-                            onClick = {
-                                vm.updateSecurity { it.copy(relayRegionId = region.id) }
-                                pickRegion = false
-                            },
-                        ) { Text(region.label) }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { pickRegion = false }) { Text("关闭") } },
         )
     }
 }
