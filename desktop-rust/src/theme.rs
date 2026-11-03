@@ -12,6 +12,10 @@ pub fn accent() -> Color32 {
     Color32::from_rgb(124, 77, 255)
 }
 
+pub fn accent_bright() -> Color32 {
+    Color32::from_rgb(155, 123, 255)
+}
+
 pub fn accent_soft() -> Color32 {
     Color32::from_rgb(168, 148, 255)
 }
@@ -90,12 +94,38 @@ pub fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(visuals);
 }
 
-pub fn card_frame() -> egui::Frame {
+pub fn glass_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(16, 14, 32, 172)
+}
+
+pub fn glass_strong() -> Color32 {
+    Color32::from_rgba_unmultiplied(18, 16, 36, 214)
+}
+
+pub fn glass_stroke() -> Color32 {
+    Color32::from_rgba_unmultiplied(155, 123, 255, 72)
+}
+
+pub fn glass_shadow() -> egui::Shadow {
+    egui::Shadow {
+        offset: egui::vec2(0.0, 0.0),
+        blur: 18.0,
+        spread: 0.0,
+        color: Color32::from_rgba_unmultiplied(124, 77, 255, 48),
+    }
+}
+
+pub fn glass_frame() -> egui::Frame {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-        .rounding(Rounding::same(10.0))
-        .fill(card_bg())
-        .stroke(Stroke::new(1.0_f32, hairline()))
+        .rounding(Rounding::same(12.0))
+        .fill(glass_fill())
+        .stroke(Stroke::new(1.0_f32, glass_stroke()))
+        .shadow(glass_shadow())
+}
+
+pub fn card_frame() -> egui::Frame {
+    glass_frame()
 }
 
 pub fn soft_card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
@@ -144,7 +174,7 @@ pub fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
 }
 
 pub fn send_button(ui: &mut egui::Ui, enabled: bool) -> egui::Response {
-    ui.add_enabled(
+    let resp = ui.add_enabled(
         enabled,
         egui::Button::new(
             egui::RichText::new("➤")
@@ -162,7 +192,25 @@ pub fn send_button(ui: &mut egui::Ui, enabled: bool) -> egui::Response {
         })
         .rounding(Rounding::same(16.0))
         .min_size(egui::vec2(36.0, 36.0)),
-    )
+    );
+    if enabled {
+        paint_purple_glow(ui, resp.rect, 10.0);
+    }
+    resp
+}
+
+pub fn paint_purple_glow(ui: &egui::Ui, rect: egui::Rect, expand: f32) {
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect.expand(expand),
+        Rounding::same(18.0),
+        Color32::from_rgba_unmultiplied(124, 77, 255, 28),
+    );
+    painter.rect_filled(
+        rect.expand(expand * 0.4),
+        Rounding::same(16.0),
+        Color32::from_rgba_unmultiplied(155, 123, 255, 40),
+    );
 }
 
 pub fn underline_tabs<T: Copy + PartialEq>(
@@ -425,7 +473,7 @@ pub fn centered_column(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui
     });
 }
 
-/// 折线闪电。顶点是自写的，不是外部素材。
+/// 折线几何仍保留给测试；琥珀/金 bolt 已退役，不得再作为主装饰。
 pub fn bolt_polyline(origin: egui::Pos2, scale: f32) -> Vec<egui::Pos2> {
     const LINE: [[f32; 2]; 4] = [[0.72, 0.00], [0.26, 0.46], [0.54, 0.50], [0.12, 1.00]];
     LINE.into_iter()
@@ -433,42 +481,39 @@ pub fn bolt_polyline(origin: egui::Pos2, scale: f32) -> Vec<egui::Pos2> {
         .collect()
 }
 
-pub fn paint_lightning_backdrop(ui: &egui::Ui) {
+/// 旧琥珀折线闪电：退役为空操作。主路径请用 [`paint_atmosphere`]。
+pub fn paint_lightning_backdrop(_ui: &egui::Ui) {}
+
+pub fn paint_atmosphere(ui: &egui::Ui, texture: &egui::TextureHandle) {
     let rect = ui.max_rect();
-    if rect.width() < 80.0 || rect.height() < 80.0 {
+    if rect.width() < 8.0 || rect.height() < 8.0 {
         return;
     }
+    let uv = cover_uv(texture.size_vec2(), rect.size());
     let painter = ui.painter();
-    let scale = (rect.height() * 0.46).clamp(140.0, 280.0);
-    let origin = egui::pos2(
-        rect.right() - 28.0 - scale * 0.74,
-        rect.bottom() - 36.0 - scale,
+    painter.image(texture.id(), rect, uv, Color32::WHITE);
+    painter.rect_filled(
+        rect,
+        Rounding::ZERO,
+        Color32::from_rgba_unmultiplied(7, 8, 14, 78),
     );
-    painter.add(egui::Shape::line(
-        bolt_polyline(origin, scale),
-        Stroke::new(
-            (scale * 0.055).clamp(8.0, 16.0),
-            Color32::from_rgba_unmultiplied(244, 198, 96, 28),
-        ),
-    ));
+}
 
-    let small = 34.0;
-    let small_origin = egui::pos2(rect.right() - 28.0 - small * 0.74, rect.top() + 16.0);
-    painter.add(egui::Shape::line(
-        bolt_polyline(small_origin, small),
-        Stroke::new(2.2_f32, Color32::from_rgba_unmultiplied(255, 214, 130, 140)),
-    ));
-
-    painter.circle_filled(
-        egui::pos2(rect.left() + rect.width() * 0.18, rect.top() + 40.0),
-        rect.height() * 0.42,
-        Color32::from_rgba_unmultiplied(124, 77, 255, 18),
-    );
-    painter.circle_filled(
-        egui::pos2(rect.right() - 80.0, rect.center().y),
-        rect.height() * 0.55,
-        Color32::from_rgba_unmultiplied(80, 40, 160, 16),
-    );
+pub fn cover_uv(tex: egui::Vec2, dest: egui::Vec2) -> egui::Rect {
+    if tex.x <= 0.0 || tex.y <= 0.0 || dest.x <= 0.0 || dest.y <= 0.0 {
+        return egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    }
+    let tex_aspect = tex.x / tex.y;
+    let dest_aspect = dest.x / dest.y;
+    if tex_aspect > dest_aspect {
+        let vis = dest_aspect / tex_aspect;
+        let x0 = (1.0 - vis) * 0.5;
+        egui::Rect::from_min_max(egui::pos2(x0, 0.0), egui::pos2(x0 + vis, 1.0))
+    } else {
+        let vis = tex_aspect / dest_aspect;
+        let y0 = (1.0 - vis) * 0.5;
+        egui::Rect::from_min_max(egui::pos2(0.0, y0), egui::pos2(1.0, y0 + vis))
+    }
 }
 
 #[cfg(test)]
@@ -486,5 +531,18 @@ mod tests {
             package_glyph_color("pi-memory")
         );
         assert_eq!(first_letter("pi-web-access"), 'P');
+    }
+
+    #[test]
+    fn accent_stays_indigo() {
+        assert_eq!(accent(), Color32::from_rgb(124, 77, 255));
+        assert_eq!(accent_bright(), Color32::from_rgb(155, 123, 255));
+    }
+
+    #[test]
+    fn cover_uv_crops_wider_texture() {
+        let uv = cover_uv(egui::vec2(16.0, 9.0), egui::vec2(8.0, 9.0));
+        assert!(uv.min.x > 0.0);
+        assert!((uv.max.x - uv.min.x - 0.5).abs() < 0.02);
     }
 }

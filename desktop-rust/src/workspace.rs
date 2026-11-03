@@ -10,6 +10,7 @@ use std::{
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
 
+use crate::assets::ShellTextures;
 use crate::chat::SessionHub;
 use crate::theme;
 use crate::workspace_git::{self, GitKind, GitState};
@@ -41,6 +42,12 @@ pub enum CwdSwitchPlan {
 pub enum DockAction {
     NewSession,
     SwitchSession(usize),
+    ForkSession(usize),
+    QuoteSession(usize),
+    DeleteSession(usize),
+    StartRename(usize),
+    ConfirmRename,
+    CancelRename,
     OpenSettings,
     OpenMarketplace,
     OpenRemote,
@@ -76,6 +83,8 @@ pub struct WorkspaceUi {
     pub commit_confirm: bool,
     pub selected_git: Option<PathBuf>,
     pub git_action_error: Option<String>,
+    pub rename_index: Option<usize>,
+    pub rename_draft: String,
 }
 
 impl Default for WorkspaceUi {
@@ -94,6 +103,8 @@ impl Default for WorkspaceUi {
             commit_confirm: false,
             selected_git: None,
             git_action_error: None,
+            rename_index: None,
+            rename_draft: String::new(),
         }
     }
 }
@@ -396,32 +407,58 @@ pub fn show_dock(
     workdir: &Path,
     streaming: bool,
     switching: bool,
+    textures: Option<&ShellTextures>,
 ) -> Option<DockAction> {
     ui.horizontal(|ui| {
-        for (tab, icon, label) in [
-            (DockTab::Sessions, "◌", "会话"),
-            (DockTab::Files, "▤", "文件"),
-            (DockTab::Git, "⌥", "Git"),
+        for (tab, label, icon) in [
+            (
+                DockTab::Sessions,
+                "会话",
+                textures.and_then(|t| t.icon_sessions.as_ref()),
+            ),
+            (
+                DockTab::Files,
+                "文件",
+                textures.and_then(|t| t.icon_files.as_ref()),
+            ),
+            (
+                DockTab::Git,
+                "Git",
+                textures.and_then(|t| t.icon_git.as_ref()),
+            ),
         ] {
             let selected = workspace.dock == tab;
+            let text = egui::RichText::new(label).size(12.0).color(if selected {
+                Color32::WHITE
+            } else {
+                theme::text_muted()
+            });
+            let button = if let Some(tex) = icon {
+                egui::Button::image_and_text((tex.id(), egui::vec2(16.0, 16.0)), text)
+            } else {
+                egui::Button::new(text)
+            };
             let resp = ui.add(
-                egui::Button::new(
-                    egui::RichText::new(format!("{icon}\n{label}"))
-                        .size(11.0)
-                        .color(if selected {
-                            Color32::WHITE
+                button
+                    .fill(if selected {
+                        theme::accent()
+                    } else {
+                        Color32::from_rgba_unmultiplied(16, 14, 28, 160)
+                    })
+                    .stroke(Stroke::new(
+                        1.0_f32,
+                        if selected {
+                            theme::accent_bright()
                         } else {
-                            theme::text_muted()
-                        }),
-                )
-                .fill(if selected {
-                    theme::accent()
-                } else {
-                    Color32::from_rgb(16, 14, 26)
-                })
-                .rounding(Rounding::same(10.0))
-                .min_size(egui::vec2(64.0, 44.0)),
+                            Color32::from_rgba_unmultiplied(124, 77, 255, 40)
+                        },
+                    ))
+                    .rounding(Rounding::same(10.0))
+                    .min_size(egui::vec2(72.0, 36.0)),
             );
+            if selected {
+                theme::paint_purple_glow(ui, resp.rect, 4.0);
+            }
             if resp.clicked() {
                 workspace.dock = tab;
             }
@@ -430,9 +467,11 @@ pub fn show_dock(
     ui.add_space(10.0);
 
     let mut action = match workspace.dock {
-        DockTab::Sessions => show_sessions_panel(ui, hub, workdir, streaming || switching),
-        DockTab::Files => show_files_panel(ui, workspace, workdir),
-        DockTab::Git => show_git_panel(ui, workspace, switching),
+        DockTab::Sessions => {
+            show_sessions_panel(ui, workspace, hub, workdir, streaming || switching)
+        }
+        DockTab::Files => show_files_panel(ui, workspace, workdir, textures),
+        DockTab::Git => show_git_panel(ui, workspace, switching, textures),
     };
 
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -471,34 +510,37 @@ fn dock_link(ui: &mut egui::Ui, label: &str) -> egui::Response {
 
 fn show_sessions_panel(
     ui: &mut egui::Ui,
+    workspace: &mut WorkspaceUi,
     hub: &SessionHub,
     workdir: &Path,
     locked: bool,
 ) -> Option<DockAction> {
     let mut action = None;
-    if ui
-        .add_enabled(
-            !locked,
-            egui::Button::new(
-                egui::RichText::new("+ 新建会话")
-                    .color(Color32::WHITE)
-                    .size(13.0),
-            )
-            .fill(theme::accent())
-            .rounding(Rounding::same(10.0))
-            .min_size(egui::vec2(ui.available_width(), 32.0)),
+    let new_resp = ui.add_enabled(
+        !locked,
+        egui::Button::new(
+            egui::RichText::new("+ 新建会话")
+                .color(Color32::WHITE)
+                .size(13.0),
         )
-        .clicked()
-    {
+        .fill(theme::accent())
+        .rounding(Rounding::same(10.0))
+        .min_size(egui::vec2(ui.available_width(), 34.0)),
+    );
+    theme::paint_purple_glow(ui, new_resp.rect, 8.0);
+    if new_resp.clicked() {
         action = Some(DockAction::NewSession);
     }
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     ui.label(
         egui::RichText::new(format!("按更新时间 · 共 {} 条", hub.list().len()))
             .size(11.0)
             .color(theme::text_muted()),
     );
-    ui.add_space(4.0);
+    ui.add_space(6.0);
+    if let Some(rename_action) = show_rename_dialog(ui, workspace, hub) {
+        action = Some(rename_action);
+    }
     let indices = hub.indices_by_updated();
     let active = hub.active_index();
     let list_height = (ui.available_height() - 28.0).max(40.0);
@@ -514,8 +556,11 @@ fn show_sessions_panel(
                 let selected = i == active;
                 let wd = session.workdir.as_deref().unwrap_or(workdir);
                 let time = session_time_label(session.updated_at);
-                let resp = session_row(ui, &session.title, &display_workdir(wd), &time, selected);
-                if resp.clicked() && !locked {
+                let (resp, menu) =
+                    session_row(ui, i, &session.title, &display_workdir(wd), &time, selected);
+                if let Some(next) = menu {
+                    action = Some(next);
+                } else if resp.clicked() && !locked {
                     action = Some(DockAction::SwitchSession(i));
                 }
             }
@@ -523,52 +568,137 @@ fn show_sessions_panel(
     action
 }
 
+fn show_rename_dialog(
+    ui: &mut egui::Ui,
+    workspace: &mut WorkspaceUi,
+    hub: &SessionHub,
+) -> Option<DockAction> {
+    let index = workspace.rename_index?;
+    if index >= hub.list().len() {
+        workspace.rename_index = None;
+        return None;
+    }
+    let mut action = None;
+    egui::Window::new("重命名会话")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 80.0])
+        .frame(theme::glass_frame().inner_margin(egui::Margin::same(12.0)))
+        .show(ui.ctx(), |ui| {
+            ui.set_min_width(280.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut workspace.rename_draft)
+                    .desired_width(260.0)
+                    .hint_text("会话标题"),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if theme::primary_button(ui, "保存").clicked() {
+                    action = Some(DockAction::ConfirmRename);
+                }
+                if theme::ghost_button(ui, "取消").clicked() {
+                    action = Some(DockAction::CancelRename);
+                }
+            });
+        });
+    action
+}
+
 fn session_row(
     ui: &mut egui::Ui,
+    index: usize,
     title: &str,
     workdir: &str,
     time: &str,
     selected: bool,
-) -> egui::Response {
+) -> (egui::Response, Option<DockAction>) {
+    let mut action = None;
     let fill = if selected {
-        Color32::from_rgba_unmultiplied(40, 28, 72, 230)
+        Color32::from_rgba_unmultiplied(48, 32, 88, 200)
     } else {
-        Color32::TRANSPARENT
+        Color32::from_rgba_unmultiplied(16, 14, 28, 70)
     };
     let stroke = if selected {
         Stroke::new(1.0_f32, theme::accent())
     } else {
-        Stroke::NONE
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(124, 77, 255, 28))
     };
-    egui::Frame::none()
+    let inner = egui::Frame::none()
         .fill(fill)
         .stroke(stroke)
-        .rounding(Rounding::same(10.0))
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .rounding(Rounding::same(12.0))
+        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.vertical(|ui| {
-                ui.label(
-                    egui::RichText::new(title)
-                        .strong()
-                        .size(13.0)
-                        .color(theme::text_primary()),
-                );
-                ui.label(
-                    egui::RichText::new(format!("{workdir}  ·  {time}"))
-                        .size(11.0)
-                        .color(theme::text_muted()),
-                );
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(title)
+                            .strong()
+                            .size(13.0)
+                            .color(theme::text_primary()),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(format!("{workdir}  ·  {time}"))
+                            .size(11.0)
+                            .color(theme::text_muted()),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let hover = ui.rect_contains_pointer(ui.max_rect()) || selected;
+                    if hover {
+                        ui.menu_button(
+                            egui::RichText::new("⋯")
+                                .size(16.0)
+                                .color(theme::text_muted()),
+                            |ui| {
+                                action = session_context_menu(ui, index);
+                            },
+                        );
+                    }
+                });
             });
-        })
-        .response
-        .interact(egui::Sense::click())
+        });
+    let resp = inner.response.interact(egui::Sense::click());
+    resp.context_menu(|ui| {
+        if let Some(next) = session_context_menu(ui, index) {
+            action = Some(next);
+        }
+    });
+    (resp, action)
+}
+
+fn session_context_menu(ui: &mut egui::Ui, index: usize) -> Option<DockAction> {
+    let mut action = None;
+    if ui.button("打开").clicked() {
+        action = Some(DockAction::SwitchSession(index));
+        ui.close_menu();
+    }
+    if ui.button("Fork").clicked() {
+        action = Some(DockAction::ForkSession(index));
+        ui.close_menu();
+    }
+    if ui.button("引用到输入框").clicked() {
+        action = Some(DockAction::QuoteSession(index));
+        ui.close_menu();
+    }
+    if ui.button("重命名").clicked() {
+        action = Some(DockAction::StartRename(index));
+        ui.close_menu();
+    }
+    if ui.button("删除").clicked() {
+        action = Some(DockAction::DeleteSession(index));
+        ui.close_menu();
+    }
+    action
 }
 
 fn show_files_panel(
     ui: &mut egui::Ui,
     workspace: &mut WorkspaceUi,
     workdir: &Path,
+    textures: Option<&ShellTextures>,
 ) -> Option<DockAction> {
     let mut action = None;
     ui.label(
@@ -583,6 +713,7 @@ fn show_files_panel(
                 ui,
                 "无法访问路径",
                 "无法读取该路径。请检查权限或更换工作区。界面不崩溃，仅显示空态。",
+                textures.and_then(|t| t.empty_noperm.as_ref()),
             );
         }
         TreeStatus::NoPermission => {
@@ -590,6 +721,7 @@ fn show_files_panel(
                 ui,
                 "无访问权限",
                 "无法读取该路径。请检查权限或更换工作区。界面不崩溃，仅显示空态。",
+                textures.and_then(|t| t.empty_noperm.as_ref()),
             );
         }
         TreeStatus::Empty => {
@@ -597,6 +729,7 @@ fn show_files_panel(
                 ui,
                 "空目录",
                 "此文件夹没有可见文件。（常见大目录默认已忽略）",
+                textures.and_then(|t| t.empty_folder.as_ref()),
             );
         }
         TreeStatus::Ready => {
@@ -674,6 +807,7 @@ fn show_git_panel(
     ui: &mut egui::Ui,
     workspace: &mut WorkspaceUi,
     locked: bool,
+    textures: Option<&ShellTextures>,
 ) -> Option<DockAction> {
     let mut action = None;
     ui.horizontal(|ui| {
@@ -692,6 +826,7 @@ fn show_git_panel(
                 ui,
                 "未找到 git",
                 "本机或便携包里没有可用的 git。Changes / History 不可用，界面不崩溃。",
+                textures.and_then(|t| t.empty_nongit.as_ref()),
             );
             return action;
         }
@@ -700,11 +835,17 @@ fn show_git_panel(
                 ui,
                 "非 Git 仓库",
                 "当前工作区不是 git 仓。Changes / History 不可用。可切换仓库或其他目录。",
+                textures.and_then(|t| t.empty_nongit.as_ref()),
             );
             return action;
         }
         GitKind::Error(ref err) => {
-            empty_card(ui, "无法读取 Git", err);
+            empty_card(
+                ui,
+                "无法读取 Git",
+                err,
+                textures.and_then(|t| t.empty_noperm.as_ref()),
+            );
             return action;
         }
         GitKind::Ready => {}
@@ -840,26 +981,32 @@ fn show_git_panel(
     action
 }
 
-fn empty_card(ui: &mut egui::Ui, title: &str, body: &str) {
-    egui::Frame::none()
-        .fill(Color32::from_rgba_unmultiplied(18, 16, 30, 230))
-        .stroke(Stroke::new(1.0_f32, theme::hairline()))
-        .rounding(Rounding::same(12.0))
-        .inner_margin(egui::Margin::same(12.0))
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(title)
-                    .strong()
-                    .size(13.0)
-                    .color(theme::text_primary()),
-            );
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(body)
-                    .size(12.0)
-                    .color(theme::text_muted()),
-            );
-        });
+fn empty_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    body: &str,
+    illustration: Option<&egui::TextureHandle>,
+) {
+    theme::glass_frame().show(ui, |ui| {
+        if let Some(tex) = illustration {
+            ui.vertical_centered(|ui| {
+                ui.add(egui::Image::new((tex.id(), egui::vec2(96.0, 96.0))).rounding(8.0));
+            });
+            ui.add_space(8.0);
+        }
+        ui.label(
+            egui::RichText::new(title)
+                .strong()
+                .size(13.0)
+                .color(theme::text_primary()),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(body)
+                .size(12.0)
+                .color(theme::text_muted()),
+        );
+    });
 }
 
 #[cfg(test)]

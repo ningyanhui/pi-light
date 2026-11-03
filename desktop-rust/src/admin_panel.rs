@@ -180,6 +180,15 @@ pub struct ModelConfig {
     pub live_model: Option<String>,
     pub available_models: Vec<String>,
     pub switch_input: String,
+    pub thinking_levels: Vec<String>,
+    pub thinking_level: Option<String>,
+    pub thinking_rpc_failed: bool,
+    pub thinking_set_default: bool,
+    pub default_thinking_level: Option<String>,
+    pub context_window_draft: String,
+    pub max_tokens_draft: String,
+    pub live_context_window: Option<u64>,
+    pub live_max_tokens: Option<u64>,
 }
 
 /// API 密钥配置状态（只展示状态，不展示明文）。
@@ -246,6 +255,7 @@ pub struct AdminPanelReturn {
     pub set_model_request: Option<SetModelRequest>,
     /// 若为 true，main.rs 应调用 `restart_sidecar()` 使配置生效。
     pub restart_sidecar: bool,
+    pub set_thinking_level: Option<String>,
 }
 
 /// 来自 UI 的 set_model RPC 请求。
@@ -798,6 +808,17 @@ impl AdminPanelState {
                                         available_models: &available,
                                         auth_path: auth_path.as_deref(),
                                         models_path: models_path.as_deref(),
+                                        thinking_levels: &self.model_config.thinking_levels,
+                                        thinking_level: self.model_config.thinking_level.as_deref(),
+                                        thinking_rpc_failed: self.model_config.thinking_rpc_failed,
+                                        thinking_set_default: &mut self
+                                            .model_config
+                                            .thinking_set_default,
+                                        context_window_draft: &mut self
+                                            .model_config
+                                            .context_window_draft,
+                                        max_tokens_draft: &mut self.model_config.max_tokens_draft,
+                                        live_context_window: self.model_config.live_context_window,
                                     },
                                 );
                             }
@@ -864,6 +885,8 @@ impl AdminPanelState {
             self.add_provider.close();
         }
 
+        let thinking_request = models_result.set_thinking_level.clone();
+        let save_thinking_default = models_result.save_thinking_default;
         let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
         let models_path = pi_agent_dir().map(|dir| dir.join("models.json"));
         let add_result = provider_catalog::render_add_provider(
@@ -985,9 +1008,25 @@ impl AdminPanelState {
         let restart_sidecar =
             std::mem::take(&mut self.sidecar_restart_needed) || want_restart_from_model;
 
+        if save_thinking_default {
+            if let (Some(path), Some(level)) = (
+                self.model_config.settings_path.clone(),
+                thinking_request
+                    .clone()
+                    .or_else(|| self.model_config.thinking_level.clone()),
+            ) {
+                if let Err(e) = write_settings_thinking(&path, &level) {
+                    self.last_error = Some(format!("保存默认思考强度失败：{e}"));
+                } else {
+                    self.model_config.default_thinking_level = Some(level);
+                }
+            }
+        }
+
         AdminPanelReturn {
             set_model_request: model_request,
             restart_sidecar,
+            set_thinking_level: thinking_request,
         }
     }
 }
@@ -2363,19 +2402,24 @@ pub fn discover_model_config() -> ModelConfig {
     let auth_path = agent_dir.as_ref().map(|d| d.join("auth.json"));
     let models_path = agent_dir.as_ref().map(|d| d.join("models.json"));
 
-    let (default_provider, default_model) = settings_path
+    let settings_json = settings_path
         .as_ref()
         .and_then(|p| fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    let settings_str = |json: &serde_json::Value, key: &str| {
+        json.get(key)
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let (default_provider, default_model) = settings_json
+        .as_ref()
         .map(|v| {
-            let nonempty = |key: &str| {
-                v.get(key)
-                    .and_then(|x| x.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-            };
-            (nonempty("defaultProvider"), nonempty("defaultModel"))
+            (
+                settings_str(v, "defaultProvider"),
+                settings_str(v, "defaultModel"),
+            )
         })
         .unwrap_or((None, None));
 
@@ -2396,6 +2440,17 @@ pub fn discover_model_config() -> ModelConfig {
         live_model: None,
         available_models: Vec::new(),
         switch_input: String::new(),
+        thinking_levels: Vec::new(),
+        thinking_level: None,
+        thinking_rpc_failed: false,
+        thinking_set_default: false,
+        default_thinking_level: settings_json
+            .as_ref()
+            .and_then(|v| settings_str(v, "defaultThinkingLevel")),
+        context_window_draft: String::new(),
+        max_tokens_draft: String::new(),
+        live_context_window: None,
+        live_max_tokens: None,
     }
 }
 
@@ -2442,7 +2497,17 @@ fn merge_settings_json(path: &Path, updates: &[(&str, serde_json::Value)]) -> io
     fs::write(path, out.as_bytes())
 }
 
-/// 写回 settings.json 的 defaultProvider / defaultModel 字段（文件不存在则创建）。
+/// 写回 settings.json 的 defaultThinkingLevel（文件不存在则创建）。
+pub fn write_settings_thinking(path: &Path, level: &str) -> io::Result<()> {
+    merge_settings_json(
+        path,
+        &[(
+            "defaultThinkingLevel",
+            serde_json::Value::String(level.to_owned()),
+        )],
+    )
+}
+
 pub fn write_settings_model(path: &Path, provider: &str, model_id: &str) -> io::Result<()> {
     merge_settings_json(
         path,
@@ -2662,10 +2727,12 @@ mod tests {
         fs::write(&path, "{}").unwrap();
 
         write_settings_model(&path, "anthropic", "claude-sonnet-4-20250514").unwrap();
+        write_settings_thinking(&path, "high").unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["defaultProvider"].as_str(), Some("anthropic"));
         assert_eq!(v["defaultModel"].as_str(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(v["defaultThinkingLevel"].as_str(), Some("high"));
     }
 
     #[test]

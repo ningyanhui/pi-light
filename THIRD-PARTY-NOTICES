@@ -101,6 +101,16 @@ License:      MIT OR Apache-2.0
 Used to generate pairing codes and device tokens.
 
 ------------------------------------------------------------------------
+Component: image
+------------------------------------------------------------------------
+Repository:   https://github.com/image-rs/image
+Version:      0.24.9 (pinned in desktop-rust/Cargo.toml; 0.25+ needs rustc>1.83)
+License:      MIT OR Apache-2.0
+
+Used to decode W1b kit JPEG/PNG textures (atmosphere, dock icons,
+empty states) at runtime. This product uses the Apache-2.0 terms.
+
+------------------------------------------------------------------------
 Component: winres
 ------------------------------------------------------------------------
 Repository:   https://github.com/mxre/winres

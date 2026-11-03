@@ -140,6 +140,8 @@ pub struct ModelsTabResult {
     pub restart: bool,
     pub error: Option<String>,
     pub write_default: bool,
+    pub set_thinking_level: Option<String>,
+    pub save_thinking_default: bool,
 }
 
 /// `provider/modelId` → (provider, modelId)。
@@ -354,6 +356,102 @@ pub fn parse_providers(val: &Value) -> Vec<CustomProvider> {
     Vec::new()
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelOverride {
+    pub context_window: Option<u64>,
+    pub max_tokens: Option<u64>,
+}
+
+pub fn load_model_override(path: &Path, spec: &str) -> ModelOverride {
+    let Ok(text) = fs::read_to_string(path) else {
+        return ModelOverride::default();
+    };
+    let Ok(val) = serde_json::from_str::<Value>(&text) else {
+        return ModelOverride::default();
+    };
+    parse_model_override(&val, spec)
+}
+
+pub fn parse_model_override(val: &Value, spec: &str) -> ModelOverride {
+    let Some(obj) = val
+        .get("modelOverrides")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(spec))
+        .and_then(Value::as_object)
+    else {
+        return ModelOverride::default();
+    };
+    ModelOverride {
+        context_window: obj.get("contextWindow").and_then(Value::as_u64),
+        max_tokens: obj.get("maxTokens").and_then(Value::as_u64),
+    }
+}
+
+pub fn upsert_model_override(path: &Path, spec: &str, over: &ModelOverride) -> io::Result<()> {
+    let spec = spec.trim();
+    if spec.is_empty() || !spec.contains('/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "模型规格须为 provider/modelId",
+        ));
+    }
+    if over.context_window == Some(0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "contextWindow 须为正整数",
+        ));
+    }
+    let mut root = read_models_root(path)?;
+    let overrides = root
+        .entry("modelOverrides".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !overrides.is_object() {
+        *overrides = Value::Object(Map::new());
+    }
+    let overrides = overrides
+        .as_object_mut()
+        .expect("modelOverrides was forced to object");
+    let mut entry = overrides
+        .get(spec)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    match over.context_window {
+        Some(v) => {
+            entry.insert("contextWindow".to_owned(), json!(v));
+        }
+        None => {
+            entry.remove("contextWindow");
+        }
+    }
+    match over.max_tokens {
+        Some(v) => {
+            entry.insert("maxTokens".to_owned(), json!(v));
+        }
+        None => {
+            entry.remove("maxTokens");
+        }
+    }
+    if entry.is_empty() {
+        overrides.remove(spec);
+    } else {
+        overrides.insert(spec.to_owned(), Value::Object(entry));
+    }
+    write_models_root(path, &root)
+}
+
+pub fn parse_positive_int(raw: &str) -> Result<Option<u64>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let n: u64 = raw.parse().map_err(|_| "请输入正整数 tokens".to_owned())?;
+    if n == 0 {
+        return Err("须为正整数 tokens".to_owned());
+    }
+    Ok(Some(n))
+}
+
 pub fn upsert_custom_provider(path: &Path, provider: &CustomProvider) -> io::Result<()> {
     validate_custom_provider(provider)
         .map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;
@@ -525,6 +623,13 @@ pub struct ModelsTabInput<'a> {
     pub available_models: &'a [String],
     pub auth_path: Option<&'a Path>,
     pub models_path: Option<&'a Path>,
+    pub thinking_levels: &'a [String],
+    pub thinking_level: Option<&'a str>,
+    pub thinking_rpc_failed: bool,
+    pub thinking_set_default: &'a mut bool,
+    pub context_window_draft: &'a mut String,
+    pub max_tokens_draft: &'a mut String,
+    pub live_context_window: Option<u64>,
 }
 
 /// 模型 Tab：默认模型下拉 + 厂商卡片 + 添加提供商。
@@ -537,6 +642,13 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
         available_models,
         auth_path,
         models_path,
+        thinking_levels,
+        thinking_level,
+        thinking_rpc_failed,
+        thinking_set_default,
+        context_window_draft,
+        max_tokens_draft,
+        live_context_window,
     } = input;
     let mut result = ModelsTabResult::default();
 
@@ -563,6 +675,26 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
             result.write_default = true;
         }
     }
+
+    ui.add_space(14.0);
+    render_thinking_card(
+        ui,
+        thinking_levels,
+        thinking_level,
+        thinking_rpc_failed,
+        thinking_set_default,
+        &mut result,
+    );
+    ui.add_space(12.0);
+    render_context_card(
+        ui,
+        current_spec,
+        context_window_draft,
+        max_tokens_draft,
+        live_context_window,
+        models_path,
+        &mut result,
+    );
 
     ui.add_space(14.0);
     ui.label(egui::RichText::new("模型提供商").strong().size(14.0));
@@ -700,6 +832,140 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
     }
 
     result
+}
+
+fn render_thinking_card(
+    ui: &mut egui::Ui,
+    levels: &[String],
+    current: Option<&str>,
+    rpc_failed: bool,
+    set_default: &mut bool,
+    result: &mut ModelsTabResult,
+) {
+    theme::card_frame().show(ui, |ui| {
+        ui.label(egui::RichText::new("思考强度").strong().size(14.0));
+        ui.label(
+            egui::RichText::new("Pi thinkingLevel。选项来自 get_available_thinking_levels，变更走 set_thinking_level。")
+                .weak()
+                .size(11.0),
+        );
+        ui.add_space(6.0);
+        let usable = crate::composer_invoke::thinking_levels_usable(levels) && !rpc_failed;
+        if !usable {
+            ui.add_enabled(false, egui::Button::new("当前模型不支持思考强度"));
+            ui.label(
+                egui::RichText::new("当前模型不支持思考强度")
+                    .color(theme::warn())
+                    .size(12.0),
+            );
+            return;
+        }
+        let shown = current.unwrap_or("off");
+        egui::ComboBox::from_id_salt("thinking_level_combo")
+            .selected_text(shown)
+            .width(220.0)
+            .show_ui(ui, |ui| {
+                for level in levels {
+                    if ui.selectable_label(level == shown, level).clicked() {
+                        result.set_thinking_level = Some(level.clone());
+                    }
+                }
+            });
+        ui.add_space(4.0);
+        if ui
+            .checkbox(set_default, "设为默认（写入 settings.json defaultThinkingLevel）")
+            .changed()
+            && *set_default
+        {
+            result.save_thinking_default = true;
+        }
+    });
+}
+
+fn render_context_card(
+    ui: &mut egui::Ui,
+    spec: &str,
+    context_draft: &mut String,
+    max_tokens_draft: &mut String,
+    live_window: Option<u64>,
+    models_path: Option<&Path>,
+    result: &mut ModelsTabResult,
+) {
+    theme::card_frame().show(ui, |ui| {
+        ui.label(egui::RichText::new("上下文窗口").strong().size(14.0));
+        ui.label(
+            egui::RichText::new(
+                "写入 models.json 的 contextWindow / maxTokens（modelOverrides）。无 set_context_window RPC。底栏 Tokens 仍只读。",
+            )
+            .weak()
+            .size(11.0),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(if spec.is_empty() {
+                "当前模型：尚未选择".to_owned()
+            } else {
+                format!("当前模型：{spec}")
+            })
+            .monospace()
+            .size(12.0),
+        );
+        if let Some(live) = live_window {
+            ui.label(
+                egui::RichText::new(format!("读回 contextWindow：{live}"))
+                    .color(egui::Color32::from_rgb(90, 180, 110))
+                    .size(11.0),
+            );
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("contextWindow");
+            ui.add(
+                egui::TextEdit::singleline(context_draft)
+                    .desired_width(140.0)
+                    .hint_text("正整数 tokens"),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("maxTokens");
+            ui.add(
+                egui::TextEdit::singleline(max_tokens_draft)
+                    .desired_width(140.0)
+                    .hint_text("可选"),
+            );
+        });
+        ui.add_space(6.0);
+        if ui
+            .add_enabled(!spec.is_empty(), egui::Button::new("保存到 models.json"))
+            .clicked()
+        {
+            match (parse_positive_int(context_draft), parse_positive_int(max_tokens_draft))
+            {
+                (Ok(context_window), Ok(max_tokens)) => {
+                    if context_window.is_none() {
+                        result.error = Some("请填写正整数 contextWindow。".to_owned());
+                    } else if let Some(path) = models_path {
+                        match upsert_model_override(
+                            path,
+                            spec,
+                            &ModelOverride {
+                                context_window,
+                                max_tokens,
+                            },
+                        ) {
+                            Ok(()) => result.restart = true,
+                            Err(err) => {
+                                result.error = Some(format!("写入 models.json 失败：{err}"))
+                            }
+                        }
+                    } else {
+                        result.error = Some("未找到 models.json 写入路径。".to_owned());
+                    }
+                }
+                (Err(err), _) | (_, Err(err)) => result.error = Some(err),
+            }
+        }
+    });
 }
 
 fn clear_named(form: &mut ApiKeyForm, auth_path: Option<&Path>, id: &str) -> KeyUiResult {
@@ -1223,6 +1489,29 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "my-gateway");
         assert_eq!(list[0].models, vec!["deepseek-chat", "deepseek-reasoner"]);
+    }
+
+    #[test]
+    fn model_override_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("models.json");
+        upsert_model_override(
+            &path,
+            "mock/m1",
+            &ModelOverride {
+                context_window: Some(64000),
+                max_tokens: Some(2048),
+            },
+        )
+        .unwrap();
+        let loaded = load_model_override(&path, "mock/m1");
+        assert_eq!(loaded.context_window, Some(64000));
+        assert_eq!(loaded.max_tokens, Some(2048));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"contextWindow\": 64000"));
+        assert!(raw.contains("\"maxTokens\": 2048"));
+        assert!(parse_positive_int("0").is_err());
+        assert_eq!(parse_positive_int("128000").unwrap(), Some(128000));
     }
 
     #[test]

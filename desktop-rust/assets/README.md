@@ -10,6 +10,18 @@
 
 不要使用 eframe 默认的「E」占位图标。
 
+## W1b 视觉 kit
+
+洁净室自制大气底与 dock / 空态插画，随壳嵌入运行时（`include_bytes`）。
+
+| 文件 | 用途 |
+|------|------|
+| `bg-atmosphere.jpg` | 主窗 / 中央聊 `center/cover` 大气底（约 128KB） |
+| `icon-sessions.png` / `icon-files.png` / `icon-git.png` | 左 dock 三入口线标 |
+| `empty-folder.png` / `empty-nongit.png` / `empty-noperm.png` | 文件 / Git 空态插画 |
+
+不引用 GPUI / Zed / 其他壳的主题包。
+
 ## 本地验证（Windows）
 
 1. `cargo build --release -p pi-light --bin pi-light`

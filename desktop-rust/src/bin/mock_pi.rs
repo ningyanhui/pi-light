@@ -67,6 +67,11 @@ fn main() {
             "set_model" => handle_set_model(&mut out, cmd_id, &cmd),
             "new_session" => handle_session_command(&mut out, cmd_id, "new_session"),
             "switch_session" => handle_session_command(&mut out, cmd_id, "switch_session"),
+            "get_available_thinking_levels" => handle_thinking_levels(&mut out, cmd_id),
+            "set_thinking_level" => handle_set_thinking_level(&mut out, cmd_id, &cmd),
+            "get_commands" => handle_get_commands(&mut out, cmd_id),
+            "clone" | "fork" => handle_session_command(&mut out, cmd_id, cmd_type),
+            "set_session_name" => handle_generic(&mut out, cmd_id, cmd_type),
             _ => handle_generic(&mut out, cmd_id, cmd_type),
         }
     }
@@ -287,8 +292,11 @@ fn handle_get_state(out: &mut impl Write, id: Option<String>) {
                 "model": {
                     "provider": "mock",
                     "modelId": "mock-model-1",
-                    "name": "Mock Model"
+                    "name": "Mock Model",
+                    "contextWindow": 200000,
+                    "maxTokens": 8192
                 },
+                "thinkingLevel": "low",
                 "sessionFile": "/tmp/mock-session.jsonl",
                 "sessionId": "mock-session",
                 "sessionName": "mock"
@@ -322,6 +330,54 @@ fn handle_get_available_models(out: &mut impl Write, id: Option<String>) {
                 "models": [
                     {"provider": "mock", "modelId": "mock-model-1", "name": "Mock Model 1"},
                     {"provider": "mock", "modelId": "mock-model-2", "name": "Mock Model 2"}
+                ]
+            }
+        }),
+    );
+}
+
+fn handle_thinking_levels(out: &mut impl Write, id: Option<String>) {
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": "get_available_thinking_levels",
+            "success": true,
+            "data": { "levels": ["off", "low", "medium", "high"] }
+        }),
+    );
+}
+
+fn handle_set_thinking_level(out: &mut impl Write, id: Option<String>, cmd: &serde_json::Value) {
+    let level = cmd.get("level").and_then(|v| v.as_str()).unwrap_or("off");
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": "set_thinking_level",
+            "success": true,
+            "data": { "level": level }
+        }),
+    );
+}
+
+fn handle_get_commands(out: &mut impl Write, id: Option<String>) {
+    emit_with_id(
+        out,
+        &id,
+        serde_json::json!({
+            "type": "response",
+            "command": "get_commands",
+            "success": true,
+            "data": {
+                "commands": [
+                    {
+                        "name": "skill:demo",
+                        "description": "演示技能",
+                        "source": "skill"
+                    }
                 ]
             }
         }),

@@ -192,6 +192,27 @@ Cloudflare account for the default quick tunnel (trycloudflare); named
 tunnels and other relays may. See docs/remote-acceptance.md.
 
 ========================================================================
+UI kit assets (atmosphere, dock icons, empty states)
+========================================================================
+
+This product embeds clean-room visual kit files under desktop-rust/assets/:
+bg-atmosphere.jpg, icon-sessions.png, icon-files.png, icon-git.png,
+empty-folder.png, empty-nongit.png, empty-noperm.png.
+
+These assets are original to pi-light (Apache-2.0). They are not copied
+from GPUI, Zed, or other coding-agent shells.
+
+========================================================================
+Third-Party Component Notice: image crate
+========================================================================
+
+  image
+  Copyright (c) The image-rs Developers
+  Repository: https://github.com/image-rs/image
+  Licensed under MIT OR Apache-2.0 (this product uses the Apache-2.0 terms).
+  Used only to decode the kit JPEG/PNG textures at runtime.
+
+========================================================================
 See ACKNOWLEDGEMENTS.md for full attribution and inspiration credits.
 See THIRD-PARTY-NOTICES for complete dependency license inventory.
 See docs/preset-packages.md for the human-readable pin table.

@@ -134,6 +134,17 @@ impl FileTree {
         }
     }
 
+    /// 供 `@` 唤起：浅层遍历可见文件，忽略巨型目录。不打开编辑器。
+    pub fn collect_file_rels(&mut self, limit: usize) -> Vec<String> {
+        if !matches!(self.status, TreeStatus::Ready) {
+            return Vec::new();
+        }
+        let root = self.root.clone();
+        let mut out = Vec::new();
+        collect_rels(self, &root, &root, &mut out, limit, 0);
+        out
+    }
+
     fn ensure_children(&mut self, path: &Path) {
         if self.cache.contains_key(path) {
             return;
@@ -208,6 +219,30 @@ fn collect_entries(parent: &Path, rd: fs::ReadDir) -> Vec<TreeEntry> {
         })
     });
     entries
+}
+
+fn collect_rels(
+    tree: &mut FileTree,
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<String>,
+    limit: usize,
+    depth: usize,
+) {
+    if out.len() >= limit || depth > 8 {
+        return;
+    }
+    let entries = tree.children(dir).to_vec();
+    for entry in entries {
+        if out.len() >= limit {
+            break;
+        }
+        match entry.kind {
+            EntryKind::File => out.push(FileTree::relative_display(root, &entry.path)),
+            EntryKind::Dir => collect_rels(tree, root, &entry.path, out, limit, depth + 1),
+            EntryKind::IgnoredDir => {}
+        }
+    }
 }
 
 fn unix_rel(path: &Path) -> String {
@@ -288,5 +323,22 @@ mod tests {
         let nm = dir.path().join("node_modules");
         assert!(!tree.is_expanded(&nm));
         assert!(!tree.is_expanded(&nm));
+    }
+
+    #[test]
+    fn collect_file_rels_skips_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("main.rs"), "fn main() {}\n").unwrap();
+        fs::create_dir_all(dir.path().join("node_modules").join("pkg")).unwrap();
+        fs::write(
+            dir.path().join("node_modules").join("pkg").join("x.js"),
+            "1\n",
+        )
+        .unwrap();
+        let mut tree = FileTree::load(dir.path().to_path_buf());
+        let files = tree.collect_file_rels(32);
+        assert!(files.iter().any(|p| p == "src/main.rs"));
+        assert!(!files.iter().any(|p| p.contains("node_modules")));
     }
 }

@@ -122,6 +122,9 @@ pub enum PiRpcEvent {
         session_file: Option<String>,
         session_id: Option<String>,
         session_name: Option<String>,
+        thinking_level: Option<String>,
+        context_window: Option<u64>,
+        max_tokens: Option<u64>,
     },
     /// M4′: `get_available_models` response — list of "{provider}/{modelId}".
     AvailableModels(Vec<String>),
@@ -129,6 +132,14 @@ pub enum PiRpcEvent {
     ModelChanged(String),
     /// `new_session` / `switch_session` completed (`data.cancelled`).
     SessionCommandDone { command: String, cancelled: bool },
+    /// `get_available_thinking_levels` → `data.levels`.
+    ThinkingLevels(Vec<String>),
+    /// `set_thinking_level` / `cycle_thinking_level` 成功后的级别。
+    ThinkingLevelChanged(String),
+    /// `get_commands` 可经 prompt `/name` 执行的命令。
+    AvailableCommands(Vec<crate::composer_invoke::PiCommand>),
+    /// `clone` / `fork` 完成。
+    SessionCloned { command: String, cancelled: bool },
 }
 
 // ── Bash PATH injection ───────────────────────────────────────────────────
@@ -290,6 +301,53 @@ impl PiRpcClient {
         self.write_command(json!({
             "id": id.to_string(),
             "type": "get_available_models",
+        }))
+    }
+
+    pub fn send_set_thinking_level(&mut self, level: &str) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "set_thinking_level",
+            "level": level,
+        }))
+    }
+
+    pub fn request_available_thinking_levels(&mut self) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "get_available_thinking_levels",
+        }))
+    }
+
+    pub fn request_commands(&mut self) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "get_commands",
+        }))
+    }
+
+    pub fn send_clone_session(&mut self) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "clone",
+        }))
+    }
+
+    pub fn send_set_session_name(&mut self, name: &str) -> io::Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write_command(json!({
+            "id": id.to_string(),
+            "type": "set_session_name",
+            "name": name,
         }))
     }
 
@@ -516,12 +574,61 @@ fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
                     .and_then(|d| d.get("sessionName"))
                     .and_then(Value::as_str)
                     .map(str::to_owned);
+                let thinking_level = data
+                    .and_then(|d| d.get("thinkingLevel"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let context_window = data
+                    .and_then(|d| d.get("model"))
+                    .and_then(parse_model_context_window);
+                let max_tokens = data
+                    .and_then(|d| d.get("model"))
+                    .and_then(parse_model_max_tokens);
                 vec![PiRpcEvent::StateInfo {
                     model,
                     session_file,
                     session_id,
                     session_name,
+                    thinking_level,
+                    context_window,
+                    max_tokens,
                 }]
+            } else if command == "get_available_thinking_levels" {
+                let levels = val
+                    .get("data")
+                    .and_then(|d| d.get("levels"))
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                vec![PiRpcEvent::ThinkingLevels(levels)]
+            } else if command == "set_thinking_level" || command == "cycle_thinking_level" {
+                let level = val
+                    .get("data")
+                    .and_then(|d| d.get("level"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                vec![PiRpcEvent::ThinkingLevelChanged(level)]
+            } else if command == "get_commands" {
+                let commands = val
+                    .get("data")
+                    .and_then(|d| d.get("commands"))
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(parse_pi_command).collect())
+                    .unwrap_or_default();
+                vec![PiRpcEvent::AvailableCommands(commands)]
+            } else if command == "clone" || command == "fork" {
+                let cancelled = val
+                    .get("data")
+                    .and_then(|d| d.get("cancelled"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                vec![PiRpcEvent::SessionCloned { command, cancelled }]
             } else if command == "new_session" || command == "switch_session" {
                 let cancelled = val
                     .get("data")
@@ -581,6 +688,34 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     } else {
         format!("{}…", chars[..max_chars].iter().collect::<String>())
     }
+}
+
+fn parse_model_context_window(model: &Value) -> Option<u64> {
+    model.get("contextWindow").and_then(as_u64)
+}
+
+fn parse_model_max_tokens(model: &Value) -> Option<u64> {
+    model.get("maxTokens").and_then(as_u64)
+}
+
+fn parse_pi_command(val: &Value) -> Option<crate::composer_invoke::PiCommand> {
+    let name = val.get("name").and_then(Value::as_str)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(crate::composer_invoke::PiCommand {
+        name: name.to_owned(),
+        description: val
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        source: val
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+    })
 }
 
 /// M4′: 将 model 对象序列化为 "{provider}/{modelId}" 字符串。
@@ -832,7 +967,46 @@ mod tests {
                 session_file: Some(f),
                 session_id: Some(id),
                 session_name: Some(n),
+                ..
             } if m == "mock/m1" && f == "/tmp/s.jsonl" && id == "abc" && n == "demo"
+        ));
+    }
+
+    #[test]
+    fn parse_get_state_thinking_and_context() {
+        let events = parse_one(
+            r#"{"type":"response","command":"get_state","success":true,"data":{"thinkingLevel":"high","model":{"provider":"mock","modelId":"m1","contextWindow":128000,"maxTokens":8192}}}"#,
+        );
+        assert!(matches!(
+            &events[0],
+            PiRpcEvent::StateInfo {
+                thinking_level: Some(lv),
+                context_window: Some(128000),
+                max_tokens: Some(8192),
+                ..
+            } if lv == "high"
+        ));
+    }
+
+    #[test]
+    fn parse_thinking_levels_and_commands() {
+        let levels = parse_one(
+            r#"{"type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off","low","high"]}}"#,
+        );
+        assert!(matches!(&levels[0], PiRpcEvent::ThinkingLevels(v) if v.len() == 3));
+        let cmds = parse_one(
+            r#"{"type":"response","command":"get_commands","success":true,"data":{"commands":[{"name":"skill:demo","description":"d","source":"skill"}]}}"#,
+        );
+        assert!(matches!(
+            &cmds[0],
+            PiRpcEvent::AvailableCommands(v) if v[0].name == "skill:demo"
+        ));
+        let clone = parse_one(
+            r#"{"type":"response","command":"clone","success":true,"data":{"cancelled":false}}"#,
+        );
+        assert!(matches!(
+            &clone[0],
+            PiRpcEvent::SessionCloned { command, cancelled: false } if command == "clone"
         ));
     }
 
