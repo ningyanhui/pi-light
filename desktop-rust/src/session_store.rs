@@ -115,6 +115,10 @@ struct FileSession {
     tree: Option<FileTree>,
     #[serde(default)]
     pi_stale: bool,
+    #[serde(default)]
+    workdir: Option<String>,
+    #[serde(default)]
+    updated_at: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -214,6 +218,11 @@ impl FileSession {
                 .collect(),
             tree: Some(FileTree::from_snapshot(&session.tree)),
             pi_stale: session.pi_stale,
+            workdir: session
+                .workdir
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            updated_at: Some(session.updated_at),
         }
     }
 
@@ -242,6 +251,8 @@ impl FileSession {
             messages,
             tree,
             pi_stale: self.pi_stale,
+            workdir: self.workdir.map(PathBuf::from),
+            updated_at: self.updated_at.unwrap_or(0),
         }
     }
 }
@@ -322,6 +333,7 @@ mod tests {
         hub.active_chat_mut().push_user("第一条".to_owned());
         hub.active_chat_mut().push_assistant("回复".to_owned());
         hub.set_active_title_from_user("第一条");
+        hub.set_active_workdir(workdir.clone());
         hub.set_active_session_file(Some("sess.jsonl".to_owned()), Some("sid".to_owned()));
         hub.active_chat_mut().input = "草稿".to_owned();
         hub.active_chat_mut().last_sent_prompt = Some("第一条".to_owned());
@@ -345,6 +357,10 @@ mod tests {
             Some("第一条")
         );
         assert_eq!(loaded.workdir.as_deref(), Some(workdir.as_path()));
+        assert_eq!(
+            loaded.sessions.active().workdir.as_deref(),
+            Some(workdir.as_path())
+        );
         assert!(loaded.sessions.switch_to(1));
         assert_eq!(loaded.sessions.active_chat().messages.len(), 1);
     }

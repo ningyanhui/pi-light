@@ -832,6 +832,19 @@ impl AdminPanelState {
                                     .size(12.0),
                                 );
                                 ui.add_space(10.0);
+                                ui.label(
+                                    egui::RichText::new("工作区")
+                                        .strong()
+                                        .size(13.0),
+                                );
+                                ui.label(
+                                    egui::RichText::new(
+                                        "当前活动工作区唯一。点顶栏徽章切换路径时会短暂同步环境；文件树与 Git 跟随该路径。",
+                                    )
+                                    .weak()
+                                    .size(12.0),
+                                );
+                                ui.add_space(10.0);
                                 show_shell_source(ui);
                                 ui.add_space(8.0);
                                 egui::CollapsingHeader::new("高级：自己指定 Pi 程序")

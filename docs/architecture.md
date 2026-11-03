@@ -19,14 +19,15 @@
 │  desktop-rust/   egui + eframe（主桌面客户端）                        │
 │                                                                       │
 │  ┌──────────┐ ┌──────────────────────────────────────────────────┐ │
-│  │ 会话列表  │ │  主区（CentralPanel）                              │ │
-│  │ 恢复/新建 │ │  流式聊天 + 工具卡片 + Token/Trace                 │ │
-│  │ 工作目录  │ │  输入框 + 发送 / 停止 / 重试                       │ │
+│  │ 左 dock   │ │  主区（CentralPanel）                              │ │
+│  │ 会话列表  │ │  流式聊天 + 工具卡片 + Token/Trace                 │ │
+│  │ 文件树    │ │  输入框 + 发送 / 停止 / 重试                       │ │
+│  │ Git       │ │                                                    │ │
 │  └──────────┘ └──────────────────────────────────────────────────┘ │
-│  顶栏：标题 + 状态灯 + 模型下拉 + 目录名                             │
+│  顶栏：品牌 + 模型下拉 + 当前工作区徽章                               │
 │  底栏左下角：⚙ 设置（右侧抽屉：模型 / Skills / MCP / 扩展市场 /     │
 │                      记忆 / 远程访问 / 通用）                         │
-│  底栏右侧：重新探测                                                  │
+│  底栏右侧：Tokens / Trace                                            │
 │                                                                       │
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
@@ -68,6 +69,9 @@ pi-light/
 │   │   ├── chat.rs               # 聊天状态机（M2′）+ 同会话消息树
 │   │   ├── message_tree.rs       # 壳侧消息树 / 回放 prompt
 │   │   ├── session_store.rs      # 会话历史落盘与启动恢复
+│   │   ├── workspace.rs          # 三栏 dock、无感知 cwd 切换
+│   │   ├── workspace_tree.rs     # 文件树
+│   │   ├── workspace_git.rs      # Git Changes / History
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
 │   │   ├── admin_panel.rs        # 设置抽屉（七 Tab）
 │   │   ├── ext_market.rs         # 扩展市场 UI（浏览 / 详情 / 确认安装 / 一键启用）
@@ -85,6 +89,7 @@ pi-light/
 ├── android/                      # M6-lite companion（配对 + 远程聊天）
 ├── docs/
 │   ├── architecture.md
+│   ├── workspace.md              # 工作区 cwd：无感知切换与上游限制
 │   ├── preset-packages.md        # Slim / 操控包钉版本与 tarball SHA-256
 │   ├── remote-acceptance.md      # M5 公网配对与中继验收
 │   ├── companion-protocol.md     # claim / chat / desktop 协议
@@ -110,7 +115,10 @@ pi-light/
 | `pi_rpc` | `PiRpcClient`：spawn（可选 cwd，注入 bash PATH）→ JSONL；`validate_cwd` 入口单次校验；`new_session` / `switch_session` |
 | `chat` | 聊天状态机 + `SessionHub`（多会话）；同会话消息树；重试上一条 prompt；可导出快照 |
 | `message_tree` | 壳侧消息树：兄弟分支、活动路径、回放 prompt；不调用 Pi `fork` |
-| `session_store` | 把会话列表、消息树、草稿、工作目录写入 `~/.pi-light/sessions.json`（v2），启动时读回 v1/v2 |
+| `session_store` | 把会话列表、消息树、草稿、每会话工作区写入 `~/.pi-light/sessions.json`（v2），启动时读回 v1/v2 |
+| `workspace` | 左 dock 三面板；cwd 徽章；同路径复用 sidecar，异路径静默 respawn |
+| `workspace_tree` | 当前工作区只读文件树；默认忽略巨型目录；单击插入相对路径 |
+| `workspace_git` | `git status` / `git log`；最小 stage/unstage/commit；非仓诚实空态 |
 | `fonts` | 系统 CJK 字体作为 egui 回退；Windows 优先 `msyh.ttc` |
 | `api_keys` | 设置页写入 Pi `auth.json` 的 API 密钥；保存后掩码，不回显明文；允许自定义 provider id |
 | `provider_catalog` | 内置厂商卡片 + 自定义 API 表单；读写 `models.json` 的 `providers` 对象 |
@@ -240,7 +248,8 @@ pi-light-windows-x64/
 | **v3 M6-lite** | Android companion：扫码/输码经公网中继配对；`/v1/chat` 写入桌面当前 Pi 会话 | ✅ 已合入 |
 | **远程桌面** | JPEG 轮询 + 浏览/触控/全屏注入；保留配对与公网中继 | ✅ 协议已落地（非 WebRTC） |
 | **v0.3.0-alpha** | M0+M1+M2+M5+M6-lite 预发布 | ✅ 已发布 |
-| **v0.3.0** | 正式版：整页对齐、消息树、远程桌面 JPEG 像素流、companion 流式/工具/停止/ASR | 本发版 |
+| **v0.3.0** | 正式版：整页对齐、消息树、远程桌面 JPEG 像素流、companion 流式/工具/停止/ASR | ✅ 已发布 |
+| **W0 / W1** | 三栏工作区：会话 / 文件树 / Git；无感知 cwd 切换 | 本增量 |
 
 ---
 

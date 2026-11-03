@@ -23,3 +23,6 @@ pub mod session_insights;
 pub mod session_ref;
 pub mod session_store;
 pub mod theme;
+pub mod workspace;
+pub mod workspace_git;
+pub mod workspace_tree;
