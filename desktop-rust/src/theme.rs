@@ -6,21 +6,51 @@
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
 
-pub fn amber() -> Color32 { Color32::from_rgb(226, 174, 92) }
-pub fn accent() -> Color32 { Color32::from_rgb(91, 137, 255) }
-pub fn accent_bright() -> Color32 { Color32::from_rgb(126, 164, 255) }
-pub fn accent_soft() -> Color32 { Color32::from_rgb(184, 204, 255) }
-pub fn ink() -> Color32 { Color32::from_rgb(11, 15, 21) }
-pub fn chrome_bg() -> Color32 { Color32::from_rgb(15, 19, 26) }
-pub fn sidebar_bg() -> Color32 { Color32::from_rgb(18, 23, 31) }
-pub fn card_bg() -> Color32 { Color32::from_rgb(27, 34, 45) }
-pub fn hairline() -> Color32 { Color32::from_rgb(43, 53, 68) }
-pub fn text_primary() -> Color32 { Color32::from_rgb(231, 236, 244) }
-pub fn text_muted() -> Color32 { Color32::from_rgb(157, 168, 183) }
-pub fn text_dim() -> Color32 { Color32::from_rgb(112, 125, 143) }
-pub fn ok() -> Color32 { Color32::from_rgb(62, 185, 139) }
-pub fn warn() -> Color32 { Color32::from_rgb(220, 169, 83) }
-pub fn danger() -> Color32 { Color32::from_rgb(225, 105, 105) }
+pub fn amber() -> Color32 {
+    Color32::from_rgb(226, 174, 92)
+}
+pub fn accent() -> Color32 {
+    Color32::from_rgb(91, 137, 255)
+}
+pub fn accent_bright() -> Color32 {
+    Color32::from_rgb(126, 164, 255)
+}
+pub fn accent_soft() -> Color32 {
+    Color32::from_rgb(184, 204, 255)
+}
+pub fn ink() -> Color32 {
+    Color32::from_rgb(11, 15, 21)
+}
+pub fn chrome_bg() -> Color32 {
+    Color32::from_rgb(15, 19, 26)
+}
+pub fn sidebar_bg() -> Color32 {
+    Color32::from_rgb(18, 23, 31)
+}
+pub fn card_bg() -> Color32 {
+    Color32::from_rgb(27, 34, 45)
+}
+pub fn hairline() -> Color32 {
+    Color32::from_rgb(43, 53, 68)
+}
+pub fn text_primary() -> Color32 {
+    Color32::from_rgb(231, 236, 244)
+}
+pub fn text_muted() -> Color32 {
+    Color32::from_rgb(157, 168, 183)
+}
+pub fn text_dim() -> Color32 {
+    Color32::from_rgb(112, 125, 143)
+}
+pub fn ok() -> Color32 {
+    Color32::from_rgb(62, 185, 139)
+}
+pub fn warn() -> Color32 {
+    Color32::from_rgb(220, 169, 83)
+}
+pub fn danger() -> Color32 {
+    Color32::from_rgb(225, 105, 105)
+}
 
 pub fn apply_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
@@ -56,13 +86,27 @@ pub fn apply_theme(ctx: &egui::Context) {
 
 /// Solid panel surfaces. The legacy names remain to avoid changing behavior
 /// modules while removing the translucent purple/glass treatment.
-pub fn glass_fill() -> Color32 { card_bg() }
-pub fn glass_strong() -> Color32 { sidebar_bg() }
-pub fn glass_stroke() -> Color32 { hairline() }
-pub fn glass_stroke_strong() -> Color32 { Color32::from_rgb(58, 71, 89) }
-pub fn accent_stroke_soft() -> Color32 { Color32::from_rgba_unmultiplied(91, 137, 255, 92) }
-pub fn accent_stroke_think() -> Color32 { Color32::from_rgba_unmultiplied(91, 137, 255, 58) }
-pub fn accent_stroke_composer() -> Color32 { Color32::from_rgba_unmultiplied(91, 137, 255, 92) }
+pub fn glass_fill() -> Color32 {
+    card_bg()
+}
+pub fn glass_strong() -> Color32 {
+    sidebar_bg()
+}
+pub fn glass_stroke() -> Color32 {
+    hairline()
+}
+pub fn glass_stroke_strong() -> Color32 {
+    Color32::from_rgb(58, 71, 89)
+}
+pub fn accent_stroke_soft() -> Color32 {
+    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+}
+pub fn accent_stroke_think() -> Color32 {
+    Color32::from_rgba_unmultiplied(91, 137, 255, 58)
+}
+pub fn accent_stroke_composer() -> Color32 {
+    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+}
 
 pub fn glass_shadow() -> egui::Shadow {
     egui::Shadow {
@@ -104,7 +148,11 @@ pub fn card_frame() -> egui::Frame {
 }
 
 pub fn session_row_stroke(selected: bool) -> Stroke {
-    if selected { Stroke::new(1.0, accent_stroke_soft()) } else { Stroke::NONE }
+    if selected {
+        Stroke::new(1.0, accent_stroke_soft())
+    } else {
+        Stroke::NONE
+    }
 }
 
 pub fn soft_card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
@@ -157,7 +205,11 @@ pub fn send_button(ui: &mut egui::Ui, enabled: bool) -> egui::Response {
                 .color(if enabled { Color32::WHITE } else { text_dim() })
                 .size(14.0),
         )
-        .fill(if enabled { accent() } else { Color32::from_rgb(39, 47, 60) })
+        .fill(if enabled {
+            accent()
+        } else {
+            Color32::from_rgb(39, 47, 60)
+        })
         .rounding(Rounding::same(9.0))
         .min_size(egui::vec2(38.0, 36.0)),
     )
@@ -471,7 +523,10 @@ mod tests {
     #[test]
     fn default_glass_stroke_is_neutral_and_composer_uses_cobalt() {
         assert_eq!(glass_stroke(), Color32::from_rgb(43, 53, 68));
-        assert_eq!(accent_stroke_composer(), Color32::from_rgba_unmultiplied(91, 137, 255, 92));
+        assert_eq!(
+            accent_stroke_composer(),
+            Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+        );
     }
 
     #[test]
