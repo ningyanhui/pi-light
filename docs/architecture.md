@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.3.0-alpha — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊；远程桌面 JPEG 轮询 + 浏览/触控/全屏。不含 WebRTC、不含 M3/M4 真能力闸门
+> **当前版本**：v0.3.0 — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊；同会话消息树；远程桌面 JPEG 轮询 + 浏览/触控/全屏。不含 WebRTC、不含 M3/M4 真能力闸门
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -239,7 +239,8 @@ pi-light-windows-x64/
 | **v3 M5** | 远程访问页：配对码/二维码、Cloudflare Tunnel 状态、已授权设备；本机 claim 钩子 | ✅ 已合入 |
 | **v3 M6-lite** | Android companion：扫码/输码经公网中继配对；`/v1/chat` 写入桌面当前 Pi 会话 | ✅ 已合入 |
 | **远程桌面** | JPEG 轮询 + 浏览/触控/全屏注入；保留配对与公网中继 | ✅ 协议已落地（非 WebRTC） |
-| **v0.3.0-alpha** | M0+M1+M2+M5+M6-lite 预发布 | 本发版 |
+| **v0.3.0-alpha** | M0+M1+M2+M5+M6-lite 预发布 | ✅ 已发布 |
+| **v0.3.0** | 正式版：整页对齐、消息树、远程桌面 JPEG 像素流、companion 流式/工具/停止/ASR | 本发版 |
 
 ---
 
@@ -331,4 +332,4 @@ do_send():
 
 ---
 
-*最后更新：v0.3.0-alpha（R0-alpha 发版准备：M0+M1+M2+M5+M6-lite）*
+*最后更新：v0.3.0（正式发版准备：整页对齐、消息树、远程桌面 JPEG、companion 流式会话）*
