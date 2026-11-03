@@ -694,6 +694,7 @@ impl AdminPanelState {
             .frame(
                 egui::Frame::window(&ctx.style())
                     .fill(crate::theme::chrome_bg())
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::glass_stroke_strong()))
                     .inner_margin(egui::Margin::symmetric(18.0, 14.0))
                     .rounding(egui::Rounding::same(12.0)),
             )

@@ -38,6 +38,9 @@ jpeg-encoder = "0.6"
 image = { version = "=0.24.9", default-features = false, features = ["jpeg", "png"] }
 # 钉住以免 crates.io 最新传递依赖要求 edition2024 / rustc>1.83
 zeroize = "=1.8.1"
+# GFM 子集解析（表 / 强调 / 围栏代码）。渲染在 markdown_ui，不走裸 Label。
+# 钉 0.12：0.13+ TagEnd 拆分且部分版本 MSRV > rustc 1.83。
+pulldown-cmark = { version = "0.12", default-features = false }
 
 # Windows: don't spawn a console window when running the GUI binary
 [target.'cfg(windows)'.dependencies]

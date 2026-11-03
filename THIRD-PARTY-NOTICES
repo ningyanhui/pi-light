@@ -182,6 +182,17 @@ Used for the optional QR scan preview. Camera permission is not required
 to type a pair code instead.
 
 ------------------------------------------------------------------------
+Component: pulldown-cmark
+------------------------------------------------------------------------
+Repository:   https://github.com/pulldown-cmark/pulldown-cmark
+Version:      0.12 (pinned in desktop-rust/Cargo.toml)
+License:      MIT
+
+Used to parse assistant Markdown (headings, emphasis, lists, fenced
+code, GFM tables) before the desktop shell draws structured egui UI.
+This product uses the MIT terms.
+
+------------------------------------------------------------------------
 Rust Standard Library and Toolchain
 ------------------------------------------------------------------------
 Repository:   https://github.com/rust-lang/rust
