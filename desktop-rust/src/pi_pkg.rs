@@ -535,6 +535,7 @@ fn write_packages_for_test(path: &Path, sources: &[&str]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::fs;
     use tempfile::TempDir;
 
