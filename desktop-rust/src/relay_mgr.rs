@@ -16,7 +16,7 @@ use std::{
 use serde::Deserialize;
 
 const LOCK_JSON: &str = include_str!("../../scripts/cloudflared.lock.json");
-const USER_AGENT: &str = "pi-light/0.3.0 (+https://github.com/ningyanhui/pi-light)";
+const USER_AGENT: &str = "pi-light/0.3.1 (+https://github.com/ningyanhui/pi-light)";
 
 // ── Pin ───────────────────────────────────────────────────────────────────
 
