@@ -19,6 +19,12 @@ class DesktopModeTest {
         assertEquals(DesktopMode.TOUCH, DesktopMode.parse("触控"))
         assertEquals(DesktopMode.FULLSCREEN, DesktopMode.parse("fullscreen"))
         assertEquals(DesktopMode.BROWSE, DesktopMode.parse("unknown"))
+        assertEquals("browse", DesktopMode.BROWSE.wireName)
+        assertEquals("touch", DesktopMode.TOUCH.wireName)
+        assertEquals("fullscreen", DesktopMode.FULLSCREEN.wireName)
+        assertFalse(DesktopMode.BROWSE.injectsInput)
+        assertTrue(DesktopMode.TOUCH.injectsInput)
+        assertTrue(DesktopMode.FULLSCREEN.injectsInput)
     }
 
     @Test

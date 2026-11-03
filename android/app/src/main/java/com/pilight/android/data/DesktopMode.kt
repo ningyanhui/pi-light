@@ -4,10 +4,12 @@ package com.pilight.android.data
 enum class DesktopMode(
     val label: String,
     val hint: String,
+    val wireName: String,
+    val injectsInput: Boolean,
 ) {
-    BROWSE("浏览", "浏览=只看不点"),
-    TOUCH("触控", "触控=点按映射鼠标"),
-    FULLSCREEN("全屏", "全屏=横屏沉浸"),
+    BROWSE("浏览", "浏览=只看不点", "browse", false),
+    TOUCH("触控", "触控=点按映射鼠标", "touch", true),
+    FULLSCREEN("全屏", "全屏=横屏沉浸", "fullscreen", true),
     ;
 
     companion object {

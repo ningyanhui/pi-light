@@ -4,6 +4,7 @@
 // M5：health / pair info / pair claim。
 // M6-lite：已授权设备可 POST/GET /v1/chat，写入桌面当前 Pi 会话。
 // 增量：GET 快照含 tools/can_stop；POST 可 SSE 流式；POST /v1/chat/stop 中止本轮。
+// 远程桌面：GET/POST /v1/desktop/* 像素流 + 键鼠（浏览不注入）。每连接一线程。
 
 use std::{
     io::{self, Read, Write},
@@ -18,12 +19,58 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::desktop_stream::{
+    apply_input, capture_encoded_frame, now_unix_ms, solid_jpeg, CaptureStatus, DesktopFrame,
+    DesktopInput, DesktopViewMode, InputStatus, CAPTURE_INTERVAL_MS, DESKTOP_FRAME_PATH,
+    DESKTOP_INPUT_PATH, DESKTOP_SESSION_PATH,
+};
+
 pub const DEFAULT_PORT: u16 = 17831;
 pub const CLAIM_PATH: &str = "/v1/pair/claim";
 pub const CHAT_PATH: &str = "/v1/chat";
 pub const STOP_PATH: &str = "/v1/chat/stop";
 pub const PROTOCOL: &str = "pi-light-companion/1";
 const CHAT_WAIT_SECS: u64 = 120;
+
+#[derive(Debug, Clone)]
+pub struct DesktopStatus {
+    pub active: bool,
+    pub mode: DesktopViewMode,
+    pub capture: CaptureStatus,
+    pub input: InputStatus,
+    pub width: u32,
+    pub height: u32,
+    pub seq: u64,
+    pub capture_message: String,
+}
+
+impl Default for DesktopStatus {
+    fn default() -> Self {
+        Self {
+            active: false,
+            mode: DesktopViewMode::Browse,
+            capture: CaptureStatus::Unavailable,
+            input: InputStatus::ViewOnly,
+            width: 0,
+            height: 0,
+            seq: 0,
+            capture_message: String::new(),
+        }
+    }
+}
+
+struct DesktopRuntime {
+    active: bool,
+    mode: DesktopViewMode,
+    allow_preview: bool,
+    allow_touch: bool,
+    hold_test_frame: bool,
+    last_frame: Option<DesktopFrame>,
+    capture: CaptureStatus,
+    capture_message: String,
+    next_seq: u64,
+    applied: Vec<DesktopInput>,
+}
 
 #[derive(Debug, Clone)]
 pub struct PairOffer {
@@ -139,12 +186,29 @@ struct GatewayShared {
     snapshot: ChatSnapshot,
     /// 仅测试：跳过 UI 等待，立即回这条文本。
     auto_reply: Option<String>,
+    desktop: DesktopRuntime,
+}
+
+fn empty_desktop() -> DesktopRuntime {
+    DesktopRuntime {
+        active: false,
+        mode: DesktopViewMode::Browse,
+        allow_preview: true,
+        allow_touch: true,
+        hold_test_frame: false,
+        last_frame: None,
+        capture: CaptureStatus::Unavailable,
+        capture_message: String::new(),
+        next_seq: 1,
+        applied: Vec::new(),
+    }
 }
 
 pub struct GatewayHandle {
     pub port: u16,
     shutdown: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
+    capture_thread: Option<thread::JoinHandle<()>>,
     shared: Arc<Mutex<GatewayShared>>,
 }
 
@@ -162,6 +226,9 @@ impl Drop for GatewayHandle {
         // 碰一下本机端口，缩短 accept 等待。
         let _ = TcpStream::connect(("127.0.0.1", self.port));
         if let Some(h) = self.thread.take() {
+            let _ = h.join();
+        }
+        if let Some(h) = self.capture_thread.take() {
             let _ = h.join();
         }
     }
@@ -185,6 +252,7 @@ impl GatewayHandle {
             pending_stop: false,
             snapshot: ChatSnapshot::default(),
             auto_reply: None,
+            desktop: empty_desktop(),
         }));
         let flag = shutdown.clone();
         let state = shared.clone();
@@ -204,8 +272,8 @@ impl GatewayHandle {
                             .name("pi-light-gw-conn".into())
                             .spawn(move || {
                                 let _ = stream.set_nonblocking(false);
-                                let _ = stream.set_read_timeout(Some(Duration::from_secs(8)));
-                                let _ = stream.set_write_timeout(Some(Duration::from_secs(8)));
+                                let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+                                let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
                                 handle_conn(stream, &conn_state);
                             });
                     }
@@ -216,10 +284,16 @@ impl GatewayHandle {
                     Err(_) => break,
                 }
             })?;
+        let cap_flag = shutdown.clone();
+        let cap_state = shared.clone();
+        let capture_thread = thread::Builder::new()
+            .name("pi-light-desktop-cap".into())
+            .spawn(move || capture_loop(cap_flag, cap_state))?;
         Ok(Self {
             port,
             shutdown,
             thread: Some(thread),
+            capture_thread: Some(capture_thread),
             shared,
         })
     }
@@ -280,6 +354,113 @@ impl GatewayHandle {
     pub fn local_base(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
+
+    pub fn set_desktop_policy(&self, allow_preview: bool, allow_touch: bool) {
+        if let Ok(mut g) = self.shared.lock() {
+            g.desktop.allow_preview = allow_preview;
+            g.desktop.allow_touch = allow_touch;
+        }
+    }
+
+    pub fn desktop_status(&self) -> DesktopStatus {
+        self.shared
+            .lock()
+            .map(|g| desktop_status_from(&g.desktop))
+            .unwrap_or_default()
+    }
+
+    pub fn push_test_frame(&self, jpeg: Vec<u8>, width: u32, height: u32) {
+        if let Ok(mut g) = self.shared.lock() {
+            let seq = g.desktop.next_seq;
+            g.desktop.next_seq += 1;
+            g.desktop.last_frame = Some(DesktopFrame {
+                jpeg,
+                width,
+                height,
+                seq,
+                captured_unix_ms: now_unix_ms(),
+            });
+            g.desktop.hold_test_frame = true;
+            g.desktop.capture = CaptureStatus::Ok;
+            g.desktop.capture_message.clear();
+        }
+    }
+
+    pub fn take_applied_inputs(&self) -> Vec<DesktopInput> {
+        self.shared
+            .lock()
+            .map(|mut g| std::mem::take(&mut g.desktop.applied))
+            .unwrap_or_default()
+    }
+}
+
+fn desktop_status_from(d: &DesktopRuntime) -> DesktopStatus {
+    let (width, height, seq) = d
+        .last_frame
+        .as_ref()
+        .map(|f| (f.width, f.height, f.seq))
+        .unwrap_or((0, 0, 0));
+    DesktopStatus {
+        active: d.active,
+        mode: d.mode,
+        capture: d.capture,
+        input: if !d.allow_touch {
+            InputStatus::Denied
+        } else if !d.mode.allows_input() {
+            InputStatus::ViewOnly
+        } else if cfg!(windows) {
+            InputStatus::Ok
+        } else {
+            InputStatus::Unavailable
+        },
+        width,
+        height,
+        seq,
+        capture_message: d.capture_message.clone(),
+    }
+}
+
+fn capture_loop(flag: Arc<AtomicBool>, shared: Arc<Mutex<GatewayShared>>) {
+    while !flag.load(Ordering::Relaxed) {
+        let should = shared
+            .lock()
+            .map(|g| g.desktop.active && g.desktop.allow_preview && !g.desktop.hold_test_frame)
+            .unwrap_or(false);
+        if should {
+            let seq = shared.lock().map(|g| g.desktop.next_seq).unwrap_or(1);
+            match capture_encoded_frame(seq) {
+                Ok(frame) => {
+                    if let Ok(mut g) = shared.lock() {
+                        if g.desktop.active && !g.desktop.hold_test_frame {
+                            g.desktop.next_seq = seq.saturating_add(1);
+                            g.desktop.last_frame = Some(frame);
+                            g.desktop.capture = CaptureStatus::Ok;
+                            g.desktop.capture_message.clear();
+                        }
+                    }
+                }
+                Err(err) => {
+                    if let Ok(mut g) = shared.lock() {
+                        if !g.desktop.hold_test_frame {
+                            g.desktop.capture = err.status();
+                            g.desktop.capture_message = err.message().to_owned();
+                            if g.desktop.last_frame.is_none() {
+                                g.desktop.last_frame = Some(DesktopFrame {
+                                    jpeg: solid_jpeg(1280, 720, 18, 28, 48),
+                                    width: 1280,
+                                    height: 720,
+                                    seq,
+                                    captured_unix_ms: now_unix_ms(),
+                                });
+                                g.desktop.next_seq = seq.saturating_add(1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(CAPTURE_INTERVAL_MS));
+    }
 }
 
 fn unix_now() -> u64 {
@@ -307,10 +488,17 @@ pub fn local_host_label() -> String {
     "pi-light".to_owned()
 }
 
+#[derive(Debug)]
 enum DispatchOut {
     Ready(u16, String),
     ChatWait(mpsc::Receiver<CompanionChatEvent>),
     ChatStream(mpsc::Receiver<CompanionChatEvent>),
+    Bytes {
+        status: u16,
+        content_type: &'static str,
+        extra: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
 }
 
 fn handle_conn(mut stream: TcpStream, shared: &Mutex<GatewayShared>) {
@@ -335,6 +523,14 @@ fn handle_conn(mut stream: TcpStream, shared: &Mutex<GatewayShared>) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(CHAT_WAIT_SECS + 5)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(CHAT_WAIT_SECS + 5)));
             wait_chat_stream(&mut stream, rx);
+        }
+        DispatchOut::Bytes {
+            status,
+            content_type,
+            extra,
+            body,
+        } => {
+            let _ = write_bytes(&mut stream, status, content_type, &extra, &body);
         }
     }
 }
@@ -456,6 +652,7 @@ struct HttpReq {
     body: Vec<u8>,
     authorization: Option<String>,
     accept: Option<String>,
+    if_none_match: Option<String>,
 }
 
 fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
@@ -473,6 +670,8 @@ fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
                 "stream": true,
                 "stop": true,
                 "stop_path": STOP_PATH,
+                "desktop": true,
+                "desktop_session": DESKTOP_SESSION_PATH,
             })
             .to_string(),
         ),
@@ -487,6 +686,11 @@ fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
         ("GET", CHAT_PATH) => chat_get(req, shared),
         ("POST", CHAT_PATH) => chat_post(req, shared),
         ("POST", STOP_PATH) => chat_stop(req, shared),
+        ("GET", DESKTOP_SESSION_PATH) | ("POST", DESKTOP_SESSION_PATH) => {
+            desktop_session(req, shared)
+        }
+        ("GET", DESKTOP_FRAME_PATH) => desktop_frame(req, shared),
+        ("POST", DESKTOP_INPUT_PATH) => desktop_input(req, shared),
         _ => DispatchOut::Ready(
             404,
             serde_json::json!({"ok":false,"error":"not_found"}).to_string(),
@@ -514,6 +718,9 @@ fn pair_info(shared: &Mutex<GatewayShared>) -> (u16, String) {
             "claim": CLAIM_PATH,
             "chat": CHAT_PATH,
             "stop": STOP_PATH,
+            "desktop": DESKTOP_SESSION_PATH,
+            "desktop_frame": DESKTOP_FRAME_PATH,
+            "desktop_input": DESKTOP_INPUT_PATH,
             "has_offer": has,
             "exp": exp,
             "relay": g.public_url,
@@ -603,6 +810,9 @@ fn claim(shared: &Mutex<GatewayShared>, body: &[u8]) -> (u16, String) {
             "relay_url": g.public_url,
             "chat_path": CHAT_PATH,
             "stop_path": STOP_PATH,
+            "desktop_path": DESKTOP_SESSION_PATH,
+            "desktop_frame": DESKTOP_FRAME_PATH,
+            "desktop_input": DESKTOP_INPUT_PATH,
             "protocol": PROTOCOL,
             "writable": true,
             "host": g.snapshot.host,
@@ -795,6 +1005,220 @@ fn wants_event_stream(accept: Option<&str>) -> bool {
     })
 }
 
+fn desktop_session(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
+    let Ok(mut g) = shared.lock() else {
+        return DispatchOut::Ready(
+            500,
+            serde_json::json!({"ok":false,"error":"busy"}).to_string(),
+        );
+    };
+    if let Err((st, body)) = authorize(&g, req.authorization.as_deref()) {
+        return DispatchOut::Ready(st, body);
+    }
+    if req.method == "POST" {
+        let parsed: serde_json::Value = match serde_json::from_slice(&req.body) {
+            Ok(v) => v,
+            Err(_) => {
+                return DispatchOut::Ready(
+                    400,
+                    serde_json::json!({"ok":false,"error":"invalid_json"}).to_string(),
+                );
+            }
+        };
+        let action = parsed
+            .get("action")
+            .and_then(|x| x.as_str())
+            .unwrap_or("start");
+        let mode = parsed
+            .get("mode")
+            .and_then(|x| x.as_str())
+            .map(DesktopViewMode::parse);
+        match action {
+            "stop" => {
+                g.desktop.active = false;
+                g.desktop.mode = DesktopViewMode::Browse;
+            }
+            "mode" => {
+                if let Some(m) = mode {
+                    g.desktop.mode = m;
+                }
+                g.desktop.active = true;
+            }
+            _ => {
+                g.desktop.active = true;
+                if let Some(m) = mode {
+                    g.desktop.mode = m;
+                }
+            }
+        }
+    }
+    let status = desktop_status_from(&g.desktop);
+    DispatchOut::Ready(200, desktop_session_json(&g, &status))
+}
+
+fn desktop_session_json(g: &GatewayShared, status: &DesktopStatus) -> String {
+    serde_json::json!({
+        "ok": true,
+        "active": status.active,
+        "mode": status.mode.as_str(),
+        "mode_zh": status.mode.label_zh(),
+        "width": status.width,
+        "height": status.height,
+        "seq": status.seq,
+        "capture": status.capture.as_str(),
+        "input": status.input.as_str(),
+        "capture_message": status.capture_message,
+        "allow_preview": g.desktop.allow_preview,
+        "allow_touch": g.desktop.allow_touch,
+        "desktop_frame": DESKTOP_FRAME_PATH,
+        "desktop_input": DESKTOP_INPUT_PATH,
+        "protocol": PROTOCOL,
+        "host": g.snapshot.host,
+    })
+    .to_string()
+}
+
+fn desktop_frame(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
+    let Ok(g) = shared.lock() else {
+        return DispatchOut::Ready(
+            500,
+            serde_json::json!({"ok":false,"error":"busy"}).to_string(),
+        );
+    };
+    if let Err((st, body)) = authorize(&g, req.authorization.as_deref()) {
+        return DispatchOut::Ready(st, body);
+    }
+    if !g.desktop.allow_preview {
+        return DispatchOut::Ready(
+            403,
+            serde_json::json!({"ok":false,"error":"preview_disabled"}).to_string(),
+        );
+    }
+    if !g.desktop.active {
+        return DispatchOut::Ready(
+            409,
+            serde_json::json!({"ok":false,"error":"no_session"}).to_string(),
+        );
+    }
+    let Some(frame) = g.desktop.last_frame.clone() else {
+        return DispatchOut::Ready(
+            204,
+            serde_json::json!({"ok":true,"error":"no_frame"}).to_string(),
+        );
+    };
+    if let Some(tag) = req.if_none_match.as_deref() {
+        if tag.trim() == frame.seq.to_string() {
+            return DispatchOut::Bytes {
+                status: 304,
+                content_type: "image/jpeg",
+                extra: vec![("ETag".into(), frame.seq.to_string())],
+                body: Vec::new(),
+            };
+        }
+    }
+    DispatchOut::Bytes {
+        status: 200,
+        content_type: "image/jpeg",
+        extra: vec![
+            ("ETag".into(), frame.seq.to_string()),
+            ("X-Pi-Light-Seq".into(), frame.seq.to_string()),
+            ("X-Pi-Light-Width".into(), frame.width.to_string()),
+            ("X-Pi-Light-Height".into(), frame.height.to_string()),
+            ("X-Pi-Light-Mode".into(), g.desktop.mode.as_str().to_owned()),
+            (
+                "X-Pi-Light-Capture".into(),
+                g.desktop.capture.as_str().to_owned(),
+            ),
+        ],
+        body: frame.jpeg,
+    }
+}
+
+fn desktop_input(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
+    let parsed: serde_json::Value = match serde_json::from_slice(&req.body) {
+        Ok(v) => v,
+        Err(_) => {
+            return DispatchOut::Ready(
+                400,
+                serde_json::json!({"ok":false,"error":"invalid_json"}).to_string(),
+            );
+        }
+    };
+    let ev = match DesktopInput::from_json(&parsed) {
+        Ok(ev) => ev,
+        Err(e) => {
+            return DispatchOut::Ready(
+                400,
+                serde_json::json!({"ok":false,"error":"invalid_input","message":e}).to_string(),
+            );
+        }
+    };
+    let Ok(mut g) = shared.lock() else {
+        return DispatchOut::Ready(
+            500,
+            serde_json::json!({"ok":false,"error":"busy"}).to_string(),
+        );
+    };
+    if let Err((st, body)) = authorize(&g, req.authorization.as_deref()) {
+        return DispatchOut::Ready(st, body);
+    }
+    if !g.desktop.active {
+        return DispatchOut::Ready(
+            409,
+            serde_json::json!({"ok":false,"error":"no_session"}).to_string(),
+        );
+    }
+    if !g.desktop.mode.allows_input() {
+        return DispatchOut::Ready(
+            403,
+            serde_json::json!({
+                "ok": false,
+                "error": "view_only",
+                "message": "浏览模式只看画面，不发送点击",
+            })
+            .to_string(),
+        );
+    }
+    if !g.desktop.allow_touch {
+        return DispatchOut::Ready(
+            403,
+            serde_json::json!({"ok":false,"error":"touch_disabled"}).to_string(),
+        );
+    }
+    g.desktop.applied.push(ev.clone());
+    if g.desktop.applied.len() > 64 {
+        let drain = g.desktop.applied.len() - 64;
+        g.desktop.applied.drain(0..drain);
+    }
+    drop(g);
+    match apply_input(&ev) {
+        Ok(()) => DispatchOut::Ready(
+            200,
+            serde_json::json!({
+                "ok": true,
+                "applied": true,
+                "type": match ev.kind {
+                    crate::desktop_stream::InputKind::Pointer => "pointer",
+                    crate::desktop_stream::InputKind::Scroll => "scroll",
+                    crate::desktop_stream::InputKind::Key => "key",
+                    crate::desktop_stream::InputKind::Text => "text",
+                },
+                "protocol": PROTOCOL,
+            })
+            .to_string(),
+        ),
+        Err(message) => DispatchOut::Ready(
+            503,
+            serde_json::json!({
+                "ok": false,
+                "error": "inject_failed",
+                "message": message,
+            })
+            .to_string(),
+        ),
+    }
+}
+
 fn first_nonempty(parts: &[&str]) -> String {
     for p in parts {
         let t = p.trim();
@@ -854,6 +1278,7 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
     let mut content_len = 0usize;
     let mut authorization = None;
     let mut accept = None;
+    let mut if_none_match = None;
     for line in lines {
         let lower = line.to_ascii_lowercase();
         if let Some(v) = lower.strip_prefix("content-length:") {
@@ -865,6 +1290,10 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
         } else if lower.starts_with("accept:") {
             if let Some((_, v)) = line.split_once(':') {
                 accept = Some(v.trim().to_owned());
+            }
+        } else if lower.starts_with("if-none-match:") {
+            if let Some((_, v)) = line.split_once(':') {
+                if_none_match = Some(v.trim().trim_matches('"').to_owned());
             }
         }
     }
@@ -889,14 +1318,18 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
         body,
         authorization,
         accept,
+        if_none_match,
     })
 }
 
 fn write_json(stream: &mut TcpStream, status: u16, body: &str) -> io::Result<()> {
     let reason = match status {
         200 => "OK",
+        204 => "No Content",
+        304 => "Not Modified",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         410 => "Gone",
@@ -948,6 +1381,43 @@ fn write_sse_event(stream: &mut TcpStream, event: &str, data: &str) -> io::Resul
     stream.flush()
 }
 
+fn write_bytes(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    extra: &[(String, String)],
+    body: &[u8],
+) -> io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        204 => "No Content",
+        304 => "Not Modified",
+        403 => "Forbidden",
+        _ => "OK",
+    };
+    let mut head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (k, v) in extra {
+        if k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !v.contains('\r')
+            && !v.contains('\n')
+        {
+            head.push_str(k);
+            head.push_str(": ");
+            head.push_str(v);
+            head.push_str("\r\n");
+        }
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    if !body.is_empty() {
+        stream.write_all(body)?;
+    }
+    stream.flush()
+}
+
 /// 测试辅助：在当前线程处理一条已解析请求（不绑端口）。
 #[cfg(test)]
 pub(crate) fn dispatch_for_test(
@@ -996,6 +1466,7 @@ pub(crate) fn dispatch_for_test_ex(
             }],
         },
         auto_reply,
+        desktop: empty_desktop(),
     });
     let req = HttpReq {
         method: method.to_owned(),
@@ -1003,12 +1474,28 @@ pub(crate) fn dispatch_for_test_ex(
         body: body.to_vec(),
         authorization: authorization.map(str::to_owned),
         accept: None,
+        if_none_match: None,
     };
     let (status, text) = match dispatch(&req, &shared) {
         DispatchOut::Ready(s, b) => (s, b),
         DispatchOut::ChatWait(_) | DispatchOut::ChatStream(_) => (
             503,
             serde_json::json!({"ok":false,"error":"desktop_offline"}).to_string(),
+        ),
+        DispatchOut::Bytes {
+            status,
+            content_type,
+            body,
+            ..
+        } => (
+            status,
+            serde_json::json!({
+                "ok": status == 200,
+                "binary": true,
+                "content_type": content_type,
+                "bytes": body.len(),
+            })
+            .to_string(),
         ),
     };
     let val = serde_json::from_str(&text).unwrap_or(serde_json::json!({"raw": text}));
@@ -1403,5 +1890,274 @@ mod tests {
     fn ct_eq_rejects_length_mismatch() {
         assert!(!ct_eq("aa", "aabb"));
         assert!(ct_eq("abcd", "abcd"));
+    }
+
+    #[test]
+    fn health_advertises_desktop() {
+        let (st, v) = dispatch_for_test("GET", "/health", b"", None);
+        assert_eq!(st, 200);
+        assert_eq!(v["desktop"], true);
+        assert_eq!(v["desktop_session"], DESKTOP_SESSION_PATH);
+    }
+
+    fn desktop_steps(
+        token: &str,
+        steps: &[(&str, &str, &[u8])],
+        preview: bool,
+        touch: bool,
+    ) -> Vec<(u16, serde_json::Value, Option<Vec<u8>>)> {
+        let mut desktop = empty_desktop();
+        desktop.allow_preview = preview;
+        desktop.allow_touch = touch;
+        let shared = Mutex::new(GatewayShared {
+            offer: None,
+            public_url: Some("https://demo.trycloudflare.com".into()),
+            new_devices: Vec::new(),
+            devices: vec![device_with_token(token)],
+            pending: None,
+            pending_stop: false,
+            snapshot: ChatSnapshot::default(),
+            auto_reply: None,
+            desktop,
+        });
+        steps
+            .iter()
+            .map(|(method, path, body)| {
+                let req = HttpReq {
+                    method: (*method).to_owned(),
+                    path: (*path).to_owned(),
+                    body: body.to_vec(),
+                    authorization: Some(format!("Bearer {token}")),
+                    accept: None,
+                    if_none_match: None,
+                };
+                match dispatch(&req, &shared) {
+                    DispatchOut::Ready(s, b) => {
+                        let val = serde_json::from_str(&b).unwrap_or(serde_json::json!({"raw": b}));
+                        (s, val, None)
+                    }
+                    DispatchOut::Bytes {
+                        status,
+                        body,
+                        content_type,
+                        ..
+                    } => (
+                        status,
+                        serde_json::json!({
+                            "ok": status == 200,
+                            "content_type": content_type,
+                            "bytes": body.len(),
+                        }),
+                        Some(body),
+                    ),
+                    DispatchOut::ChatWait(_) | DispatchOut::ChatStream(_) => (
+                        503,
+                        serde_json::json!({"ok":false,"error":"desktop_offline"}),
+                        None,
+                    ),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn desktop_browse_serves_pixels_and_blocks_click() {
+        let token = "desk-token";
+        let jpeg = crate::desktop_stream::solid_jpeg(80, 60, 10, 20, 30);
+        let shared_setup = {
+            let mut desktop = empty_desktop();
+            desktop.active = true;
+            desktop.mode = DesktopViewMode::Browse;
+            desktop.last_frame = Some(DesktopFrame {
+                jpeg: jpeg.clone(),
+                width: 80,
+                height: 60,
+                seq: 7,
+                captured_unix_ms: 1,
+            });
+            desktop.capture = CaptureStatus::Ok;
+            let shared = Mutex::new(GatewayShared {
+                offer: None,
+                public_url: None,
+                new_devices: Vec::new(),
+                devices: vec![device_with_token(token)],
+                pending: None,
+                pending_stop: false,
+                snapshot: ChatSnapshot::default(),
+                auto_reply: None,
+                desktop,
+            });
+            let frame_req = HttpReq {
+                method: "GET".into(),
+                path: DESKTOP_FRAME_PATH.into(),
+                body: Vec::new(),
+                authorization: Some(format!("Bearer {token}")),
+                accept: None,
+                if_none_match: None,
+            };
+            let input_req = HttpReq {
+                method: "POST".into(),
+                path: DESKTOP_INPUT_PATH.into(),
+                body: br#"{"type":"pointer","x":0.4,"y":0.5,"action":"click"}"#.to_vec(),
+                authorization: Some(format!("Bearer {token}")),
+                accept: None,
+                if_none_match: None,
+            };
+            let frame = dispatch(&frame_req, &shared);
+            let input = dispatch(&input_req, &shared);
+            (frame, input)
+        };
+        match shared_setup.0 {
+            DispatchOut::Bytes {
+                status,
+                content_type,
+                body,
+                ..
+            } => {
+                assert_eq!(status, 200);
+                assert_eq!(content_type, "image/jpeg");
+                assert_eq!(body, jpeg);
+                assert!(body.starts_with(&[0xFF, 0xD8, 0xFF]));
+            }
+            other => panic!("expected jpeg bytes, got {other:?}"),
+        }
+        match shared_setup.1 {
+            DispatchOut::Ready(st, body) => {
+                assert_eq!(st, 403);
+                let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(v["error"], "view_only");
+            }
+            other => panic!("expected view_only, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn desktop_touch_records_input() {
+        let token = "touch-token";
+        let steps = desktop_steps(
+            token,
+            &[
+                (
+                    "POST",
+                    DESKTOP_SESSION_PATH,
+                    br#"{"action":"start","mode":"touch"}"#,
+                ),
+                (
+                    "POST",
+                    DESKTOP_INPUT_PATH,
+                    br#"{"type":"pointer","x":0.2,"y":0.3,"action":"click"}"#,
+                ),
+                (
+                    "POST",
+                    DESKTOP_INPUT_PATH,
+                    br#"{"type":"text","text":"hi"}"#,
+                ),
+            ],
+            true,
+            true,
+        );
+        assert_eq!(steps[0].0, 200);
+        assert_eq!(steps[0].1["mode"], "touch");
+        assert_eq!(steps[1].0, 200);
+        assert_eq!(steps[1].1["applied"], true);
+        assert_eq!(steps[2].0, 200);
+    }
+
+    #[test]
+    fn desktop_input_denied_when_touch_off() {
+        let token = "notouch";
+        let steps = desktop_steps(
+            token,
+            &[
+                (
+                    "POST",
+                    DESKTOP_SESSION_PATH,
+                    br#"{"action":"start","mode":"touch"}"#,
+                ),
+                (
+                    "POST",
+                    DESKTOP_INPUT_PATH,
+                    br#"{"type":"pointer","x":0.1,"y":0.1}"#,
+                ),
+            ],
+            true,
+            false,
+        );
+        assert_eq!(steps[1].0, 403);
+        assert_eq!(steps[1].1["error"], "touch_disabled");
+    }
+
+    #[test]
+    fn live_gateway_desktop_roundtrip() {
+        let gw = GatewayHandle::start().unwrap();
+        gw.set_offer(Some(offer("DD11EE", 600)));
+        gw.set_public_url(Some("https://demo.trycloudflare.com".into()));
+        let base = gw.local_base();
+        let claimed_text = ureq::post(&format!("{base}{CLAIM_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .send_string(r#"{"code":"DD11EE","device_name":"Pixel","platform":"Android"}"#)
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let claimed: serde_json::Value = serde_json::from_str(&claimed_text).unwrap();
+        let token = claimed["token"].as_str().unwrap().to_owned();
+        let new = gw.take_new_devices();
+        gw.set_authorized_devices(vec![new[0].device.clone()]);
+        gw.set_desktop_policy(true, true);
+
+        ureq::post(&format!("{base}{DESKTOP_SESSION_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_string(r#"{"action":"start","mode":"browse"}"#)
+            .unwrap();
+
+        let jpeg = crate::desktop_stream::solid_jpeg(96, 72, 40, 80, 120);
+        gw.push_test_frame(jpeg.clone(), 96, 72);
+
+        let frame = ureq::get(&format!("{base}{DESKTOP_FRAME_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Authorization", &format!("Bearer {token}"))
+            .call()
+            .unwrap();
+        assert_eq!(frame.status(), 200);
+        assert!(frame
+            .header("content-type")
+            .unwrap_or("")
+            .starts_with("image/jpeg"));
+        let mut bytes = Vec::new();
+        frame.into_reader().read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, jpeg);
+
+        let blocked = ureq::post(&format!("{base}{DESKTOP_INPUT_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_string(r#"{"type":"pointer","x":0.5,"y":0.5}"#);
+        let err = blocked.expect_err("browse must block input");
+        let resp = err.into_response().expect("http error");
+        assert_eq!(resp.status(), 403);
+
+        ureq::post(&format!("{base}{DESKTOP_SESSION_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_string(r#"{"action":"mode","mode":"touch"}"#)
+            .unwrap();
+
+        let applied = ureq::post(&format!("{base}{DESKTOP_INPUT_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_string(r#"{"type":"pointer","x":0.5,"y":0.5,"action":"click"}"#)
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&applied).unwrap();
+        assert_eq!(body["ok"], true);
+        let got = gw.take_applied_inputs();
+        assert_eq!(got.len(), 1);
+        assert!((got[0].x - 0.5).abs() < 1e-6);
     }
 }

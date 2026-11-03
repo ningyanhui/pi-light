@@ -125,7 +125,7 @@
 
 失败：`401` unauthorized；`409` `not_streaming`（当前没有可停的一轮）。
 
-`GET /health` 的 `chat` / `stream` / `stop` 为 `true`，并带 `stop_path`。不要把局域网发现当成已完成的公网能力。
+`GET /health` 的 `chat` / `stream` / `stop` / `desktop` 为 `true`，并带 `stop_path`。不要把局域网发现当成已完成的公网能力。
 
 失败（`POST /v1/chat`）：
 
@@ -136,6 +136,71 @@
 | 409 | busy | 桌面正在生成，或已有一轮 companion 请求 |
 | 503 | pi_unavailable | 桌面没有跑着 Pi sidecar |
 | 504 | timeout | 本轮未在时限内结束 |
+
+## 远程桌面（JPEG 轮询 + JSON 输入）
+
+这不是 WebRTC。Host 捕获 **Windows 主屏**，缩放到最长边 1280，JPEG 质量约 58，约 150ms 一帧（5–8 fps）。Companion 轮询取帧，并把触控/全屏手势打成 JSON。公网中继延迟通常明显高于局域网。
+
+配对码 JSON、`GET /v1/pair/info`、claim 响应会带：
+
+- `desktop`: `/v1/desktop/session`
+- `desktop_frame`: `/v1/desktop/frame`
+- `desktop_input`: `/v1/desktop/input`
+
+所有桌面请求带 `Authorization: Bearer <token>`。
+
+### `POST {relay}/v1/desktop/session`
+
+```json
+{"action":"start","mode":"browse"}
+```
+
+`action`：`start` / `mode` / `stop`。`mode`：`browse`（浏览）/ `touch`（触控）/ `fullscreen`（全屏）。
+
+### `GET {relay}/v1/desktop/session`
+
+```json
+{
+  "ok": true,
+  "active": true,
+  "mode": "browse",
+  "mode_zh": "浏览",
+  "width": 1280,
+  "height": 720,
+  "seq": 12,
+  "capture": "ok",
+  "input": "view_only",
+  "allow_preview": true,
+  "allow_touch": true
+}
+```
+
+`capture`：`ok` / `permission_required` / `unavailable`。`input`：`ok` / `view_only` / `denied` / `unavailable`。
+
+### `GET {relay}/v1/desktop/frame`
+
+成功 `200`，`Content-Type: image/jpeg`。响应头：
+
+- `ETag` / `X-Pi-Light-Seq`
+- `X-Pi-Light-Width` / `X-Pi-Light-Height`
+- `X-Pi-Light-Mode` / `X-Pi-Light-Capture`
+
+`If-None-Match: <seq>` 时若无新帧返回 `304`。尚无帧 `204`。桌面关闭预览 `403 preview_disabled`。未开始会话 `409 no_session`。
+
+### `POST {relay}/v1/desktop/input`
+
+```json
+{"type":"pointer","x":0.42,"y":0.31,"action":"click","button":"left"}
+```
+
+也接受 `scroll`（`dx`/`dy`）、`key`（`key`）、`text`（`text`）。坐标是主屏归一化 0–1。
+
+| 模式 | 输入 |
+|------|------|
+| 浏览 `browse` | `403 view_only`，不注入 |
+| 触控 `touch` / 全屏 `fullscreen` | 注入鼠标键盘（桌面仍可关「允许触控操控」→ `403 touch_disabled`） |
+
+Windows 上截屏走 GDI BitBlt，注入走 `SendInput`。非 Windows Host 诚实返回 `capture=unavailable`，并可能下发占位 JPEG 以打通协议。屏幕捕获 / 模拟输入可能被系统或安全软件拦截。
 
 ## 本机绑定
 

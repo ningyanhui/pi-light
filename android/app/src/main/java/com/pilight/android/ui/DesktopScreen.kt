@@ -4,8 +4,10 @@ import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -62,8 +64,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +79,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pilight.android.CompanionViewModel
+import com.pilight.android.DesktopUi
 import com.pilight.android.data.DesktopMode
 import com.pilight.android.ui.theme.AccentBlue
 import com.pilight.android.ui.theme.Connected
@@ -93,6 +98,7 @@ fun DesktopScreen(
 ) {
     val home by vm.home.collectAsStateWithLifecycle()
     val security by vm.security.collectAsStateWithLifecycle()
+    val desktop by vm.desktop.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context as? Activity
     var unlocked by remember { mutableStateOf(!security.biometricLock) }
@@ -130,6 +136,10 @@ fun DesktopScreen(
         }
     }
 
+    LaunchedEffect(unlocked) {
+        if (unlocked) vm.enterDesktop(mode)
+    }
+
     LaunchedEffect(mode) {
         onFullscreenChange(mode == DesktopMode.FULLSCREEN)
         showHint = mode != DesktopMode.FULLSCREEN
@@ -140,6 +150,7 @@ fun DesktopScreen(
                 ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
         vm.markDesktopActivity()
+        if (unlocked) vm.setDesktopMode(mode)
     }
 
     LaunchedEffect(home.latencyMs, home.connected) {
@@ -151,6 +162,7 @@ fun DesktopScreen(
     DisposableEffect(Unit) {
         vm.markDesktopActivity()
         onDispose {
+            vm.leaveDesktop()
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             onFullscreenChange(false)
         }
@@ -192,12 +204,23 @@ fun DesktopScreen(
 
     val host = home.hostName.ifBlank { home.session?.hostName.orEmpty().ifBlank { "desktop" } }
     val latency = home.latencyMs?.let { "${it}ms" } ?: "—"
+    val fpsText = if (desktop.fps > 0) String.format("%.1f fps", desktop.fps) else "等待帧"
 
     if (mode == DesktopMode.FULLSCREEN) {
         FullscreenStage(
             host = host,
             latency = latency,
             connected = home.connected,
+            desktop = desktop,
+            pointer = pointer,
+            onPointer = { next, action, button ->
+                pointer = next
+                vm.sendPointer(next.x, next.y, action, button)
+            },
+            onScroll = { next, dy ->
+                pointer = next
+                vm.sendScroll(next.x, next.y, dy)
+            },
             onExit = { mode = DesktopMode.BROWSE },
         )
         return
@@ -212,13 +235,35 @@ fun DesktopScreen(
         )
         when (mode) {
             DesktopMode.BROWSE -> {
-                BrowseStatusRow(connected = home.connected, latency = latency)
+                BrowseStatusRow(connected = home.connected, latency = latency, fps = fpsText)
             }
             DesktopMode.TOUCH -> {
                 TouchStatusCard()
-                ConnectionChip(connected = home.connected, latency = latency)
+                ConnectionChip(connected = home.connected, latency = latency, fps = fpsText)
             }
             DesktopMode.FULLSCREEN -> Unit
+        }
+        desktop.error?.let { err ->
+            Text(
+                err,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+            )
+        }
+        if (desktop.capture == "permission_required" || desktop.capture == "unavailable") {
+            Text(
+                desktop.captureMessage.ifBlank {
+                    if (desktop.capture == "permission_required") {
+                        "桌面需要系统屏幕捕获权限，请在 Windows 隐私设置中允许。"
+                    } else {
+                        "当前 Host 环境无法截取主屏（以 Windows 主屏为准）。"
+                    }
+                },
+                color = MaterialTheme.colorScheme.secondary,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+            )
         }
         Box(
             modifier =
@@ -232,11 +277,20 @@ fun DesktopScreen(
                 relay = home.session?.relayUrl.orEmpty(),
                 connected = home.connected,
                 latency = latency,
-                interactive = mode == DesktopMode.TOUCH,
+                desktop = desktop,
+                interactive = mode.injectsInput,
                 pointer = pointer,
-                onPointer = {
-                    pointer = it
-                    vm.markDesktopActivity()
+                onPointer = { next, action, button ->
+                    pointer = next
+                    if (mode.injectsInput) {
+                        vm.sendPointer(next.x, next.y, action, button)
+                    } else {
+                        vm.markDesktopActivity()
+                    }
+                },
+                onScroll = { next, dy ->
+                    pointer = next
+                    if (mode.injectsInput) vm.sendScroll(next.x, next.y, dy)
                 },
             )
             if (mode == DesktopMode.BROWSE && showHint) {
@@ -250,11 +304,17 @@ fun DesktopScreen(
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
                     showKeyboard = showKeyboard,
                     onToggleKeyboard = { showKeyboard = !showKeyboard },
+                    onRightClick = { vm.sendPointer(pointer.x, pointer.y, "click", "right") },
+                    onScroll = { dy -> vm.sendScroll(pointer.x, pointer.y, dy) },
                 )
             }
         }
         if (mode == DesktopMode.TOUCH && showKeyboard) {
-            MappedKeyboardBar(onClose = { showKeyboard = false })
+            MappedKeyboardBar(
+                onClose = { showKeyboard = false },
+                onSend = { vm.sendDesktopText(it) },
+                onEnter = { vm.sendDesktopKey("Enter") },
+            )
         }
         if (mode == DesktopMode.TOUCH) {
             TouchBottomBar(onFullscreen = { mode = DesktopMode.FULLSCREEN }, onSettings = onSettings)
@@ -308,7 +368,7 @@ private fun DesktopTopBar(
 }
 
 @Composable
-private fun BrowseStatusRow(connected: Boolean, latency: String) {
+private fun BrowseStatusRow(connected: Boolean, latency: String, fps: String) {
     Row(
         modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -316,7 +376,7 @@ private fun BrowseStatusRow(connected: Boolean, latency: String) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) Connected else MaterialTheme.colorScheme.secondary))
         Spacer(Modifier.size(8.dp))
         Text(
-            if (connected) "已连接中继 · 桌面预览  ·  延迟 $latency" else "中继未就绪",
+            if (connected) "直播中 · $fps · 延迟 $latency" else "中继未就绪",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.secondary,
         )
@@ -339,13 +399,13 @@ private fun TouchStatusCard() {
         Spacer(Modifier.size(10.dp))
         Column {
             Text("触控 · 映射鼠标键盘", fontWeight = FontWeight.Medium)
-            Text("点按映射指针 · 流式远程桌面壳", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+            Text("点按映射鼠标键盘 · 非浏览模式才会注入", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
         }
     }
 }
 
 @Composable
-private fun ConnectionChip(connected: Boolean, latency: String) {
+private fun ConnectionChip(connected: Boolean, latency: String, fps: String) {
     Row(
         modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -353,7 +413,7 @@ private fun ConnectionChip(connected: Boolean, latency: String) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) Connected else MaterialTheme.colorScheme.secondary))
         Spacer(Modifier.size(8.dp))
         Text(
-            if (connected) "已连接 · 中继预览 · 延迟 $latency" else "未连接",
+            if (connected) "已连接 · $fps · 延迟 $latency" else "未连接",
             color = if (connected) Connected else MaterialTheme.colorScheme.secondary,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -366,100 +426,35 @@ private fun HostPreview(
     relay: String,
     connected: Boolean,
     latency: String,
+    desktop: DesktopUi,
     interactive: Boolean,
     pointer: Offset,
-    onPointer: (Offset) -> Unit,
+    onPointer: (Offset, String, String) -> Unit,
+    onScroll: (Offset, Float) -> Unit,
 ) {
+    val bitmap =
+        remember(desktop.jpeg, desktop.seq) {
+            desktop.jpeg?.let { bytes ->
+                runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }.getOrNull()
+            }
+        }
     BoxWithConstraints(
         modifier =
             Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color(0xFF101010))
-                .then(
-                    if (interactive) {
-                        Modifier.pointerInput(Unit) {
-                            detectTapGestures { pos ->
-                                onPointer(
-                                    Offset(
-                                        (pos.x / size.width).coerceIn(0.05f, 0.95f),
-                                        (pos.y / size.height).coerceIn(0.08f, 0.92f),
-                                    ),
-                                )
-                            }
-                        }.pointerInput(Unit) {
-                            detectDragGestures { change, _ ->
-                                val pos = change.position
-                                onPointer(
-                                    Offset(
-                                        (pos.x / size.width).coerceIn(0.05f, 0.95f),
-                                        (pos.y / size.height).coerceIn(0.08f, 0.92f),
-                                    ),
-                                )
-                            }
-                        }
-                    } else {
-                        Modifier
-                    },
-                ),
+                .then(streamInputModifier(interactive, desktop, onPointer, onScroll)),
     ) {
-        Column(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF161616))
-                    .border(1.dp, Color(0xFF2A2A2A), RoundedCornerShape(10.dp)),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().background(Color(0xFF1C1C1C)).padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                BrandMark(size = 16.dp)
-                Spacer(Modifier.size(6.dp))
-                Text("pi-light", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                Spacer(Modifier.weight(1f))
-                Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) Connected else Color.Gray))
-                Spacer(Modifier.size(4.dp))
-                Text(if (connected) "已连接" else "离线", fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
-                Spacer(Modifier.size(8.dp))
-                Text("— □ ×", fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
-            }
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("pi-light", fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                Text("Lightweight remote access", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    InfoTile("系统", host, Modifier.weight(1f))
-                    InfoTile("中继", relay.ifBlank { "—" }.removePrefix("https://").take(22), Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    InfoTile("延迟", latency, Modifier.weight(1f))
-                    Column(
-                        modifier =
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFF111111))
-                                .padding(10.dp),
-                    ) {
-                        Text("服务", color = MaterialTheme.colorScheme.secondary, fontSize = 11.sp)
-                        Text("配对 /v1/pair", color = Connected, fontSize = 12.sp)
-                        Text("聊天 /v1/chat", color = Connected, fontSize = 12.sp)
-                        Text("像素流 未接入", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp)
-                    }
-                }
-                Column {
-                    Text("预览通道", color = MaterialTheme.colorScheme.secondary, fontSize = 11.sp)
-                    Spacer(Modifier.height(4.dp))
-                    LinearProgressIndicator(
-                        progress = { if (connected) 0.22f else 0f },
-                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
-                        color = AccentBlue,
-                        trackColor = Color(0xFF2A2A2A),
-                    )
-                }
-            }
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = "远程桌面画面",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            WaitingPane(host = host, relay = relay, connected = connected, latency = latency)
         }
         if (interactive) {
             Icon(
@@ -476,6 +471,103 @@ private fun HostPreview(
                             )
                         }
                         .size(42.dp),
+            )
+        }
+    }
+}
+
+private fun streamInputModifier(
+    interactive: Boolean,
+    desktop: DesktopUi,
+    onPointer: (Offset, String, String) -> Unit,
+    onScroll: (Offset, Float) -> Unit,
+): Modifier {
+    if (!interactive) return Modifier
+    return Modifier
+        .pointerInput(desktop.width, desktop.height) {
+            detectTapGestures { pos ->
+                mapToNormalized(pos, size.width.toFloat(), size.height.toFloat(), desktop)?.let {
+                    onPointer(it, "click", "left")
+                }
+            }
+        }.pointerInput(desktop.width, desktop.height) {
+            var last = Offset(0.5f, 0.5f)
+            detectDragGestures(
+                onDragStart = { pos ->
+                    mapToNormalized(pos, size.width.toFloat(), size.height.toFloat(), desktop)?.let {
+                        last = it
+                        onPointer(it, "down", "left")
+                    }
+                },
+                onDragEnd = { onPointer(last, "up", "left") },
+                onDrag = { change, _ ->
+                    mapToNormalized(change.position, size.width.toFloat(), size.height.toFloat(), desktop)?.let {
+                        last = it
+                        onPointer(it, "move", "none")
+                    }
+                },
+            )
+        }
+}
+
+private fun mapToNormalized(
+    pos: Offset,
+    viewW: Float,
+    viewH: Float,
+    desktop: DesktopUi,
+): Offset? {
+    val imgW = desktop.width.takeIf { it > 0 }?.toFloat() ?: viewW
+    val imgH = desktop.height.takeIf { it > 0 }?.toFloat() ?: viewH
+    val scale = minOf(viewW / imgW, viewH / imgH)
+    val drawW = imgW * scale
+    val drawH = imgH * scale
+    val left = (viewW - drawW) / 2f
+    val top = (viewH - drawH) / 2f
+    val x = (pos.x - left) / drawW
+    val y = (pos.y - top) / drawH
+    if (x !in 0f..1f || y !in 0f..1f) return null
+    return Offset(x, y)
+}
+
+@Composable
+private fun WaitingPane(
+    host: String,
+    relay: String,
+    connected: Boolean,
+    latency: String,
+) {
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF161616))
+                .border(1.dp, Color(0xFF2A2A2A), RoundedCornerShape(10.dp)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(Color(0xFF1C1C1C)).padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BrandMark(size = 16.dp)
+            Spacer(Modifier.size(6.dp))
+            Text("pi-light", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) Connected else Color.Gray))
+            Spacer(Modifier.size(4.dp))
+            Text(if (connected) "等待首帧" else "离线", fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
+        }
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(host, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+            Text("正在经中继拉取 JPEG 帧…", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                InfoTile("中继", relay.ifBlank { "—" }.removePrefix("https://").take(22), Modifier.weight(1f))
+                InfoTile("延迟", latency, Modifier.weight(1f))
+            }
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+                color = AccentBlue,
+                trackColor = Color(0xFF2A2A2A),
             )
         }
     }
@@ -576,6 +668,8 @@ private fun TouchControls(
     modifier: Modifier = Modifier,
     showKeyboard: Boolean,
     onToggleKeyboard: () -> Unit,
+    onRightClick: () -> Unit,
+    onScroll: (Float) -> Unit,
 ) {
     Row(modifier = modifier, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Box(
@@ -597,16 +691,25 @@ private fun TouchControls(
                     .padding(horizontal = 18.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("滚动", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp)
-            Text("⌃", fontSize = 16.sp)
-            Text("右键", modifier = Modifier.padding(vertical = 4.dp))
-            Text("⌄", fontSize = 16.sp)
+            Text(
+                "滚动",
+                color = MaterialTheme.colorScheme.secondary,
+                fontSize = 12.sp,
+                modifier = Modifier.clickable { onScroll(-1f) },
+            )
+            Text("⌃", fontSize = 16.sp, modifier = Modifier.clickable { onScroll(-1f) })
+            Text("右键", modifier = Modifier.padding(vertical = 4.dp).clickable(onClick = onRightClick))
+            Text("⌄", fontSize = 16.sp, modifier = Modifier.clickable { onScroll(1f) })
         }
     }
 }
 
 @Composable
-private fun MappedKeyboardBar(onClose: () -> Unit) {
+private fun MappedKeyboardBar(
+    onClose: () -> Unit,
+    onSend: (String) -> Unit,
+    onEnter: () -> Unit,
+) {
     var draft by remember { mutableStateOf("") }
     Row(
         modifier =
@@ -622,7 +725,7 @@ private fun MappedKeyboardBar(onClose: () -> Unit) {
             value = draft,
             onValueChange = { draft = it },
             modifier = Modifier.weight(1f),
-            placeholder = { Text("映射键盘（桌面输入通道尚未开通）") },
+            placeholder = { Text("映射到桌面键盘") },
             colors =
                 TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent,
@@ -631,6 +734,16 @@ private fun MappedKeyboardBar(onClose: () -> Unit) {
                     unfocusedIndicatorColor = Color.Transparent,
                 ),
         )
+        TextButton(
+            onClick = {
+                if (draft.isNotBlank()) {
+                    onSend(draft)
+                    draft = ""
+                } else {
+                    onEnter()
+                }
+            },
+        ) { Text("发送") }
         TextButton(onClick = onClose) { Text("收起") }
     }
 }
@@ -640,20 +753,40 @@ private fun FullscreenStage(
     host: String,
     latency: String,
     connected: Boolean,
+    desktop: DesktopUi,
+    pointer: Offset,
+    onPointer: (Offset, String, String) -> Unit,
+    onScroll: (Offset, Float) -> Unit,
     onExit: () -> Unit,
 ) {
+    val bitmap =
+        remember(desktop.jpeg, desktop.seq) {
+            desktop.jpeg?.let { bytes ->
+                runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }.getOrNull()
+            }
+        }
     Box(
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(Color(0xFF7EB6F0)),
+                .background(Color.Black)
+                .then(streamInputModifier(true, desktop, onPointer, onScroll)),
     ) {
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .background(Color(0x33447ACC)),
-        )
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = "全屏远程桌面",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color(0xFF7EB6F0)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(if (connected) "等待首帧" else "中继未连接", color = Color.White)
+            }
+        }
         Row(
             modifier =
                 Modifier
@@ -709,15 +842,17 @@ private fun FullscreenStage(
             Spacer(Modifier.size(6.dp))
             Text("退出全屏", color = Color.DarkGray)
         }
-        Column(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(host, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
-            Text(
-                if (connected) "全屏沉浸 · 中继预览" else "中继未连接",
-                color = Color.White.copy(alpha = 0.85f),
-            )
+        if (bitmap == null) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(host, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
+                Text(
+                    if (connected) "全屏沉浸 · 等待首帧" else "中继未连接",
+                    color = Color.White.copy(alpha = 0.85f),
+                )
+            }
         }
     }
 }

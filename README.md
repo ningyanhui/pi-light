@@ -67,7 +67,7 @@ pi-light 把官方 Pi（MIT，钉定 **v1.4.0**）以 sidecar 方式嵌进 [egui
 | MCP | 卡片列表；读写官方 `enabled`（兼容旧 `disabled`）；新增写入 `mcp.json`；改后重启 sidecar。 |
 | 扩展市场 | 浏览 / 搜索 / Extension·Skill·Prompt·Theme 滤镜；详情卡展示许可证、关键词、install 脚本等注册表元数据；确认后 sidecar 执行 `pi install npm:…`；已安装可 list / remove。目录来源与 [pi.dev/packages](https://pi.dev/packages) 相同（npm `pi-package`）。 |
 | 记忆 | Project / User / Session 三层；内联编辑写回文件。 |
-| 远程访问 | 允许手机远程、配对码 / 二维码、Cloudflare Tunnel 启停、已授权设备可撤销。 |
+| 远程访问 | 允许手机远程、配对码 / 二维码、Cloudflare Tunnel 启停、已授权设备可撤销。浏览 / 触控 / 全屏远程桌面走同一中继。 |
 | 通用 | Pi 程序位置等高级项（环境变量、sidecar 目录、PATH）收在折叠区。 |
 
 侧栏另有「插件 / 知识库 / 数据」快捷入口，分别打开扩展市场、记忆、Skills。顶栏与作曲框都有模型下拉，选项来自 Pi 上报的可用模型。
@@ -86,9 +86,10 @@ pi-light 把官方 Pi（MIT，钉定 **v1.4.0**）以 sidecar 方式嵌进 [egui
 - 6 位配对码，TTL 10 分钟；二维码携带配对码与中继 URL。
 - 手机扫码，或手输配对码 **和** 中继 URL；`POST /v1/pair/claim` 成功后进入已授权设备，可撤销。
 - 已授权设备 `POST /v1/chat`（`Authorization: Bearer <token>`）写入**当前**桌面 Pi 会话。
+- 已授权设备可进入远程桌面：浏览只看画面，触控 / 全屏把点按与滑动映射到桌面键鼠；画面走 `/v1/desktop/*`。
 - 官方 Windows 包打入校验过 SHA 的 `cloudflared`；源码构建可在本页按钉版本下载。
 
-Android companion 不内嵌 Pi，完整会话仍在桌面。配对与聊天协议见 [`docs/companion-protocol.md`](./docs/companion-protocol.md)，公网剧本见 [`docs/remote-acceptance.md`](./docs/remote-acceptance.md)。
+Android companion 不内嵌 Pi，完整会话仍在桌面。配对、聊天与远程桌面协议见 [`docs/companion-protocol.md`](./docs/companion-protocol.md)，公网剧本见 [`docs/remote-acceptance.md`](./docs/remote-acceptance.md)。
 
 ---
 
@@ -129,12 +130,13 @@ SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 与 [`docs/preset-packages.md`](
 4. 顶栏或输入区切换模型。
 5. 需要装包时打开「扩展市场」，在详情卡确认后再安装。
 
-### 手机远程聊天
+### 手机远程聊天与桌面
 
 1. 桌面设置抽屉 → **远程访问** → 打开「允许手机远程」，等到中继状态为已连接（默认出现 `https://….trycloudflare.com`）。
 2. 手机使用能访问该公网主机名的网络（公网验收用蜂窝数据）。
 3. 打开 companion，扫描桌面二维码，或手输 6 位配对码和中继 URL。
 4. 进入会话发一条消息；桌面同一 Pi 会话应出现来回。
+5. 首页「远程桌面」进入浏览 / 触控 / 全屏，查看并（在后两档）操控桌面。
 
 临时 trycloudflare 每次启动主机名会变，重新扫码即可。命名隧道可固定主机名。配置落在 `~/.pi-light/remote.json`（`PI_LIGHT_REMOTE_PATH` 可覆盖）。
 
@@ -180,7 +182,7 @@ cargo run
 │  pi --mode rpc   可选 cwd；已有会话文件则 switch_session       │
 └─────────────────────────────────────────────────────────────┘
 
-android/   Kotlin Compose companion（配对 + /v1/chat）
+android/   Kotlin Compose companion（配对 + /v1/chat + /v1/desktop）
 ```
 
 ```
@@ -205,7 +207,8 @@ desktop-rust/src/
 ├── onboarding.rs        # 首次打开：引导配置模型与密钥
 ├── session_ref.rs       # # 引用
 ├── remote_access.rs     # 远程访问页：配对码 / 二维码 / 设备
-├── remote_gateway.rs    # 本机 loopback 控制面（claim + /v1/chat）
+├── desktop_stream.rs    # JPEG 编码、Windows 主屏捕获、键鼠注入
+├── remote_gateway.rs    # 本机 loopback 控制面（claim + /v1/chat + /v1/desktop）
 ├── relay_mgr.rs         # cloudflared 探测、下载、quick tunnel
 └── bin/mock_pi.rs       # 测试替身
 ```
@@ -258,7 +261,7 @@ cd android
 |------|------|
 | [`docs/architecture.md`](./docs/architecture.md) | 架构、模块、里程碑 |
 | [`docs/remote-acceptance.md`](./docs/remote-acceptance.md) | 公网远程配对、中继启停与验收剧本 |
-| [`docs/companion-protocol.md`](./docs/companion-protocol.md) | companion 配对 / claim / `/v1/chat` |
+| [`docs/companion-protocol.md`](./docs/companion-protocol.md) | companion 配对 / claim / `/v1/chat` / `/v1/desktop` |
 | [`docs/preset-packages.md`](./docs/preset-packages.md) | Slim / 操控预置包钉版本与 tarball SHA-256 |
 | [`docs/signing.md`](./docs/signing.md) | Windows / Android 签名与分发策略 |
 | [`android/README.md`](./android/README.md) | companion 构建与配对步骤 |

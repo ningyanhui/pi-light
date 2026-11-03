@@ -13,6 +13,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::chat::{ChatMessage, ChatState};
+use crate::desktop_stream::{DESKTOP_FRAME_PATH, DESKTOP_INPUT_PATH, DESKTOP_SESSION_PATH};
 use crate::relay_mgr::{self, CloudflaredProbe, RelayManager, TunnelStatus};
 use crate::remote_gateway::{
     AuthorizedDevice, ChatSnapshot, GatewayHandle, PairOffer, PendingChat, SnapshotMsg,
@@ -63,6 +64,14 @@ pub struct RemotePersist {
     pub named_token: String,
     #[serde(default)]
     pub devices: Vec<AuthorizedDevice>,
+    #[serde(default = "default_true")]
+    pub allow_desktop_preview: bool,
+    #[serde(default = "default_true")]
+    pub allow_touch: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for RemotePersist {
@@ -76,6 +85,8 @@ impl Default for RemotePersist {
             named_hostname: String::new(),
             named_token: String::new(),
             devices: Vec::new(),
+            allow_desktop_preview: true,
+            allow_touch: true,
         }
     }
 }
@@ -168,6 +179,7 @@ impl RemoteAccessState {
                 dirty = true;
             }
             gw.set_authorized_devices(self.persist.devices.clone());
+            gw.set_desktop_policy(self.persist.allow_desktop_preview, self.persist.allow_touch);
             if gw.has_pending_chat() {
                 dirty = true;
             }
@@ -226,6 +238,7 @@ impl RemoteAccessState {
                     host: crate::remote_gateway::local_host_label(),
                     ..ChatSnapshot::default()
                 });
+                gw.set_desktop_policy(self.persist.allow_desktop_preview, self.persist.allow_touch);
                 self.gateway = Some(gw);
             }
             match self.persist.relay {
@@ -478,6 +491,15 @@ pub fn qr_payload(code: &str, relay_url: Option<&str>, expires_unix: u64) -> Str
     map.insert("code".into(), serde_json::json!(code));
     map.insert("claim".into(), serde_json::json!(CLAIM_PATH));
     map.insert("chat".into(), serde_json::json!(CHAT_PATH));
+    map.insert("desktop".into(), serde_json::json!(DESKTOP_SESSION_PATH));
+    map.insert(
+        "desktop_frame".into(),
+        serde_json::json!(DESKTOP_FRAME_PATH),
+    );
+    map.insert(
+        "desktop_input".into(),
+        serde_json::json!(DESKTOP_INPUT_PATH),
+    );
     map.insert("protocol".into(), serde_json::json!(PROTOCOL));
     map.insert("exp".into(), serde_json::json!(expires_unix));
     if let Some(url) = relay_url {
@@ -566,6 +588,8 @@ pub fn render_tab(ui: &mut egui::Ui, state: &mut RemoteAccessState) {
 
     render_enable_and_pair(ui, state);
     ui.add_space(10.0);
+    render_desktop_permissions(ui, state);
+    ui.add_space(10.0);
     render_relay_card(ui, state);
     ui.add_space(10.0);
     render_relay_kind(ui, state);
@@ -577,7 +601,7 @@ pub fn render_tab(ui: &mut egui::Ui, state: &mut RemoteAccessState) {
     ui.add_space(4.0);
     ui.label(
         egui::RichText::new(
-            "手机 companion 扫码或输入配对码后，经公网中继写入本机当前 Pi 会话（默认可写）。远程桌面三档（浏览 / 触控 / 全屏）尚未开放。电脑操控需要操作系统权限，不会因为打开远程而自动启用。",
+            "手机 companion 扫码或输入配对码后，经公网中继写入本机当前 Pi 会话（默认可写）。远程桌面走 JPEG 轮询（约 5–8 fps，主屏最长边 1280）：浏览只看不点；触控 / 全屏把点按与滑动映射为鼠标键盘。Windows 主屏截取可能需要系统屏幕捕获权限；键鼠注入可能被安全软件拦截。这不是 WebRTC，公网延迟通常高于局域网。电脑操控扩展不会因为打开远程而自动启用。",
         )
         .weak()
         .size(11.0),
@@ -683,6 +707,97 @@ fn render_enable_and_pair(ui: &mut egui::Ui, state: &mut RemoteAccessState) {
                 }
             });
         });
+    });
+}
+
+fn render_desktop_permissions(ui: &mut egui::Ui, state: &mut RemoteAccessState) {
+    card(ui, |ui| {
+        ui.label(egui::RichText::new("远程权限").strong().size(13.0));
+        ui.label(
+            egui::RichText::new("配对成功后，可分别允许聊天、桌面预览和触控注入。")
+                .weak()
+                .size(11.0),
+        );
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label("允许远程聊天");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut on = state.persist.enabled;
+                ui.add_enabled(false, egui::Checkbox::new(&mut on, ""));
+            });
+        });
+        ui.label(
+            egui::RichText::new("已授权设备可写入当前 Pi 会话。关闭「允许手机远程」即停止。")
+                .weak()
+                .size(10.0),
+        );
+        ui.add_space(4.0);
+        let mut preview = state.persist.allow_desktop_preview;
+        ui.horizontal(|ui| {
+            ui.label("允许远程桌面预览");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.checkbox(&mut preview, "").changed() {
+                    state.persist.allow_desktop_preview = preview;
+                    if let Some(gw) = &state.gateway {
+                        gw.set_desktop_policy(preview, state.persist.allow_touch);
+                    }
+                    state.save();
+                }
+            });
+        });
+        ui.label(
+            egui::RichText::new("只看主屏 JPEG 帧；浏览模式不会注入点击。")
+                .weak()
+                .size(10.0),
+        );
+        ui.add_space(4.0);
+        let mut touch = state.persist.allow_touch;
+        ui.horizontal(|ui| {
+            ui.label("允许触控操控");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.checkbox(&mut touch, "").changed() {
+                    state.persist.allow_touch = touch;
+                    if let Some(gw) = &state.gateway {
+                        gw.set_desktop_policy(state.persist.allow_desktop_preview, touch);
+                    }
+                    state.save();
+                }
+            });
+        });
+        ui.label(
+            egui::RichText::new("触控 / 全屏下把点按、滑动、键盘映射到本机。浏览模式仍不注入。")
+                .weak()
+                .size(10.0),
+        );
+        if let Some(gw) = &state.gateway {
+            let st = gw.desktop_status();
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "屏幕捕获：{}{}  ·  输入：{}",
+                    match st.capture {
+                        crate::desktop_stream::CaptureStatus::Ok => "正常",
+                        crate::desktop_stream::CaptureStatus::PermissionRequired =>
+                            "需要系统屏幕捕获权限",
+                        crate::desktop_stream::CaptureStatus::Unavailable =>
+                            "当前环境不可用（Host 以 Windows 主屏为准）",
+                    },
+                    if st.capture_message.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（{}）", st.capture_message)
+                    },
+                    match st.input {
+                        crate::desktop_stream::InputStatus::Ok => "可注入",
+                        crate::desktop_stream::InputStatus::ViewOnly => "浏览只看",
+                        crate::desktop_stream::InputStatus::Denied => "已关闭触控",
+                        crate::desktop_stream::InputStatus::Unavailable => "非 Windows 不注入",
+                    }
+                ))
+                .weak()
+                .size(10.0),
+            );
+        }
     });
 }
 
@@ -1065,6 +1180,7 @@ mod tests {
         assert_eq!(v["code"], "AB12CD");
         assert_eq!(v["claim"], "/v1/pair/claim");
         assert_eq!(v["chat"], "/v1/chat");
+        assert_eq!(v["desktop"], DESKTOP_SESSION_PATH);
         assert_eq!(v["relay"], "https://x.trycloudflare.com");
         assert_eq!(v["protocol"], PROTOCOL);
         assert!(!json.contains("局域网即可"));
@@ -1121,5 +1237,7 @@ mod tests {
     #[test]
     fn default_relay_is_cloudflare_quick() {
         assert_eq!(RemotePersist::default().relay, RelayKind::CloudflareQuick);
+        assert!(RemotePersist::default().allow_desktop_preview);
+        assert!(RemotePersist::default().allow_touch);
     }
 }

@@ -2,7 +2,7 @@
 
 桌面设置抽屉 **远程访问** 页对照原型 `acceptance/04-desktop-remote`。Android companion 对照 `acceptance/03-mobile-pair`、`acceptance/05-mobile-chat`、`acceptance/06-mobile-desktop`、`mobile-v2/01-home`、`02-desktop-modes`、`03-touch`、`04-fullscreen`、`05-chat`、`06-security`（只学信息架构，不拷贝他仓实现）。
 
-本里程碑交付：**公网配对 + 一通远程聊天**，以及 companion 上的浏览 / 触控 / 全屏三档壳。像素流尚未接入 `/v1` 协议，预览面显示中继主机状态，不假装直播帧率。
+本里程碑交付：**公网配对 + 一通远程聊天**，以及远程桌面三档（浏览 / 触控 / 全屏）的真实 JPEG 像素流与键鼠注入。协议见 `docs/companion-protocol.md`。这不是 WebRTC。
 
 ## 配对流程
 
@@ -67,6 +67,23 @@ curl -N -X POST http://127.0.0.1:17831/v1/chat \
   -d '{"text":"stream please","stream":true}'
 curl -s -X POST http://127.0.0.1:17831/v1/chat/stop \
   -H "Authorization: Bearer $TOKEN"
+
+# 远程桌面：开始浏览会话并取一帧 JPEG
+curl -s -X POST http://127.0.0.1:17831/v1/desktop/session \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"action":"start","mode":"browse"}'
+curl -s http://127.0.0.1:17831/v1/desktop/frame \
+  -H "Authorization: Bearer $TOKEN" -o /tmp/pi-light-frame.jpg
+# 浏览模式注入应 403；切到触控后再发 pointer
+curl -s -X POST http://127.0.0.1:17831/v1/desktop/session \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"action":"mode","mode":"touch"}'
+curl -s -X POST http://127.0.0.1:17831/v1/desktop/input \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"type":"pointer","x":0.5,"y":0.5,"action":"click"}'
 ```
 
 Android 模拟器打宿主机网关可用 `http://10.0.2.2:17831`（debug 允许该 cleartext）。这只证明协议，**不是**蜂窝↔家宽验收。
@@ -76,7 +93,8 @@ Android 模拟器打宿主机网关可用 `http://10.0.2.2:17831`（debug 允许
 ## 诚实限制
 
 - 这不是局域网产品。未建立公网中继就不能声称「手机在外面能连」。
-- 远程桌面三档（浏览 / 触控 / 全屏）已有 companion 壳；像素流与键鼠注入尚未接入协议，不能当成完整远程桌面验收。
+- 远程桌面是 JPEG 轮询（约 5–8 fps，主屏最长边 1280），不是 WebRTC。浏览只看不点；触控 / 全屏才注入。Windows 主屏截取与 `SendInput` 可能被系统权限或安全软件拦住；非 Windows Host 只保证协议，不保证真截屏。
+- 公网帧比聊天更吃上行。家宽上传不足时帧率会掉，不要按局域网体验对标。
 - 电脑操控扩展不会因为打开远程而自动启用。
 - 聊天默认可写同一 Pi 会话；只读观察不是默认，本里程碑不做该设置项。
 - cloudflared 体积较大；未过 SHA 的文件不得留在 sidecar/relay，也不得打进 Release。

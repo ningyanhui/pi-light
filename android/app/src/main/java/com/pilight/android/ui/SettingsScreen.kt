@@ -162,7 +162,7 @@ fun SettingsScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
             Text(
-                "诚实限制：远程依赖公网中继；临时 trycloudflare 主机名每次启动都会变。浏览 / 触控 / 全屏是 companion 壳；像素流尚未接入协议。",
+                "诚实限制：远程依赖公网中继；临时 trycloudflare 主机名每次启动都会变。远程桌面是 JPEG 轮询（约 5–8 fps），浏览只看不点；触控 / 全屏映射键鼠。需要桌面侧屏幕捕获权限，不是 WebRTC。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

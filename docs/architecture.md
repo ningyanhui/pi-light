@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.3.0-alpha — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊。不含 M7、不含 M3/M4 真能力闸门
+> **当前版本**：v0.3.0-alpha — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊；远程桌面 JPEG 轮询 + 浏览/触控/全屏。不含 WebRTC、不含 M3/M4 真能力闸门
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -31,7 +31,7 @@
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
 │  admin_panel 模块：设置抽屉（七 Tab）+ provider_catalog + ext_market / pi_pkg │
-│  remote_access + relay_mgr + remote_gateway：配对 / Cloudflare Tunnel / 设备   │
+│  remote_access + relay_mgr + remote_gateway + desktop_stream：配对 / 中继 / 桌面帧   │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ std::process::Command（stdin/stdout piped）
                              │ 后台线程读 stdout → mpsc channel
@@ -77,6 +77,7 @@ pi-light/
 │   │   ├── provider_catalog.rs   # 内置厂商 + 自定义 API / models.json
 │   │   ├── onboarding.rs         # 首次打开：只引导配置模型与密钥
 │   │   ├── remote_access.rs      # 远程访问页（配对码 / QR / 设备）
+│   │   ├── desktop_stream.rs     # JPEG 编码、Windows 主屏捕获、键鼠注入
 │   │   ├── remote_gateway.rs     # 本机 loopback 控制面
 │   │   ├── relay_mgr.rs          # cloudflared 探测 / 下载 / 隧道
 │   │   └── bin/mock_pi.rs        # 集成测试用 Pi 替身
@@ -86,7 +87,7 @@ pi-light/
 │   ├── architecture.md
 │   ├── preset-packages.md        # Slim / 操控包钉版本与 tarball SHA-256
 │   ├── remote-acceptance.md      # M5 公网配对与中继验收
-│   ├── companion-protocol.md     # claim / chat 协议
+│   ├── companion-protocol.md     # claim / chat / desktop 协议
 │   └── signing.md                # Windows 签名策略与 Authenticode 占位
 ├── scripts/
 │   ├── fetch-pi-sidecar.ps1      # Pi sidecar 下载/SHA-256 校验
@@ -121,7 +122,8 @@ pi-light/
 | `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `remote_access` | 远程访问页：允许手机远程、配对码/QR（TTL 10 分钟）、设备列表撤销、中继选项 |
-| `remote_gateway` | 本机 `127.0.0.1` HTTP：`/health`、`/v1/pair/info`、`POST /v1/pair/claim`、已授权 `GET/POST /v1/chat`（快照含 tools；可选 SSE）、`POST /v1/chat/stop` |
+| `desktop_stream` | Windows 主屏 GDI 捕获 + JPEG；触控/全屏 `SendInput`；浏览不注入 |
+| `remote_gateway` | 本机 `127.0.0.1` HTTP：`/health`、`/v1/pair/info`、`POST /v1/pair/claim`、已授权 `GET/POST /v1/chat`（快照含 tools；可选 SSE）、`POST /v1/chat/stop`、`/v1/desktop/*` |
 | `relay_mgr` | cloudflared 探测顺序、SHA 校验下载、trycloudflare / 命名隧道启停与状态 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
@@ -236,7 +238,8 @@ pi-light-windows-x64/
 | **v3 M2** | Slim 五包预置进 `sidecar/pi-packages/`；NOTICE tarball SHA；操控三包默认关 + 一键启用壳 | ✅ 已合入 |
 | **v3 M5** | 远程访问页：配对码/二维码、Cloudflare Tunnel 状态、已授权设备；本机 claim 钩子 | ✅ 已合入 |
 | **v3 M6-lite** | Android companion：扫码/输码经公网中继配对；`/v1/chat` 写入桌面当前 Pi 会话 | ✅ 已合入 |
-| **v0.3.0-alpha** | M0+M1+M2+M5+M6-lite 预发布；不含 M7 三档桌面、不含 M3/M4 真能力闸门 | 本发版 |
+| **远程桌面** | JPEG 轮询 + 浏览/触控/全屏注入；保留配对与公网中继 | ✅ 协议已落地（非 WebRTC） |
+| **v0.3.0-alpha** | M0+M1+M2+M5+M6-lite 预发布 | 本发版 |
 
 ---
 
@@ -249,7 +252,7 @@ v3 **M5** 已在桌面提供本机 loopback 网关、配对码 / 二维码 / `PO
 - 首页设备卡（已连接 / via 中继 / latency）
 - 扫码或手输配对码 + 中继 URL（不要求同一局域网）
 - `GET/POST /v1/chat` 带 Bearer token，写入桌面当前 Pi 会话（默认可写）；可选 SSE 流式与 `POST /v1/chat/stop`
-- 「远程桌面」入口进入浏览 / 触控 / 全屏三档壳；像素流仍属后续协议，不假装已直播
+- 「远程桌面」入口进入浏览 / 触控 / 全屏；Companion 解码 JPEG 帧。浏览不注入；触控 / 全屏映射键鼠。全屏横屏并隐藏手机壳
 
 CI / Release 仍只构建 debug APK（`testDebugUnitTest` + `assembleDebug`）。不内嵌 Pi。Pi sidecar 仍是 Windows x64 的 `pi-windows-x64.zip`，`pi_rpc` 仍只托管本机 `pi --mode rpc`。
 
@@ -282,7 +285,7 @@ CI / Release 仍只构建 debug APK（`testDebugUnitTest` + `assembleDebug`）�
 | 中继 | 依赖本机网络与公网可达性。临时 trycloudflare 无需 Cloudflare 账号，主机名每次启动会变。命名隧道 / Tailscale 需要账号。同一局域网不能代替公网中继 |
 | 配对握手 | 桌面校验配对码后自动授权。手机扫码或手输后 claim；聊天走 `/v1/chat` |
 | 远程聊天 | 默认可写当前 Pi 会话；依赖桌面在跑、中继已连接、手机能访问公网主机名 |
-| 远程桌面 | 浏览 / 触控 / 全屏未开放 |
+| 远程桌面 | JPEG 轮询（约 5–8 fps，最长边 1280），不是 WebRTC。浏览不注入；触控/全屏走 `SendInput`。需要 Windows 屏幕捕获权限；非 Windows Host 只保证协议 |
 | cloudflared | 未钉平台（如 macOS）不提供应用内下载，只探测 PATH / 环境变量 |
 
 ## M5′ `#` 引用工作流
