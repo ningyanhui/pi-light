@@ -56,7 +56,7 @@ pi-light 把官方 Pi（MIT，钉定 **v1.4.0**）以 sidecar 方式嵌进 [egui
 - **`#` 引用**：输入 `#` 引用当前会话消息或本机历史会话文件，chip 拼入 prompt。
 - **用量**：底栏展示 Pi 上报的 Token、工具 Trace 与吞吐（`message_update.usage` / `get_session_stats`）。
 - **中文**：Windows 用系统微软雅黑等 CJK 字体作为 egui 回退；可用 `PI_LIGHT_CJK_FONT` 指定字体文件。
-- **外观**：深色壳、indigo 强调、自绘闪电底纹、Windows 嵌入品牌图标。
+- **外观**：石墨灰基底、克制的钴蓝强调色、实色分层与清晰对比；Windows 嵌入品牌图标。
 
 ### 设置、模型与扩展
 
@@ -193,7 +193,7 @@ desktop-rust/src/
 ├── workspace.rs         # 工作区 dock、无感知 cwd 切换
 ├── workspace_tree.rs    # 文件树
 ├── workspace_git.rs     # Git Changes / History
-├── theme.rs             # 深色壳与共用控件
+├── theme.rs             # 石墨灰 / 钴蓝视觉系统与共用控件
 ├── app_icon.rs          # 窗口与 Windows exe 品牌图标
 ├── fonts.rs             # 系统 CJK 字体回退
 ├── pi_path.rs           # Pi 三态路径探测

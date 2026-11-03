@@ -1144,10 +1144,10 @@ fn render_skills_mcp_workspace(ui: &mut egui::Ui, state: &mut AdminPanelState) -
     let mut mcp_toggle = None;
     let mut mcp_add = None;
     ui.columns(2, |cols| {
-        cols[0].label(egui::RichText::new("路径芯片 (Skills)").strong().size(13.0));
+        cols[0].label(egui::RichText::new("技能 (Skills)").strong().size(13.0));
         cols[0].add(
             egui::TextEdit::singleline(&mut state.skill_query)
-                .hint_text("搜索路径芯片…")
+                .hint_text("搜索技能…")
                 .desired_width(f32::INFINITY),
         );
         let query = state.skill_query.clone();
