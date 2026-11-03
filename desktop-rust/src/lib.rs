@@ -19,3 +19,4 @@ pub mod remote_gateway;
 pub mod session_insights;
 pub mod session_ref;
 pub mod session_store;
+pub mod theme;

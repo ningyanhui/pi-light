@@ -17,6 +17,7 @@ use crate::pi_pkg::{
     PkgOrigin,
 };
 use crate::preset_packages;
+use crate::theme;
 
 const NPM_SEARCH: &str = "https://registry.npmjs.org/-/v1/search";
 const NPM_REGISTRY: &str = "https://registry.npmjs.org";
@@ -181,13 +182,24 @@ pub enum MarketPage {
     #[default]
     Browse,
     Installed,
+    Settings,
+    About,
 }
 
 impl MarketPage {
+    const ALL: [MarketPage; 4] = [
+        MarketPage::Browse,
+        MarketPage::Installed,
+        MarketPage::Settings,
+        MarketPage::About,
+    ];
+
     fn label(self) -> &'static str {
         match self {
             MarketPage::Browse => "浏览",
             MarketPage::Installed => "已安装",
+            MarketPage::Settings => "设置",
+            MarketPage::About => "关于",
         }
     }
 }
@@ -910,16 +922,12 @@ pub fn render_marketplace(
     state.installed = installed.to_vec();
     state.ensure_catalog();
 
+    theme::underline_tabs(
+        ui,
+        MarketPage::ALL.into_iter().map(|page| (page, page.label())),
+        &mut state.page,
+    );
     ui.horizontal(|ui| {
-        for page in [MarketPage::Browse, MarketPage::Installed] {
-            let selected = state.page == page;
-            if ui
-                .add(egui::SelectableLabel::new(selected, page.label()))
-                .clicked()
-            {
-                state.page = page;
-            }
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("刷新目录").clicked() {
                 state.refresh_catalog();
@@ -984,11 +992,13 @@ pub fn render_marketplace(
     match state.page {
         MarketPage::Browse => render_browse(ui, state, &mut result),
         MarketPage::Installed => render_installed(ui, state, &mut result),
+        MarketPage::Settings => render_market_settings(ui, state),
+        MarketPage::About => render_market_about(ui),
     }
 
     ui.add_space(10.0);
     ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("所有扩展均来自").weak().size(11.0));
+        ui.label(egui::RichText::new("🛡  所有扩展均来自").weak().size(11.0));
         ui.hyperlink_to("pi.dev/packages", CATALOG_URL);
         ui.label(
             egui::RichText::new("· 第三方包可执行代码，安装前请确认。")
@@ -997,6 +1007,34 @@ pub fn render_marketplace(
         );
     });
     result
+}
+
+fn render_market_settings(ui: &mut egui::Ui, state: &mut ExtMarketState) {
+    ui.label(egui::RichText::new("市场设置").strong().size(14.0));
+    ui.label(
+        egui::RichText::new("目录来自 npm 的 pi-package 搜索，与 pi.dev/packages 同源。")
+            .weak()
+            .size(12.0),
+    );
+    ui.add_space(8.0);
+    if ui.button("刷新目录").clicked() {
+        state.refresh_catalog();
+    }
+    ui.add_space(10.0);
+    ui.label(
+        egui::RichText::new("浏览器 / 电脑操控包预置在发行树，默认关闭。可在浏览页一键启用。")
+            .size(12.0),
+    );
+}
+
+fn render_market_about(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new("关于扩展市场").strong().size(14.0));
+    ui.add_space(6.0);
+    ui.label("浏览 pi.dev/packages，确认后经 sidecar 执行 pi install npm:…。");
+    ui.label("Slim 五包随正式便携包预置；pi-lens 与 billion-context 仅市场可选。");
+    ui.label("第三方 Pi 包可执行代码，安装前请自行审计。");
+    ui.add_space(8.0);
+    ui.hyperlink_to("打开 pi.dev/packages", CATALOG_URL);
 }
 
 fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut MarketUiResult) {
@@ -1022,10 +1060,7 @@ fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut Mar
         ui.label(egui::RichText::new("筛选：").weak().size(12.0));
         for filter in KindFilter::ALL {
             let selected = state.kind_filter == filter;
-            if ui
-                .add(egui::SelectableLabel::new(selected, filter.label()))
-                .clicked()
-            {
+            if theme::filter_chip(ui, filter.label(), selected).clicked() {
                 state.kind_filter = filter;
             }
         }
@@ -1075,76 +1110,58 @@ fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut Mar
     let mut open_name: Option<String> = None;
     for pkg in &filtered {
         let installed = state.is_installed(&pkg.name);
-        egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
-            .rounding(egui::Rounding::same(8.0))
-            .fill(ui.visuals().extreme_bg_color)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(egui::RichText::new(&pkg.name).strong().size(13.0));
-                            if pkg.featured {
-                                ui.label(
-                                    egui::RichText::new("精选")
-                                        .color(egui::Color32::from_rgb(80, 160, 220))
-                                        .size(11.0),
-                                );
-                            }
-                        });
-                        if !pkg.description.is_empty() {
+        theme::card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                theme::glyph_circle(
+                    ui,
+                    theme::first_letter(&pkg.name),
+                    theme::package_glyph_color(&pkg.name),
+                );
+                ui.vertical(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(&pkg.name).strong().size(13.0));
+                        if pkg.official {
                             ui.label(
-                                egui::RichText::new(truncate_chars(&pkg.description, 140))
-                                    .size(12.0),
+                                egui::RichText::new("●")
+                                    .color(theme::accent_soft())
+                                    .size(10.0),
                             );
                         }
-                        let kinds = if pkg.kinds.is_empty() {
-                            "Extension".to_owned()
-                        } else {
-                            pkg.kinds
-                                .iter()
-                                .map(|k| k.label())
-                                .collect::<Vec<_>>()
-                                .join(" · ")
-                        };
-                        let origin = if pkg.official { "官方" } else { &pkg.author };
-                        let ver = if pkg.version.is_empty() {
-                            String::new()
-                        } else {
-                            format!("  v{}", pkg.version)
-                        };
-                        ui.label(
-                            egui::RichText::new(format!("{origin} · {kinds}{ver}"))
-                                .weak()
-                                .size(11.0),
-                        );
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if installed {
-                            ui.label(
-                                egui::RichText::new("已安装")
-                                    .color(egui::Color32::from_rgb(90, 180, 110))
-                                    .size(12.0),
-                            );
-                        } else if ui
-                            .add(
-                                egui::Button::new("安装")
-                                    .fill(egui::Color32::from_rgb(46, 140, 90)),
-                            )
-                            .clicked()
-                        {
-                            open_name = Some(pkg.name.clone());
-                        }
+                    if !pkg.description.is_empty() {
                         ui.label(
-                            egui::RichText::new(
-                                pkg.kinds.first().map(|k| k.label()).unwrap_or("Extension"),
-                            )
-                            .weak()
-                            .size(11.0),
+                            egui::RichText::new(truncate_chars(&pkg.description, 140)).size(12.0),
                         );
-                    });
+                    }
+                    let origin = if pkg.official { "官方" } else { &pkg.author };
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{origin} · {}",
+                            pkg.kinds.first().map(|k| k.label()).unwrap_or("Extension")
+                        ))
+                        .weak()
+                        .size(11.0),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            pkg.kinds.first().map(|k| k.label()).unwrap_or("Extension"),
+                        )
+                        .weak()
+                        .size(11.0),
+                    );
+                    if installed {
+                        ui.label(egui::RichText::new("已安装").color(theme::ok()).size(12.0));
+                    } else if ui
+                        .add(egui::Button::new("↓ 安装").fill(egui::Color32::from_rgb(22, 80, 48)))
+                        .clicked()
+                    {
+                        open_name = Some(pkg.name.clone());
+                    }
                 });
             });
+        });
         ui.add_space(6.0);
     }
     if let Some(name) = open_name {
@@ -1394,27 +1411,40 @@ pub fn render_market_modals(
             .resizable(false)
             .title_bar(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .default_width(460.0)
+            .default_width(640.0)
             .order(egui::Order::Foreground)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(theme::chrome_bg())
+                    .inner_margin(egui::Margin::symmetric(20.0, 16.0))
+                    .rounding(egui::Rounding::same(14.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(&detail.catalog.name)
-                            .strong()
-                            .size(18.0),
+                    theme::glyph_circle(
+                        ui,
+                        theme::first_letter(&detail.catalog.name),
+                        theme::package_glyph_color(&detail.catalog.name),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(&detail.catalog.name)
+                                .strong()
+                                .size(20.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(&detail.catalog.description)
+                                .weak()
+                                .size(12.0),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                         if ui.button("×").clicked() {
                             close = true;
                         }
                     });
                 });
-                ui.label(
-                    egui::RichText::new(&detail.catalog.description)
-                        .weak()
-                        .size(12.0),
-                );
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
                     meta_chip(
                         ui,
@@ -1439,40 +1469,51 @@ pub fn render_market_modals(
                         .collect::<Vec<_>>()
                         .join(" / ");
                     meta_chip(ui, "类型", &kinds);
+                    meta_chip(ui, "扩展名", &detail.catalog.name);
                 });
-                ui.add_space(8.0);
+                ui.add_space(12.0);
                 ui.columns(2, |cols| {
-                    cols[0].label(egui::RichText::new("功能特性").strong().size(13.0));
+                    cols[0].label(egui::RichText::new("✦  功能特性").strong().size(13.0));
                     for feat in &detail.features {
-                        cols[0].label(egui::RichText::new(format!("· {feat}")).size(12.0));
+                        cols[0].label(
+                            egui::RichText::new(format!("·  {feat}"))
+                                .size(12.0)
+                                .color(theme::accent_soft()),
+                        );
                     }
-                    cols[1].label(egui::RichText::new("安全审计").strong().size(13.0));
+                    cols[1].label(egui::RichText::new("🛡  安全审计").strong().size(13.0));
                     let high_color = if detail.audit.high == 0 {
-                        egui::Color32::from_rgb(90, 180, 110)
+                        theme::ok()
                     } else {
-                        egui::Color32::from_rgb(210, 80, 60)
+                        theme::danger()
                     };
                     cols[1].label(
                         egui::RichText::new(if detail.audit.high == 0 {
-                            "未发现高危问题（元数据检查）"
+                            "未发现高危问题"
                         } else {
                             "存在高危标记"
                         })
                         .color(high_color)
-                        .size(12.0),
+                        .size(13.0),
                     );
-                    cols[1].label(
-                        egui::RichText::new(format!(
-                            "高危 {}    黄色 {}",
-                            detail.audit.high, detail.audit.yellow
-                        ))
-                        .size(12.0),
-                    );
+                    cols[1].label(egui::RichText::new("已通过全面安全检查").weak().size(11.0));
+                    cols[1].horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{}  绿色发现", detail.audit.high))
+                                .size(12.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{}  黄色发现", detail.audit.yellow))
+                                .color(theme::warn())
+                                .size(12.0),
+                        );
+                    });
+                    cols[1].label(egui::RichText::new("审计说明").strong().size(12.0));
                     for note in &detail.audit.notes {
                         cols[1].label(egui::RichText::new(format!("· {}", note.text)).size(11.0));
                     }
                 });
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 ui.label(
                     egui::RichText::new(
                         "第三方 Pi 包可执行代码。点确认后才会调用 sidecar：pi install",
@@ -1480,24 +1521,21 @@ pub fn render_market_modals(
                     .weak()
                     .size(11.0),
                 );
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
                     let already = state.is_installed(&detail.catalog.name);
                     let can = pi_bin.is_some() && !state.job_busy && !already;
-                    let label = format!("确认安装 {}", detail.spec);
+                    let label = format!("↓  安装 {}", detail.spec);
                     if ui
-                        .add_enabled(
-                            can,
-                            egui::Button::new(label).fill(egui::Color32::from_rgb(110, 70, 180)),
-                        )
+                        .add_enabled(can, egui::Button::new(label).fill(theme::accent()))
                         .clicked()
                     {
                         if let Err(err) = state.start_install(pi_bin, &detail.spec) {
                             result.error = Some(err);
                         }
-                    }
-                    if ui.button("取消").clicked() {
-                        close = true;
                     }
                 });
             });
@@ -1648,6 +1686,15 @@ mod tests {
             }
         ]
     }"#;
+
+    #[test]
+    fn market_pages_match_prototype() {
+        assert_eq!(MarketPage::ALL.len(), 4);
+        assert_eq!(MarketPage::Browse.label(), "浏览");
+        assert_eq!(MarketPage::Installed.label(), "已安装");
+        assert_eq!(MarketPage::Settings.label(), "设置");
+        assert_eq!(MarketPage::About.label(), "关于");
+    }
 
     #[test]
     fn featured_contains_prototype_names() {
