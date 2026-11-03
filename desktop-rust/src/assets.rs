@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// 运行时 UI kit：大气底、dock 图标、空态插画。洁净室自制，不引用外部壳主题。
+// 运行时 UI kit：dock 图标与空态插画。洁净室自制，不引用外部壳主题。
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
-const BG_ATMOSPHERE: &[u8] = include_bytes!("../assets/bg-atmosphere.jpg");
 const ICON_SESSIONS: &[u8] = include_bytes!("../assets/icon-sessions.png");
 const ICON_FILES: &[u8] = include_bytes!("../assets/icon-files.png");
 const ICON_GIT: &[u8] = include_bytes!("../assets/icon-git.png");
@@ -14,7 +13,6 @@ const EMPTY_NOPERM: &[u8] = include_bytes!("../assets/empty-noperm.png");
 
 #[derive(Clone)]
 pub struct ShellTextures {
-    pub atmosphere: Option<TextureHandle>,
     pub icon_sessions: Option<TextureHandle>,
     pub icon_files: Option<TextureHandle>,
     pub icon_git: Option<TextureHandle>,
@@ -26,7 +24,6 @@ pub struct ShellTextures {
 impl ShellTextures {
     pub fn load(ctx: &egui::Context) -> Self {
         Self {
-            atmosphere: load_texture(ctx, "bg_atmosphere", BG_ATMOSPHERE),
             icon_sessions: load_texture(ctx, "icon_sessions", ICON_SESSIONS),
             icon_files: load_texture(ctx, "icon_files", ICON_FILES),
             icon_git: load_texture(ctx, "icon_git", ICON_GIT),
@@ -54,14 +51,11 @@ mod tests {
 
     #[test]
     fn kit_bytes_decode() {
-        assert!(decode_rgba(BG_ATMOSPHERE).is_some());
         assert!(decode_rgba(ICON_SESSIONS).is_some());
         assert!(decode_rgba(ICON_FILES).is_some());
         assert!(decode_rgba(ICON_GIT).is_some());
         assert!(decode_rgba(EMPTY_FOLDER).is_some());
         assert!(decode_rgba(EMPTY_NONGIT).is_some());
         assert!(decode_rgba(EMPTY_NOPERM).is_some());
-        let bg = decode_rgba(BG_ATMOSPHERE).unwrap();
-        assert!(bg.width() > 100 && bg.height() > 100);
     }
 }

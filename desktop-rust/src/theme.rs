@@ -498,7 +498,7 @@ pub fn centered_column(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui
     });
 }
 
-/// 折线几何仍保留给测试；琥珀/金 bolt 已退役，不得再作为主装饰。
+/// 折线几何仅为历史测试保留；主界面不再绘制闪电或氛围底图。
 pub fn bolt_polyline(origin: egui::Pos2, scale: f32) -> Vec<egui::Pos2> {
     const LINE: [[f32; 2]; 4] = [[0.72, 0.00], [0.26, 0.46], [0.54, 0.50], [0.12, 1.00]];
     LINE.into_iter()
@@ -506,9 +506,10 @@ pub fn bolt_polyline(origin: egui::Pos2, scale: f32) -> Vec<egui::Pos2> {
         .collect()
 }
 
-/// 旧琥珀折线闪电：退役为空操作。主路径请用 [`paint_atmosphere`]。
+/// 旧琥珀折线闪电：退役为空操作。
 pub fn paint_lightning_backdrop(_ui: &egui::Ui) {}
 
+/// 旧氛围底图：退役为空操作，主界面使用纯色 graphite canvas。
 pub fn paint_atmosphere(_ui: &egui::Ui, _texture: &egui::TextureHandle) {}
 
 pub fn cover_uv(tex: egui::Vec2, dest: egui::Vec2) -> egui::Rect {
