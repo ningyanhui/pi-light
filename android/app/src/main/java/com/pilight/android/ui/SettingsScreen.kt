@@ -118,8 +118,8 @@ fun SettingsScreen(
             )
             ListItem(
                 leadingContent = { Icon(Icons.Outlined.Info, contentDescription = null, tint = PurplePrimary) },
-                headlineContent = { Text("为什么选择中继区域？") },
-                supportingContent = { Text("靠近您的区域可提供更低的延迟和更稳定的连接。") },
+                headlineContent = { Text("连接依赖") },
+                supportingContent = { Text("手机通过桌面端提供的公网中继连接；桌面端需要保持运行并在线。") },
                 colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
             )
             ListItem(
