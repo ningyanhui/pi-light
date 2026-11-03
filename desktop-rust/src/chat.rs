@@ -22,7 +22,7 @@ pub enum ChatMessage {
 // ── Chat state ────────────────────────────────────────────────────────────
 
 /// Tracks the full chat history and the current streaming state.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ChatState {
     /// 同会话消息树（含未展示的兄弟分支）。
     pub tree: MessageTree,
@@ -190,7 +190,15 @@ impl ChatState {
             PiRpcEvent::CommandError { command, error } => {
                 if matches!(
                     command.as_str(),
-                    "set_model" | "get_available_models" | "get_state"
+                    "set_model"
+                        | "get_available_models"
+                        | "get_state"
+                        | "set_thinking_level"
+                        | "get_available_thinking_levels"
+                        | "get_commands"
+                        | "clone"
+                        | "fork"
+                        | "set_session_name"
                 ) {
                     return;
                 }
@@ -203,7 +211,11 @@ impl ChatState {
             | PiRpcEvent::StateInfo { .. }
             | PiRpcEvent::AvailableModels(_)
             | PiRpcEvent::ModelChanged(_)
-            | PiRpcEvent::SessionCommandDone { .. } => {}
+            | PiRpcEvent::SessionCommandDone { .. }
+            | PiRpcEvent::ThinkingLevels(_)
+            | PiRpcEvent::ThinkingLevelChanged(_)
+            | PiRpcEvent::AvailableCommands(_)
+            | PiRpcEvent::SessionCloned { .. } => {}
         }
     }
 }
@@ -304,6 +316,10 @@ impl SessionHub {
         &mut self.chats[self.active]
     }
 
+    pub fn chat_at(&self, index: usize) -> Option<&ChatState> {
+        self.chats.get(index)
+    }
+
     /// Copy streaming flag before taking a mutable borrow of `input`.
     pub fn active_is_streaming(&self) -> bool {
         self.chats[self.active].is_streaming
@@ -373,6 +389,62 @@ impl SessionHub {
         if let Some(id) = id {
             s.session_id = Some(id);
         }
+    }
+
+    pub fn rename(&mut self, index: usize, title: &str) -> bool {
+        let title = title.trim();
+        if title.is_empty() || index >= self.sessions.len() {
+            return false;
+        }
+        self.sessions[index].title = truncate_title(title, 40);
+        self.sessions[index].updated_at = now_secs();
+        true
+    }
+
+    /// 壳侧删除。删到空则新建空槽；删当前则落到邻项。
+    pub fn remove(&mut self, index: usize) -> bool {
+        if index >= self.sessions.len() {
+            return false;
+        }
+        if self.sessions.len() == 1 {
+            *self = Self::new();
+            return true;
+        }
+        self.sessions.remove(index);
+        self.chats.remove(index);
+        if self.active == index {
+            self.active = index.min(self.sessions.len() - 1).saturating_sub(0);
+            if self.active >= self.sessions.len() {
+                self.active = self.sessions.len() - 1;
+            }
+        } else if self.active > index {
+            self.active -= 1;
+        }
+        true
+    }
+
+    /// 复制槽为新会话。不复制 Pi session_file（除非随后 RPC clone 回填）。
+    pub fn fork_slot(&mut self, index: usize) -> Option<usize> {
+        if index >= self.sessions.len() {
+            return None;
+        }
+        let mut session = self.sessions[index].clone();
+        let mut chat = self.chats[index].clone();
+        let id = self.next_id;
+        self.next_id += 1;
+        session.id = id;
+        session.title = format!("{} 副本", truncate_title(&session.title, 20));
+        session.session_file = None;
+        session.session_id = None;
+        session.updated_at = now_secs();
+        chat.is_streaming = false;
+        chat.streaming_buf.clear();
+        chat.error = None;
+        chat.pi_stale = true;
+        self.sessions.push(session);
+        self.chats.push(chat);
+        self.active = self.sessions.len() - 1;
+        Some(self.active)
     }
 
     pub fn set_active_title_from_user(&mut self, text: &str) {
@@ -693,5 +765,25 @@ mod tests {
                 ChatMessage::Assistant("a".to_owned())
             ]
         );
+    }
+
+    #[test]
+    fn hub_rename_and_fork_and_remove() {
+        let mut hub = SessionHub::new();
+        hub.active_chat_mut().push_user("keep".to_owned());
+        assert!(hub.rename(0, "工作区改造"));
+        assert_eq!(hub.active().title, "工作区改造");
+        let forked = hub.fork_slot(0).unwrap();
+        assert_eq!(forked, 1);
+        assert_eq!(hub.active().title, "工作区改造 副本");
+        assert!(hub.active().session_file.is_none());
+        assert!(hub.active_chat().pi_stale);
+        assert_eq!(hub.active_chat().messages.len(), 1);
+        assert!(hub.remove(1));
+        assert_eq!(hub.list().len(), 1);
+        assert_eq!(hub.active_index(), 0);
+        assert!(hub.remove(0));
+        assert_eq!(hub.list().len(), 1);
+        assert!(hub.active_chat().messages.is_empty());
     }
 }

@@ -9,10 +9,13 @@ use std::path::PathBuf;
 use eframe::egui;
 use pi_light::{
     admin_panel::{
-        self, write_settings_model, AdminPanelReturn, AdminPanelState, AdminTab, SetModelRequest,
+        self, write_settings_model, write_settings_thinking, AdminPanelReturn, AdminPanelState,
+        AdminTab, SetModelRequest,
     },
     app_icon,
+    assets::ShellTextures,
     chat::{ChatMessage, ChatState, SessionHub},
+    composer_invoke::{self, InvokeAction, InvokeChooser, InvokeKind, PiCommand},
     fonts,
     message_tree::{self, NodeId, NodeRole, BRANCH_HONESTY},
     onboarding::{self, FirstRunSurface},
@@ -22,7 +25,7 @@ use pi_light::{
     remote_access::RemoteAccessState,
     remote_gateway::{CompanionChatEvent, SnapshotTool},
     session_insights::StatsFetchState,
-    session_ref::{self, RefCandidate, RefChip, RefChooserState},
+    session_ref::{self, RefChip},
     session_store::{self, RpcAttach},
     theme,
     workspace::{self, CwdSwitchPlan, DockAction, WorkspaceUi},
@@ -58,12 +61,14 @@ struct PiLightApp {
     admin: AdminPanelState,
     /// 引导期间只把设置切到「模型」一次。
     primed_model_tab: bool,
-    /// M5′ `#` 引用选择器状态。
-    ref_chooser: RefChooserState,
+    /// Composer `/` `@` `#` 唤起。
+    invoke: InvokeChooser,
+    invoke_cache: Vec<composer_invoke::InvokeCandidate>,
+    hash_file_cache: Vec<composer_invoke::InvokeCandidate>,
+    pi_commands: Vec<PiCommand>,
     /// M5′ 已确认待附带发送的引用 chips。
     ref_chips: Vec<RefChip>,
-    /// M5′ 候选缓存（在 # 触发时构建，每次触发刷新）。
-    ref_candidates_cache: Vec<RefCandidate>,
+    textures: ShellTextures,
     /// 当前活动工作区（写入 `Command::current_dir`；同时只有一个）。
     workdir: PathBuf,
     workdir_draft: String,
@@ -132,9 +137,12 @@ impl PiLightApp {
             egui_ctx,
             admin,
             primed_model_tab: false,
-            ref_chooser: RefChooserState::default(),
+            invoke: InvokeChooser::default(),
+            invoke_cache: Vec::new(),
+            hash_file_cache: Vec::new(),
+            pi_commands: Vec::new(),
             ref_chips: Vec::new(),
-            ref_candidates_cache: Vec::new(),
+            textures: ShellTextures::load(&cc.egui_ctx),
             workdir: workdir.clone(),
             workdir_draft,
             workdir_error: None,
@@ -166,7 +174,7 @@ impl PiLightApp {
     fn spawn_rpc(&mut self, workspace_switch: bool) -> bool {
         self.rpc_client = None;
         self.spawn_error = None;
-        self.ref_chooser.close();
+        self.invoke.close();
         if !workspace_switch {
             self.ref_chips.clear();
         }
@@ -190,6 +198,8 @@ impl PiLightApp {
                     }
                     let _ = client.request_get_state();
                     let _ = client.request_available_models();
+                    let _ = client.request_available_thinking_levels();
+                    let _ = client.request_commands();
                     self.rpc_client = Some(client);
                     self.sidecar_cwd = self.workdir.clone();
                     if detached {
@@ -339,7 +349,7 @@ impl PiLightApp {
             chat.input.clear();
             chat.begin_streaming();
         }
-        self.ref_chooser.close();
+        self.invoke.close();
         self.editing_node = None;
         self.send_prompt_maybe_replay(&effective_prompt, &prefix, stale);
         self.persist_sessions(true);
@@ -478,7 +488,7 @@ impl PiLightApp {
         if self.sessions.any_streaming() || self.workspace.switching {
             return;
         }
-        self.ref_chooser.close();
+        self.invoke.close();
         self.ref_chips.clear();
         self.editing_node = None;
         self.edit_draft.clear();
@@ -520,7 +530,7 @@ impl PiLightApp {
             return;
         }
         self.touch_sessions();
-        self.ref_chooser.close();
+        self.invoke.close();
         self.ref_chips.clear();
         self.editing_node = None;
         self.edit_draft.clear();
@@ -549,7 +559,131 @@ impl PiLightApp {
         }
     }
 
+    fn do_fork_session(&mut self, index: usize) {
+        if self.sessions.any_streaming() || self.workspace.switching {
+            return;
+        }
+        let source_active = index == self.sessions.active_index();
+        let source_file = self
+            .sessions
+            .list()
+            .get(index)
+            .and_then(|s| s.session_file.clone());
+        if source_active {
+            if let Some(client) = &mut self.rpc_client {
+                if client.send_clone_session().is_ok() && self.sessions.fork_slot(index).is_some() {
+                    self.workspace.show_toast("已 Fork（Pi clone）");
+                    self.invoke.close();
+                    self.ref_chips.clear();
+                    if let Some(client) = &mut self.rpc_client {
+                        let _ = client.request_get_state();
+                    }
+                    self.touch_sessions();
+                    self.persist_sessions(true);
+                    return;
+                }
+            }
+        } else if let (Some(file), Some(client)) =
+            (source_file.as_deref(), self.rpc_client.as_mut())
+        {
+            if client.send_switch_session(file).is_ok()
+                && client.send_clone_session().is_ok()
+                && self.sessions.fork_slot(index).is_some()
+            {
+                self.workspace.show_toast("已 Fork（先切换再 Pi clone）");
+                self.invoke.close();
+                self.ref_chips.clear();
+                if let Some(client) = &mut self.rpc_client {
+                    let _ = client.request_get_state();
+                }
+                self.touch_sessions();
+                self.persist_sessions(true);
+                return;
+            }
+        }
+        if self.sessions.fork_slot(index).is_none() {
+            return;
+        }
+        self.invoke.close();
+        self.ref_chips.clear();
+        if let Some(client) = &mut self.rpc_client {
+            if let Err(e) = client.send_new_session() {
+                self.sessions
+                    .active_chat_mut()
+                    .set_error(format!("壳侧复制后 new_session 失败：{e}"));
+            } else {
+                let _ = client.request_get_state();
+            }
+        }
+        self.workspace.show_toast("已壳侧复制会话（未走 Pi clone）");
+        self.touch_sessions();
+        self.persist_sessions(true);
+    }
+
+    fn do_quote_session(&mut self, index: usize) {
+        let Some(session) = self.sessions.list().get(index).cloned() else {
+            return;
+        };
+        let preview = self
+            .sessions
+            .chat_at(index)
+            .and_then(|chat| chat.messages.last())
+            .map(|msg| match msg {
+                ChatMessage::User(t) | ChatMessage::Assistant(t) => t.clone(),
+            })
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| session.title.clone());
+        let chip = composer_invoke::quote_hub_session(&session, &preview);
+        if !self.ref_chips.iter().any(|c| c.id == chip.id) {
+            self.ref_chips.push(chip);
+        }
+    }
+
+    fn do_delete_session(&mut self, index: usize) {
+        if self.sessions.any_streaming() || self.workspace.switching {
+            return;
+        }
+        if !self.sessions.remove(index) {
+            return;
+        }
+        self.invoke.close();
+        self.ref_chips.clear();
+        self.editing_node = None;
+        if let Some(client) = &mut self.rpc_client {
+            if let Some(file) = self.sessions.active().session_file.clone() {
+                let _ = client.send_switch_session(&file);
+            } else {
+                let _ = client.send_new_session();
+            }
+            let _ = client.request_get_state();
+        }
+        self.touch_sessions();
+        self.persist_sessions(true);
+    }
+
+    fn handle_set_thinking_level(&mut self, level: &str) {
+        if let Some(client) = &mut self.rpc_client {
+            if let Err(e) = client.send_set_thinking_level(level) {
+                self.admin.last_error = Some(format!("set_thinking_level 发送失败：{e}"));
+                return;
+            }
+            self.admin.model_config.thinking_level = Some(level.to_owned());
+            let _ = client.request_get_state();
+        } else {
+            self.admin.last_error = Some("尚未连接 Pi，无法设置思考强度。".to_owned());
+        }
+        if self.admin.model_config.thinking_set_default {
+            if let Some(path) = self.admin.model_config.settings_path.clone() {
+                if write_settings_thinking(&path, level).is_ok() {
+                    self.admin.model_config.default_thinking_level = Some(level.to_owned());
+                }
+            }
+        }
+    }
+
     fn drain_rpc_events(&mut self) {
+        let mut refresh_state = false;
+        let mut refresh_thinking = false;
         if let Some(client) = &mut self.rpc_client {
             let events = client.drain_events();
             let had_events = !events.is_empty();
@@ -602,7 +736,17 @@ impl PiLightApp {
                                 | "get_available_models"
                                 | "get_state"
                                 | "get_session_stats"
+                                | "set_thinking_level"
+                                | "get_available_thinking_levels"
+                                | "get_commands"
+                                | "clone"
+                                | "fork"
+                                | "set_session_name"
                         ) {
+                            if command == "get_available_thinking_levels" {
+                                self.admin.model_config.thinking_rpc_failed = true;
+                                self.admin.model_config.thinking_levels.clear();
+                            }
                             None
                         } else {
                             Some(CompanionChatEvent::Error {
@@ -619,11 +763,29 @@ impl PiLightApp {
                         model,
                         session_file,
                         session_id,
+                        thinking_level,
+                        context_window,
+                        max_tokens,
                         ..
                     } => {
                         self.admin.update_live_model(model.clone(), Vec::new());
                         self.sessions
                             .set_active_session_file(session_file.clone(), session_id.clone());
+                        if let Some(level) = thinking_level {
+                            self.admin.model_config.thinking_level = Some(level.clone());
+                        }
+                        if let Some(window) = *context_window {
+                            self.admin.model_config.live_context_window = Some(window);
+                            if self.admin.model_config.context_window_draft.is_empty() {
+                                self.admin.model_config.context_window_draft = window.to_string();
+                            }
+                        }
+                        if let Some(tokens) = *max_tokens {
+                            self.admin.model_config.live_max_tokens = Some(tokens);
+                            if self.admin.model_config.max_tokens_draft.is_empty() {
+                                self.admin.model_config.max_tokens_draft = tokens.to_string();
+                            }
+                        }
                         if let Some(req) = self.admin.persist_inferred_default() {
                             self.handle_set_model_request(req);
                         }
@@ -637,9 +799,36 @@ impl PiLightApp {
                     PiRpcEvent::ModelChanged(model) => {
                         self.admin
                             .update_live_model(Some(model.clone()), Vec::new());
+                        refresh_thinking = true;
+                        refresh_state = true;
                         if let Some(req) = self.admin.persist_inferred_default() {
                             self.handle_set_model_request(req);
                         }
+                    }
+                    PiRpcEvent::ThinkingLevels(levels) => {
+                        self.admin.model_config.thinking_rpc_failed = false;
+                        self.admin.model_config.thinking_levels = levels.clone();
+                    }
+                    PiRpcEvent::ThinkingLevelChanged(level) => {
+                        if !level.is_empty() {
+                            self.admin.model_config.thinking_level = Some(level.clone());
+                        }
+                        refresh_state = true;
+                    }
+                    PiRpcEvent::AvailableCommands(commands) => {
+                        self.pi_commands = commands.clone();
+                    }
+                    PiRpcEvent::SessionStats(stats) => {
+                        if let Some(window) = stats.context_window {
+                            self.admin.model_config.live_context_window = Some(window);
+                        }
+                    }
+                    PiRpcEvent::SessionCloned {
+                        cancelled: true, ..
+                    } => {
+                        self.sessions
+                            .active_chat_mut()
+                            .set_error("Pi 拒绝了 clone/fork（扩展取消）。".to_owned());
                     }
                     PiRpcEvent::SessionCommandDone {
                         cancelled: true, ..
@@ -672,6 +861,14 @@ impl PiLightApp {
             }
             if had_events {
                 self.touch_sessions();
+            }
+        }
+        if let Some(client) = &mut self.rpc_client {
+            if refresh_thinking {
+                let _ = client.request_available_thinking_levels();
+            }
+            if refresh_state {
+                let _ = client.request_get_state();
             }
         }
     }
@@ -828,34 +1025,81 @@ impl PiLightApp {
         }
     }
 
-    /// M5′: 根据当前输入检测 `#` 触发词，刷新选择器候选。
-    /// 每帧调用一次（非常廉价：仅字符串扫描 + 列表过滤）。
-    fn update_ref_chooser(&mut self) {
-        let trigger = session_ref::find_hash_trigger(&self.sessions.active_chat().input);
-        let was_active = self.ref_chooser.active;
-
+    fn update_invoke_chooser(&mut self) {
+        let input = self.sessions.active_chat().input.clone();
+        let trigger = composer_invoke::find_invoke_trigger(&input);
+        let was_active = self.invoke.active;
         match trigger {
-            Some(hash_pos) => {
-                // 刚刚激活：刷新候选缓存（含当前会话消息 + Pi 本地会话文件）
-                if !was_active {
-                    let mut cands = session_ref::candidates_from_messages(
-                        &self.sessions.active_chat().messages,
-                    );
-                    cands.extend(session_ref::candidates_from_pi_sessions());
-                    self.ref_candidates_cache = cands;
-                }
-                let query =
-                    session_ref::extract_query(&self.sessions.active_chat().input, hash_pos)
-                        .to_owned();
-                // 分开借用：先取 hash_pos，再调用方法
-                let all = self.ref_candidates_cache.as_slice();
-                self.ref_chooser.activate(all, &query, hash_pos);
+            Some((kind, pos)) => {
+                let kind_changed = !was_active || self.invoke.kind != Some(kind);
+                // `/` `@` 每帧重建（命令列表/文件树可能晚到）。`#` 会话文件只在打开时读盘。
+                self.invoke_cache = match kind {
+                    InvokeKind::Slash => composer_invoke::slash_candidates(&self.pi_commands),
+                    InvokeKind::At => {
+                        let files = self.workspace.tree.collect_file_rels(80);
+                        composer_invoke::at_candidates(&files)
+                    }
+                    InvokeKind::Hash => {
+                        if kind_changed {
+                            self.hash_file_cache = composer_invoke::hash_session_file_candidates();
+                        }
+                        let mut items =
+                            composer_invoke::hash_candidates(&self.sessions.active_chat().messages);
+                        items.extend(self.hash_file_cache.clone());
+                        items
+                    }
+                };
+                let query = composer_invoke::extract_query(&input, pos).to_owned();
+                self.invoke.activate(kind, &self.invoke_cache, &query, pos);
             }
             None => {
                 if was_active {
-                    self.ref_chooser.close();
+                    self.invoke.close();
                 }
             }
+        }
+    }
+
+    fn apply_invoke_candidate(&mut self, item: composer_invoke::InvokeCandidate) {
+        let pos = self.invoke.trigger_byte_offset;
+        match item.action {
+            InvokeAction::Insert => {
+                composer_invoke::replace_trigger(
+                    &mut self.sessions.active_chat_mut().input,
+                    pos,
+                    &item.insert,
+                );
+            }
+            InvokeAction::SendPrompt => {
+                composer_invoke::replace_trigger(
+                    &mut self.sessions.active_chat_mut().input,
+                    pos,
+                    &item.insert,
+                );
+                self.do_send();
+            }
+            InvokeAction::NewSession => {
+                self.sessions.active_chat_mut().input.clear();
+                self.do_new_session();
+            }
+            InvokeAction::Quote => {
+                if let Some(chip) = item.chip {
+                    if !self.ref_chips.iter().any(|c| c.id == chip.id) {
+                        self.ref_chips.push(chip);
+                    }
+                }
+                composer_invoke::replace_trigger(
+                    &mut self.sessions.active_chat_mut().input,
+                    pos,
+                    "",
+                );
+            }
+        }
+    }
+
+    fn paint_main_backdrop(&self, ui: &egui::Ui) {
+        if let Some(tex) = self.textures.atmosphere.as_ref() {
+            theme::paint_atmosphere(ui, tex);
         }
     }
 }
@@ -875,7 +1119,7 @@ impl eframe::App for PiLightApp {
         self.drain_rpc_events();
         self.drain_companion_inbox();
         self.drain_companion_stop();
-        self.update_ref_chooser();
+        self.update_invoke_chooser();
         if self.remote.poll() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
@@ -891,7 +1135,7 @@ impl eframe::App for PiLightApp {
         }
 
         // M5′: 键盘导航（在面板渲染前消费按键，避免被 TextEdit 截获）
-        if self.ref_chooser.active {
+        if self.invoke.active {
             let mut up = false;
             let mut down = false;
             let mut confirmed = false;
@@ -904,22 +1148,17 @@ impl eframe::App for PiLightApp {
                 closed = i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
             });
             if up {
-                self.ref_chooser.move_up();
+                self.invoke.move_up();
             }
             if down {
-                self.ref_chooser.move_down();
+                self.invoke.move_down();
             }
             if confirmed {
-                let hash_pos = self.ref_chooser.hash_byte_offset;
-                if let Some(chip) = self.ref_chooser.confirm() {
-                    self.ref_chips.push(chip);
-                    session_ref::remove_hash_trigger(
-                        &mut self.sessions.active_chat_mut().input,
-                        hash_pos,
-                    );
+                if let Some(item) = self.invoke.confirm() {
+                    self.apply_invoke_candidate(item);
                 }
             } else if closed {
-                self.ref_chooser.close();
+                self.invoke.close();
             }
         }
 
@@ -952,6 +1191,9 @@ impl eframe::App for PiLightApp {
         };
         if let Some(req) = panel_ret.set_model_request {
             self.handle_set_model_request(req);
+        }
+        if let Some(level) = panel_ret.set_thinking_level {
+            self.handle_set_thinking_level(&level);
         }
         if panel_ret.restart_sidecar {
             self.restart_sidecar();
@@ -986,13 +1228,9 @@ impl PiLightApp {
             .resizable(false)
             .exact_width(256.0)
             .frame(
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgba_unmultiplied(10, 8, 18, 236))
+                theme::glass_frame()
                     .inner_margin(egui::Margin::symmetric(12.0, 12.0))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        egui::Color32::from_rgba_unmultiplied(124, 77, 255, 40),
-                    )),
+                    .fill(theme::glass_strong()),
             )
             .show(ctx, |ui| {
                 action = workspace::show_dock(
@@ -1002,6 +1240,7 @@ impl PiLightApp {
                     &workdir,
                     streaming,
                     switching,
+                    Some(&self.textures),
                 );
             });
         if let Some(next) = action {
@@ -1013,6 +1252,34 @@ impl PiLightApp {
         match action {
             DockAction::NewSession => self.do_new_session(),
             DockAction::SwitchSession(i) => self.do_switch_session(i),
+            DockAction::ForkSession(i) => self.do_fork_session(i),
+            DockAction::QuoteSession(i) => self.do_quote_session(i),
+            DockAction::DeleteSession(i) => self.do_delete_session(i),
+            DockAction::StartRename(i) => {
+                if let Some(session) = self.sessions.list().get(i) {
+                    self.workspace.rename_draft = session.title.clone();
+                    self.workspace.rename_index = Some(i);
+                }
+            }
+            DockAction::ConfirmRename => {
+                if let Some(i) = self.workspace.rename_index.take() {
+                    let title = self.workspace.rename_draft.trim().to_owned();
+                    if self.sessions.rename(i, &title) {
+                        if i == self.sessions.active_index() {
+                            if let Some(client) = &mut self.rpc_client {
+                                let _ = client.send_set_session_name(&title);
+                            }
+                        }
+                        self.touch_sessions();
+                        self.persist_sessions(true);
+                    }
+                }
+                self.workspace.rename_draft.clear();
+            }
+            DockAction::CancelRename => {
+                self.workspace.rename_index = None;
+                self.workspace.rename_draft.clear();
+            }
             DockAction::OpenSettings => {
                 self.admin.open = !self.admin.open;
                 if self.admin.open {
@@ -1102,10 +1369,9 @@ impl PiLightApp {
         let recent = workspace::recent_workdirs(&self.sessions, &self.workdir);
         egui::TopBottomPanel::top("header")
             .frame(
-                egui::Frame::none()
-                    .fill(theme::chrome_bg())
-                    .inner_margin(egui::Margin::symmetric(14.0, 8.0))
-                    .stroke(egui::Stroke::new(1.0_f32, theme::hairline())),
+                theme::glass_frame()
+                    .fill(theme::glass_strong())
+                    .inner_margin(egui::Margin::symmetric(14.0, 8.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -1125,6 +1391,7 @@ impl PiLightApp {
                     if let Some(spec) = self.show_model_picker(ui, "header_model_combo", 188.0) {
                         self.apply_model_spec(&spec);
                     }
+                    self.show_thinking_chip(ui);
                     if self.sessions.active_is_streaming() {
                         ui.add_space(8.0);
                         ui.label(
@@ -1214,11 +1481,11 @@ impl PiLightApp {
 
         egui::TopBottomPanel::bottom("chat_input")
             .frame(
-                egui::Frame::none()
-                    .fill(theme::chrome_bg())
-                    .inner_margin(egui::Margin::symmetric(20.0, 10.0)),
+                theme::glass_frame()
+                    .fill(theme::glass_strong())
+                    .inner_margin(egui::Margin::symmetric(18.0, 10.0)),
             )
-            .min_height(108.0)
+            .min_height(96.0)
             .show(ctx, |ui| {
                 let mut chip_to_remove: Option<usize> = None;
                 if !self.ref_chips.is_empty() {
@@ -1230,7 +1497,7 @@ impl PiLightApp {
                                     .size(12.0)
                                     .color(egui::Color32::from_rgb(180, 220, 255)),
                             )
-                            .fill(egui::Color32::from_rgb(30, 60, 100))
+                            .fill(egui::Color32::from_rgba_unmultiplied(48, 32, 88, 220))
                             .rounding(egui::Rounding::same(10.0));
                             if ui.add(btn).on_hover_text("点击移除此引用").clicked() {
                                 chip_to_remove = Some(i);
@@ -1243,7 +1510,7 @@ impl PiLightApp {
                     self.ref_chips.remove(idx);
                 }
 
-                theme::card_frame().show(ui, |ui| {
+                theme::glass_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let input = &mut self.sessions.active_chat_mut().input;
                         let can_send = !is_streaming
@@ -1252,14 +1519,14 @@ impl PiLightApp {
                         let input_response = ui.add_sized(
                             [ui.available_width() - 168.0, 36.0],
                             egui::TextEdit::singleline(input)
-                                .hint_text("输入消息或使用 / 唤起工具…  # 引用会话")
+                                .hint_text("输入消息，/ 命令，@ 文件，# 引用会话")
                                 .frame(false)
                                 .interactive(!is_streaming),
                         );
                         if input_response.lost_focus()
                             && ctx.input(|i| i.key_pressed(egui::Key::Enter))
                             && can_send
-                            && !self.ref_chooser.active
+                            && !self.invoke.active
                         {
                             send_now = true;
                             input_response.request_focus();
@@ -1338,8 +1605,8 @@ impl PiLightApp {
             self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
         }
 
-        if self.ref_chooser.active {
-            self.show_ref_chooser_popup(ctx);
+        if self.invoke.active {
+            self.show_invoke_popup(ctx);
         }
 
         let is_streaming = self.sessions.active_is_streaming();
@@ -1349,11 +1616,11 @@ impl PiLightApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(theme::chrome_bg())
+                    .fill(egui::Color32::TRANSPARENT)
                     .inner_margin(16.0),
             )
             .show(ctx, |ui| {
-                theme::paint_lightning_backdrop(ui);
+                self.paint_main_backdrop(ui);
                 if empty && !is_streaming {
                     self.show_chat_welcome(ui);
                     return;
@@ -1544,10 +1811,9 @@ impl PiLightApp {
 
         egui::TopBottomPanel::top("session_bar")
             .frame(
-                egui::Frame::none()
-                    .fill(theme::chrome_bg())
-                    .inner_margin(egui::Margin::symmetric(16.0, 6.0))
-                    .stroke(egui::Stroke::new(1.0_f32, theme::hairline())),
+                theme::glass_frame()
+                    .fill(theme::glass_fill())
+                    .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
             )
             .show(ctx, |ui| {
                 if let Some(err) = self.workspace.switch_error.clone() {
@@ -1589,88 +1855,127 @@ impl PiLightApp {
         }
     }
 
-    /// M5′: 渲染引用选择器浮动面板（定位在屏幕底部输入区上方）。
-    fn show_ref_chooser_popup(&mut self, ctx: &egui::Context) {
-        let screen_rect = ctx.screen_rect();
-        // 估算 chips 行高（有 chips 时加一行）
-        let chips_extra = if self.ref_chips.is_empty() { 0.0 } else { 36.0 };
-        // 输入面板高度 ≈ 70px（含内边距），insights_bar ≈ 30px
-        let bottom_offset = 70.0 + 30.0 + chips_extra + 8.0;
-        let popup_height = 180.0f32;
-        let popup_width = (screen_rect.width() - 160.0).clamp(280.0, 600.0);
-        let pos = egui::pos2(16.0, screen_rect.bottom() - bottom_offset - popup_height);
+    fn show_thinking_chip(&mut self, ui: &mut egui::Ui) {
+        let levels = self.admin.model_config.thinking_levels.clone();
+        let current = self
+            .admin
+            .model_config
+            .thinking_level
+            .clone()
+            .unwrap_or_else(|| "off".to_owned());
+        let usable = composer_invoke::thinking_levels_usable(&levels)
+            && !self.admin.model_config.thinking_rpc_failed;
+        let label = if usable {
+            format!("思考强度 {current}")
+        } else {
+            "思考强度 不可用".to_owned()
+        };
+        let resp = ui.add_enabled(
+            usable,
+            egui::Button::new(
+                egui::RichText::new(label)
+                    .size(11.0)
+                    .color(theme::text_primary()),
+            )
+            .fill(egui::Color32::from_rgba_unmultiplied(28, 24, 48, 200))
+            .stroke(egui::Stroke::new(1.0_f32, theme::glass_stroke()))
+            .rounding(egui::Rounding::same(12.0)),
+        );
+        if !usable {
+            resp.on_hover_text("当前模型不支持思考强度");
+            return;
+        }
+        resp.on_hover_text("会话态 thinkingLevel；选项来自 RPC")
+            .context_menu(|ui| {
+                for level in &levels {
+                    if ui.selectable_label(level == &current, level).clicked() {
+                        self.handle_set_thinking_level(level);
+                        ui.close_menu();
+                    }
+                }
+            });
+    }
 
-        // 收集鼠标点击事件（避免在 Area show 闭包中同时借用 self.ref_chooser 和 self.ref_chips）
-        let mut click_confirm_idx: Option<usize> = None;
-
-        egui::Area::new(egui::Id::new("ref_chooser_popup"))
+    fn show_invoke_popup(&mut self, ctx: &egui::Context) {
+        let screen = ctx.screen_rect();
+        let chips_extra = if self.ref_chips.is_empty() { 0.0 } else { 28.0 };
+        let popup_height = 220.0f32;
+        let popup_width = (screen.width() - 280.0).clamp(320.0, 560.0);
+        let pos = egui::pos2(
+            268.0,
+            screen.bottom() - 32.0 - 108.0 - chips_extra - popup_height - 8.0,
+        );
+        let title = match self.invoke.kind {
+            Some(InvokeKind::Slash) => "/ 命令",
+            Some(InvokeKind::At) => "@ 文件",
+            Some(InvokeKind::Hash) => "# 引用会话",
+            None => "唤起",
+        };
+        let empty = match self.invoke.kind {
+            Some(InvokeKind::Slash) => {
+                "没有可执行的 Pi 命令。TUI 内置项（如 /settings）不会经 RPC 执行。"
+            }
+            Some(InvokeKind::At) => "当前工作区没有可引用的文件（空目录 / 无权限 / 已忽略）。",
+            Some(InvokeKind::Hash) => "暂无引用。开始对话后，历史消息会出现在此列表。",
+            None => "暂无候选",
+        };
+        let mut click_idx = None;
+        egui::Area::new(egui::Id::new("composer_invoke_popup"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
+            .interactable(true)
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(popup_width);
-                    ui.set_max_width(popup_width);
-
-                    // 标题栏
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("# 引用会话消息").strong().size(12.0));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new("↑↓ 选择  Enter/Tab 确认  Esc 关闭")
-                                    .weak()
-                                    .size(10.0),
+                theme::glass_frame()
+                    .inner_margin(egui::Margin::same(10.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(popup_width);
+                        ui.set_max_width(popup_width);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(title).strong().size(12.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new("↑↓ 选择  Enter/Tab 确认  Esc 关闭")
+                                            .weak()
+                                            .size(10.0),
+                                    );
+                                },
                             );
                         });
+                        ui.separator();
+                        if self.invoke.filtered.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new(empty).weak().italics().size(12.0));
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .max_height(popup_height - 52.0)
+                                .show(ui, |ui| {
+                                    let cursor = self.invoke.cursor;
+                                    for (i, candidate) in self.invoke.filtered.iter().enumerate() {
+                                        let selected = i == cursor;
+                                        let resp = ui.selectable_label(
+                                            selected,
+                                            egui::RichText::new(&candidate.display).size(12.5),
+                                        );
+                                        if !candidate.detail.is_empty() {
+                                            resp.clone().on_hover_text(&candidate.detail);
+                                        }
+                                        if resp.clicked() {
+                                            click_idx = Some(i);
+                                        }
+                                        if selected {
+                                            resp.scroll_to_me(None);
+                                        }
+                                    }
+                                });
+                        }
                     });
-                    ui.separator();
-
-                    if self.ref_chooser.filtered.is_empty() {
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new("暂无引用 — 本会话尚无可引用的消息")
-                                .weak()
-                                .italics()
-                                .size(12.0),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new("提示：开始对话后，历史消息将出现在此列表")
-                                .weak()
-                                .size(11.0),
-                        );
-                        ui.add_space(6.0);
-                    } else {
-                        egui::ScrollArea::vertical()
-                            .max_height(popup_height - 55.0)
-                            .show(ui, |ui| {
-                                let cursor = self.ref_chooser.cursor;
-                                for (i, candidate) in self.ref_chooser.filtered.iter().enumerate() {
-                                    let is_selected = i == cursor;
-                                    let text = egui::RichText::new(&candidate.display).size(12.5);
-                                    let text = if is_selected { text.strong() } else { text };
-                                    let resp = ui.selectable_label(is_selected, text);
-                                    if resp.clicked() {
-                                        click_confirm_idx = Some(i);
-                                    }
-                                    if is_selected {
-                                        resp.scroll_to_me(None);
-                                    }
-                                }
-                            });
-                    }
-                });
             });
-
-        // 处理鼠标点击确认
-        if let Some(idx) = click_confirm_idx {
-            self.ref_chooser.cursor = idx;
-            let hash_pos = self.ref_chooser.hash_byte_offset;
-            if let Some(chip) = self.ref_chooser.confirm() {
-                self.ref_chips.push(chip);
-                session_ref::remove_hash_trigger(
-                    &mut self.sessions.active_chat_mut().input,
-                    hash_pos,
-                );
+        if let Some(idx) = click_idx {
+            self.invoke.cursor = idx;
+            if let Some(item) = self.invoke.confirm() {
+                self.apply_invoke_candidate(item);
             }
         }
     }
@@ -1696,7 +2001,7 @@ impl PiLightApp {
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(
-                        "输入 # 可引用本会话或历史消息。消息上可编辑 / 重新生成并切换同会话分支。",
+                        "输入 / 调用 Pi 命令，@ 引用工作区文件，# 引用会话消息。消息上可编辑 / 重新生成并切换同会话分支。",
                     )
                     .weak()
                     .size(13.0),
@@ -1709,10 +2014,9 @@ impl PiLightApp {
         egui::TopBottomPanel::bottom("app_footer")
             .exact_height(32.0)
             .frame(
-                egui::Frame::none()
-                    .fill(theme::chrome_bg())
-                    .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-                    .stroke(egui::Stroke::new(1.0_f32, theme::hairline())),
+                theme::glass_frame()
+                    .fill(theme::glass_strong())
+                    .inner_margin(egui::Margin::symmetric(14.0, 6.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -1764,7 +2068,7 @@ impl PiLightApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(theme::chrome_bg()))
             .show(ctx, |ui| {
-                theme::paint_lightning_backdrop(ui);
+                self.paint_main_backdrop(ui);
                 let half = (ui.available_width() * 0.5).max(320.0);
                 ui.columns(2, |cols| {
                     cols[0].vertical_centered(|ui| {
@@ -1920,7 +2224,7 @@ impl PiLightApp {
         let mut open_models = false;
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            theme::paint_lightning_backdrop(ui);
+            self.paint_main_backdrop(ui);
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -1988,7 +2292,7 @@ impl PiLightApp {
         let mut reprobe = false;
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            theme::paint_lightning_backdrop(ui);
+            self.paint_main_backdrop(ui);
             ui.add_space(72.0);
             theme::centered_column(ui, 480.0, |ui| {
                 theme::soft_card(ui, |ui| {
@@ -2022,7 +2326,7 @@ impl PiLightApp {
 
     fn show_spawn_error(&self, ctx: &egui::Context, error: &str) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            theme::paint_lightning_backdrop(ui);
+            self.paint_main_backdrop(ui);
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -2104,16 +2408,20 @@ fn show_model_chip(
 // ── M3′ Trace / Token UI ──────────────────────────────────────────────────
 
 fn show_thinking_block(ui: &mut egui::Ui, chat: &ChatState) {
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("✦  思考过程")
-                .strong()
-                .size(13.0)
-                .color(theme::text_primary()),
-        );
-    });
-    ui.add_space(6.0);
-    show_tool_cards(ui, chat);
+    theme::glass_frame()
+        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("✦  思考过程")
+                        .strong()
+                        .size(13.0)
+                        .color(theme::accent_bright()),
+                );
+            });
+            ui.add_space(6.0);
+            show_tool_cards(ui, chat);
+        });
 }
 
 fn show_tool_cards(ui: &mut egui::Ui, chat: &ChatState) {
@@ -2153,9 +2461,10 @@ fn show_tool_card(ui: &mut egui::Ui, step: &pi_light::pi_rpc::TraceStep) {
                             .color(theme::text_primary()),
                     );
                     ui.label(
-                        egui::RichText::new("TOOL")
+                        egui::RichText::new(" TOOL ")
                             .size(10.0)
-                            .color(theme::accent_soft()),
+                            .color(egui::Color32::WHITE)
+                            .background_color(theme::accent()),
                     );
                 });
                 ui.label(
@@ -2241,8 +2550,8 @@ fn show_user_message(
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .rounding(egui::Rounding::same(12.0))
-            .fill(egui::Color32::from_rgb(22, 24, 34))
-            .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
+            .fill(egui::Color32::from_rgba_unmultiplied(40, 28, 72, 200))
+            .stroke(egui::Stroke::new(1.0_f32, theme::glass_stroke()))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.72);
                 if editing {

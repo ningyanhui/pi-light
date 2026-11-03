@@ -4,8 +4,10 @@
 pub mod admin_panel;
 pub mod api_keys;
 pub mod app_icon;
+pub mod assets;
 pub mod bash_path;
 pub mod chat;
+pub mod composer_invoke;
 pub mod desktop_stream;
 pub mod ext_market;
 pub mod fonts;
