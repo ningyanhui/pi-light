@@ -87,13 +87,98 @@ pub fn normalize_source(raw: &str) -> Result<String, String> {
     npm_spec(name, ver)
 }
 
+/// 安装失败分类：确认、网络、sidecar。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PkgErrorKind {
+    Confirmation,
+    Network,
+    Sidecar,
+}
+
+pub fn classify_pkg_error(err: &str) -> PkgErrorKind {
+    let lower = err.to_ascii_lowercase();
+    if err.contains("确认") || lower.contains("confirm") {
+        return PkgErrorKind::Confirmation;
+    }
+    if looks_like_network_error(&lower) {
+        return PkgErrorKind::Network;
+    }
+    PkgErrorKind::Sidecar
+}
+
+fn looks_like_network_error(lower: &str) -> bool {
+    const NEEDLES: &[&str] = &[
+        "econn",
+        "enotfound",
+        "etimedout",
+        "eai_again",
+        "network",
+        "timeout",
+        "timed out",
+        "超时",
+        "dns",
+        "socket hang",
+        "fetch failed",
+        "registry",
+        "proxy",
+        "offline",
+        "503",
+        "502",
+        "504",
+    ];
+    NEEDLES.iter().any(|n| lower.contains(n))
+}
+
+/// 给 UI 用的失败文案：网络 / 确认 / sidecar 必须能分清。
+pub fn format_pkg_error(err: &str) -> String {
+    match classify_pkg_error(err) {
+        PkgErrorKind::Confirmation => format!("安装未确认：{err}"),
+        PkgErrorKind::Network => format!("网络失败：{err}"),
+        PkgErrorKind::Sidecar => format!("Sidecar 失败：{err}"),
+    }
+}
+
 /// 未确认则拒绝执行，避免 UI 误触直接安装。
+///
+/// sidecar 退出码非 0 时仍核对 `pi list`：包已在列表里则视为成功。
 pub fn install_npm(bin: &Path, source: &str, confirmed: bool) -> Result<String, String> {
     if !confirmed {
         return Err("安装需要确认。第三方 Pi 包可执行代码。".to_owned());
     }
     let source = normalize_source(source)?;
-    run_pi_cli(bin, &["install", &source], Duration::from_secs(180))
+    match run_pi_cli(bin, &["install", &source], Duration::from_secs(180)) {
+        Ok(out) => Ok(out),
+        Err(err) => {
+            if package_listed(bin, &source) {
+                Ok(format!("installed {source}"))
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+fn package_listed(bin: &Path, source: &str) -> bool {
+    let Ok(listed) = list_cli(bin) else {
+        return false;
+    };
+    package_in_list(&listed, source)
+}
+
+pub fn package_in_list(listed: &[InstalledPackage], source: &str) -> bool {
+    let (want_name, want_ver) = display_name_version(source);
+    listed.iter().any(|pkg| {
+        let same_source = pkg.source == source
+            || pkg.source == format!("npm:{want_name}")
+            || pkg.name == want_name;
+        if !same_source {
+            return false;
+        }
+        match (want_ver.as_deref(), pkg.version.as_deref()) {
+            (Some(v), Some(have)) => have == v || have.starts_with(v),
+            _ => true,
+        }
+    })
 }
 
 pub fn remove_npm(bin: &Path, source: &str, confirmed: bool) -> Result<String, String> {
@@ -367,6 +452,7 @@ fn run_pi_cli(bin: &Path, args: &[&str], timeout: Duration) -> Result<String, St
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::bash_path::apply_to_command(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -490,6 +576,37 @@ mod tests {
     fn install_refuses_without_confirm() {
         let err = install_npm(Path::new("/definitely-missing-pi"), "npm:foo", false).unwrap_err();
         assert!(err.contains("确认"), "{err}");
+        assert_eq!(classify_pkg_error(&err), PkgErrorKind::Confirmation);
+    }
+
+    #[test]
+    fn classify_network_vs_sidecar() {
+        assert_eq!(
+            classify_pkg_error("npm ERR! network getaddrinfo ENOTFOUND registry.npmjs.org"),
+            PkgErrorKind::Network
+        );
+        assert_eq!(
+            classify_pkg_error("无法启动 Pi：系统找不到指定的文件"),
+            PkgErrorKind::Sidecar
+        );
+        assert!(format_pkg_error("ETIMEDOUT").starts_with("网络失败："));
+        assert!(format_pkg_error("exit 1").starts_with("Sidecar 失败："));
+    }
+
+    #[test]
+    fn package_in_list_matches_name_and_version() {
+        let listed = vec![InstalledPackage {
+            source: "npm:billion-context@0.1.212".to_owned(),
+            name: "billion-context".to_owned(),
+            version: Some("0.1.212".to_owned()),
+            scope: PkgScope::User,
+            filtered: false,
+            installed_path: None,
+            origin: PkgOrigin::User,
+        }];
+        assert!(package_in_list(&listed, "npm:billion-context@0.1.212"));
+        assert!(package_in_list(&listed, "npm:billion-context"));
+        assert!(!package_in_list(&listed, "npm:pi-lens"));
     }
 
     #[test]

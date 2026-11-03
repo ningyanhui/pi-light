@@ -330,11 +330,42 @@ impl AdminPanelState {
     }
 
     /// 将 RPC 获得的实时模型信息更新到 model_config。
+    ///
+    /// `None` 表示「这次没带模型字段」，不得清掉已经知道的 live / 默认模型。
+    /// 空列表表示「这次没带可用列表」，同样保留原值。
     pub fn update_live_model(&mut self, model_name: Option<String>, models: Vec<String>) {
-        self.model_config.live_model = model_name;
+        if let Some(name) = model_name {
+            if !name.is_empty() {
+                self.model_config.live_model = Some(name);
+            }
+        }
         if !models.is_empty() {
             self.model_config.available_models = models;
         }
+    }
+
+    /// settings 尚无默认模型时写入，并返回应发给 Pi 的 `set_model`。
+    pub fn persist_inferred_default(&mut self) -> Option<SetModelRequest> {
+        let (provider, model_id) = provider_catalog::infer_default_model(
+            self.model_config.live_model.as_deref(),
+            self.model_config.default_provider.as_deref(),
+            self.model_config.default_model.as_deref(),
+            &self.model_config.available_models,
+            &self.model_config.custom_providers,
+        )?;
+        if let Some(path) = self.model_config.settings_path.clone() {
+            match write_settings_model(&path, &provider, &model_id) {
+                Ok(()) => {
+                    self.model_config.default_provider = Some(provider.clone());
+                    self.model_config.default_model = Some(model_id.clone());
+                }
+                Err(e) => {
+                    self.last_error = Some(format!("保存默认模型失败：{e}"));
+                    return None;
+                }
+            }
+        }
+        Some(SetModelRequest { provider, model_id })
     }
 
     // ── Toggle ────────────────────────────────────────────────────────────
@@ -446,9 +477,12 @@ impl AdminPanelState {
             match preset_packages::sync_slim_into_settings(&settings, &root) {
                 Ok(true) => {
                     self.sidecar_restart_needed = true;
-                    self.market.reload_hint.get_or_insert_with(|| {
-                        "已写入发行包 Slim 预置。重启 sidecar 后生效。".to_owned()
-                    });
+                    if self.market.reload_hint.is_none() {
+                        self.market.set_reload_hint(
+                            true,
+                            "已写入发行包 Slim 预置。请重启 sidecar 或输入 /reload。",
+                        );
+                    }
                 }
                 Ok(false) => {}
                 Err(err) => {
@@ -478,9 +512,12 @@ impl AdminPanelState {
                     Ok(()) => {
                         self.reload_installed_packages();
                         self.sidecar_restart_needed = true;
-                        self.market.reload_hint = Some(format!(
-                            "已启用 {name}。重启 sidecar 后生效，也可在对话中输入 /reload。"
-                        ));
+                        self.market.set_reload_hint(
+                            true,
+                            format!(
+                                "已启用 {name}。请重启 sidecar 或在对话中输入 /reload，扩展才会生效。"
+                            ),
+                        );
                     }
                     Err(err) => self.last_error = Some(err),
                 }
@@ -498,7 +535,8 @@ impl AdminPanelState {
                 Ok(_) => {
                     self.reload_installed_packages();
                     self.sidecar_restart_needed = true;
-                    self.market.reload_hint = Some(format!("已停用 {name}。"));
+                    self.market
+                        .set_reload_hint(true, format!("已停用 {name}。"));
                 }
                 Err(err) => self.last_error = Some(err),
             },
@@ -537,7 +575,12 @@ impl AdminPanelState {
     ) -> AdminPanelReturn {
         if !self.open {
             self.add_provider.close();
-            return AdminPanelReturn::default();
+            // 抽屉关掉也要收安装结果，避免「其实装上了但界面当失败」。
+            let restart = self.market.poll();
+            return AdminPanelReturn {
+                restart_sidecar: restart,
+                ..AdminPanelReturn::default()
+            };
         }
 
         self.ensure_discovered();
@@ -807,12 +850,17 @@ impl AdminPanelState {
                             AdminTab::Models => {
                                 let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
                                 let models_path = pi_agent_dir().map(|dir| dir.join("models.json"));
-                                let current = provider_catalog::current_model_spec(
+                                let current = provider_catalog::display_model_spec(
                                     self.model_config.live_model.as_deref(),
                                     self.model_config.default_provider.as_deref(),
                                     self.model_config.default_model.as_deref(),
+                                    &self.model_config.available_models,
+                                    &self.model_config.custom_providers,
                                 );
-                                let available = self.model_config.available_models.clone();
+                                let available = provider_catalog::usable_model_specs(
+                                    &self.model_config.available_models,
+                                    &self.model_config.custom_providers,
+                                );
                                 let custom = self.model_config.custom_providers.clone();
                                 models_result = provider_catalog::render_models_tab(
                                     ui,
@@ -848,6 +896,8 @@ impl AdminPanelState {
                                     })
                                     .size(13.0),
                                 );
+                                ui.add_space(10.0);
+                                show_shell_source(ui);
                                 ui.add_space(8.0);
                                 egui::CollapsingHeader::new("高级：自己指定 Pi 程序")
                                     .default_open(false)
@@ -905,15 +955,16 @@ impl AdminPanelState {
             }
             InstalledAction::Reload => {
                 self.sidecar_restart_needed = true;
-                self.market.reload_hint = Some(
-                    "已请求重启 sidecar。新包在重启后生效，也可在对话中输入 /reload。".to_owned(),
+                self.market.set_reload_hint(
+                    true,
+                    "已请求重启 sidecar。请重启 sidecar 或在对话中输入 /reload，扩展才会生效。",
                 );
             }
             InstalledAction::None => {}
         }
         let modal_result = ext_market::render_market_modals(ctx, &mut self.market, pi_bin);
         if let Some(err) = modal_result.error {
-            self.last_error = Some(err);
+            self.last_error = Some(crate::pi_pkg::format_pkg_error(&err));
         }
         if modal_result.restart {
             self.sidecar_restart_needed = true;
@@ -1038,6 +1089,27 @@ fn apply_models_result(
             *model_request = Some(SetModelRequest { provider, model_id });
         } else {
             *want_restart = true;
+        }
+    } else if result.restart {
+        if let Some((provider, model_id)) = provider_catalog::infer_default_model(
+            cfg.live_model.as_deref(),
+            cfg.default_provider.as_deref(),
+            cfg.default_model.as_deref(),
+            &cfg.available_models,
+            &cfg.custom_providers,
+        ) {
+            if let Some(path) = cfg.settings_path.clone() {
+                match write_settings_model(&path, &provider, &model_id) {
+                    Ok(()) => {
+                        cfg.default_provider = Some(provider.clone());
+                        cfg.default_model = Some(model_id.clone());
+                    }
+                    Err(e) => *last_error = Some(format!("保存默认模型失败：{e}")),
+                }
+            }
+            if pi_connected {
+                *model_request = Some(SetModelRequest { provider, model_id });
+            }
         }
     }
 }
@@ -1314,6 +1386,37 @@ fn render_memory_list(
     open_path
 }
 
+/// 首次引导 / 通用设置：当前 bash 来源（内嵌 MinGit 或系统路径）。
+pub fn show_shell_source(ui: &mut egui::Ui) {
+    let probe = crate::bash_path::probe();
+    ui.label(egui::RichText::new("当前 Shell").strong().size(13.0));
+    ui.label(egui::RichText::new(format!("来源：{}", probe.source_label())).size(12.0));
+    if let Some(path) = probe.bash_exe() {
+        ui.label(
+            egui::RichText::new(path.display().to_string())
+                .monospace()
+                .size(11.0),
+        );
+        if crate::bash_path::is_wsl_launcher(path) {
+            ui.colored_label(
+                egui::Color32::from_rgb(210, 150, 70),
+                "这是 WSL 启动器，不会把它当作默认 shellPath。",
+            );
+        }
+    } else {
+        ui.label(
+            egui::RichText::new("未找到可用 bash。便携包应带 sidecar/bash；系统 Git 也可。")
+                .weak()
+                .size(12.0),
+        );
+    }
+    ui.label(
+        egui::RichText::new("不会使用 C:\\Windows\\System32\\bash.exe（WSL）。")
+            .weak()
+            .size(11.0),
+    );
+}
+
 /// 自行指定 Pi 程序的三种方式。
 ///
 /// 只放在折叠的高级区里，不作为首次打开的主界面。
@@ -1396,11 +1499,20 @@ fn render_models(
 
     // ── 当前模型 ──────────────────────────────────────────────────────────
     ui.label(egui::RichText::new("当前模型").strong().size(12.0));
-    let current = cfg
-        .live_model
-        .as_deref()
-        .or(cfg.default_model.as_deref())
-        .unwrap_or("尚未选择");
+    let current = {
+        let spec = provider_catalog::display_model_spec(
+            cfg.live_model.as_deref(),
+            cfg.default_provider.as_deref(),
+            cfg.default_model.as_deref(),
+            &cfg.available_models,
+            &cfg.custom_providers,
+        );
+        if spec.is_empty() {
+            "尚未选择".to_owned()
+        } else {
+            spec
+        }
+    };
     let provider = cfg.default_provider.as_deref().unwrap_or("尚未设置");
     ui.label(
         egui::RichText::new(format!("  模型：{current}"))
@@ -2052,15 +2164,14 @@ pub fn discover_model_config() -> ModelConfig {
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .map(|v| {
-            let prov = v
-                .get("defaultProvider")
-                .and_then(|x| x.as_str())
-                .map(str::to_owned);
-            let model = v
-                .get("defaultModel")
-                .and_then(|x| x.as_str())
-                .map(str::to_owned);
-            (prov, model)
+            let nonempty = |key: &str| {
+                v.get(key)
+                    .and_then(|x| x.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+            };
+            (nonempty("defaultProvider"), nonempty("defaultModel"))
         })
         .unwrap_or((None, None));
 
@@ -2107,21 +2218,15 @@ fn detect_auth_status(auth_path: Option<&Path>) -> AuthStatus {
 
 // ── Config write-back ─────────────────────────────────────────────────────
 
-/// 写回 settings.json 的 defaultProvider / defaultModel 字段（文件不存在则创建）。
-pub fn write_settings_model(path: &Path, provider: &str, model_id: &str) -> io::Result<()> {
+fn merge_settings_json(path: &Path, updates: &[(&str, serde_json::Value)]) -> io::Result<()> {
     let content = fs::read_to_string(path).unwrap_or_else(|_| "{}".to_owned());
     let mut val: serde_json::Value =
         serde_json::from_str(&content).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
     if let Some(obj) = val.as_object_mut() {
-        obj.insert(
-            "defaultProvider".to_owned(),
-            serde_json::Value::String(provider.to_owned()),
-        );
-        obj.insert(
-            "defaultModel".to_owned(),
-            serde_json::Value::String(model_id.to_owned()),
-        );
+        for (key, value) in updates {
+            obj.insert((*key).to_owned(), value.clone());
+        }
     }
 
     if let Some(parent) = path.parent() {
@@ -2131,6 +2236,62 @@ pub fn write_settings_model(path: &Path, provider: &str, model_id: &str) -> io::
     let out = serde_json::to_string_pretty(&val)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(path, out.as_bytes())
+}
+
+/// 写回 settings.json 的 defaultProvider / defaultModel 字段（文件不存在则创建）。
+pub fn write_settings_model(path: &Path, provider: &str, model_id: &str) -> io::Result<()> {
+    merge_settings_json(
+        path,
+        &[
+            (
+                "defaultProvider",
+                serde_json::Value::String(provider.to_owned()),
+            ),
+            (
+                "defaultModel",
+                serde_json::Value::String(model_id.to_owned()),
+            ),
+        ],
+    )
+}
+
+/// 把探测到的 bash 写入 `shellPath`。内嵌 MinGit 优先；绝不写入 WSL 启动器。
+///
+/// 返回是否写盘。
+pub fn ensure_settings_shell_path(
+    path: &Path,
+    probe: &crate::bash_path::BashProbe,
+) -> io::Result<bool> {
+    let Some(bash) = probe.bash_exe() else {
+        return Ok(false);
+    };
+    if crate::bash_path::is_wsl_launcher(bash) {
+        return Ok(false);
+    }
+    let desired = bash.to_string_lossy().into_owned();
+    let existing = fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("shellPath")
+                .and_then(|x| x.as_str())
+                .map(str::to_owned)
+        });
+    let should_write = match existing.as_deref() {
+        None | Some("") => true,
+        Some(prev) if crate::bash_path::is_wsl_launcher(Path::new(prev)) => true,
+        Some(prev)
+            if matches!(probe, crate::bash_path::BashProbe::Bundled { .. }) && prev != desired =>
+        {
+            true
+        }
+        Some(_) => false,
+    };
+    if !should_write {
+        return Ok(false);
+    }
+    merge_settings_json(path, &[("shellPath", serde_json::Value::String(desired))])?;
+    Ok(true)
 }
 
 // ── String helpers ────────────────────────────────────────────────────────
@@ -2311,6 +2472,76 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["defaultModel"].as_str(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn update_live_model_does_not_clear_existing() {
+        let mut panel = AdminPanelState::default();
+        panel.update_live_model(Some("alibaba/deepseek-v4-flash".into()), Vec::new());
+        panel.update_live_model(None, vec!["alibaba/deepseek-v4-flash".into()]);
+        assert_eq!(
+            panel.model_config.live_model.as_deref(),
+            Some("alibaba/deepseek-v4-flash")
+        );
+        assert_eq!(
+            panel.model_config.available_models,
+            vec!["alibaba/deepseek-v4-flash".to_owned()]
+        );
+        panel.update_live_model(Some(String::new()), Vec::new());
+        assert_eq!(
+            panel.model_config.live_model.as_deref(),
+            Some("alibaba/deepseek-v4-flash")
+        );
+    }
+
+    #[test]
+    fn persist_inferred_default_writes_single_custom_model() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "{}").unwrap();
+        let mut panel = AdminPanelState::default();
+        panel.model_config.settings_path = Some(path.clone());
+        panel.model_config.custom_providers = vec![CustomProvider {
+            id: "tex".to_owned(),
+            name: "Tex".to_owned(),
+            base_url: "https://example/v1".to_owned(),
+            api: "openai-completions".to_owned(),
+            models: vec!["alibaba/deepseek-v4-flash".to_owned()],
+        }];
+        let req = panel.persist_inferred_default().expect("infer");
+        assert_eq!(req.provider, "alibaba");
+        assert_eq!(req.model_id, "deepseek-v4-flash");
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["defaultProvider"].as_str(), Some("alibaba"));
+        assert_eq!(v["defaultModel"].as_str(), Some("deepseek-v4-flash"));
+        assert!(panel.persist_inferred_default().is_none());
+    }
+
+    #[test]
+    fn shell_path_overwrites_wsl_never_writes_wsl() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"shellPath":"C:\\Windows\\System32\\bash.exe"}"#).unwrap();
+        let probe = crate::bash_path::BashProbe::Bundled {
+            bash_exe: PathBuf::from(r"D:\app\sidecar\bash\usr\bin\bash.exe"),
+        };
+        assert!(ensure_settings_shell_path(&path, &probe).unwrap());
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            v["shellPath"].as_str(),
+            Some(r"D:\app\sidecar\bash\usr\bin\bash.exe")
+        );
+
+        let wsl = crate::bash_path::BashProbe::System {
+            bash_exe: PathBuf::from(r"C:\Windows\System32\bash.exe"),
+        };
+        fs::write(&path, "{}").unwrap();
+        assert!(!ensure_settings_shell_path(&path, &wsl).unwrap());
+        let v2: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(v2.get("shellPath").is_none());
     }
 
     // ── write_skills_exclusion ────────────────────────────────────────────

@@ -269,6 +269,8 @@ pub struct ExtMarketState {
     pub job_label: Option<String>,
     pub last_job: Option<JobResult>,
     pub reload_hint: Option<String>,
+    /// `true` = 成功（绿）；`false` = 失败（需能区分网络 / 确认 / sidecar）。
+    pub reload_hint_ok: bool,
     tx: Sender<BgMsg>,
     rx: Receiver<BgMsg>,
 }
@@ -303,6 +305,7 @@ impl Default for ExtMarketState {
             job_label: None,
             last_job: None,
             reload_hint: None,
+            reload_hint_ok: false,
             tx,
             rx,
         }
@@ -323,6 +326,11 @@ impl ExtMarketState {
         thread::spawn(move || {
             let _ = tx.send(BgMsg::Catalog(fetch_npm_search(&query)));
         });
+    }
+
+    pub fn set_reload_hint(&mut self, ok: bool, text: impl Into<String>) {
+        self.reload_hint_ok = ok;
+        self.reload_hint = Some(text.into());
     }
 
     pub fn poll(&mut self) -> bool {
@@ -358,9 +366,12 @@ impl ExtMarketState {
                             kind: JobKind::Install { spec },
                             outcome: Ok(_),
                         } => {
-                            self.reload_hint = Some(format!(
-                                "已安装 {spec}。已请求重启 sidecar；也可在对话中输入 /reload。"
-                            ));
+                            self.set_reload_hint(
+                                true,
+                                format!(
+                                    "已安装 {spec}。请重启 sidecar 或在对话中输入 /reload，扩展才会生效。"
+                                ),
+                            );
                             self.detail = None;
                             restart = true;
                         }
@@ -368,14 +379,17 @@ impl ExtMarketState {
                             kind: JobKind::Remove { spec },
                             outcome: Ok(_),
                         } => {
-                            self.reload_hint = Some(format!("已移除 {spec}。已请求重启 sidecar。"));
+                            self.set_reload_hint(
+                                true,
+                                format!("已移除 {spec}。请重启 sidecar 或在对话中输入 /reload。"),
+                            );
                             self.confirm_remove = None;
                             restart = true;
                         }
                         JobResult {
                             outcome: Err(err), ..
                         } => {
-                            self.reload_hint = Some(err.clone());
+                            self.set_reload_hint(false, crate::pi_pkg::format_pkg_error(err));
                         }
                     }
                     self.last_job = Some(result);
@@ -915,12 +929,43 @@ pub fn render_marketplace(
     ui.add_space(6.0);
 
     if let Some(hint) = state.reload_hint.clone() {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(hint).size(12.0));
-            if ui.small_button("×").clicked() {
-                state.reload_hint = None;
-            }
-        });
+        let color = if state.reload_hint_ok {
+            egui::Color32::from_rgb(90, 200, 130)
+        } else {
+            egui::Color32::from_rgb(220, 120, 90)
+        };
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+            .rounding(egui::Rounding::same(8.0))
+            .fill(if state.reload_hint_ok {
+                egui::Color32::from_rgb(18, 42, 30)
+            } else {
+                egui::Color32::from_rgb(48, 24, 20)
+            })
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let title = if !state.reload_hint_ok {
+                        "未完成"
+                    } else if hint.contains("已安装") {
+                        "安装成功"
+                    } else {
+                        "已完成"
+                    };
+                    ui.label(egui::RichText::new(title).color(color).strong().size(12.0));
+                    ui.label(egui::RichText::new(hint).color(color).size(12.0));
+                    if state.reload_hint_ok
+                        && ui
+                            .small_button("重启 sidecar /reload")
+                            .on_hover_text("让新安装的包生效")
+                            .clicked()
+                    {
+                        result.restart = true;
+                    }
+                    if ui.small_button("×").clicked() {
+                        state.reload_hint = None;
+                    }
+                });
+            });
     }
     if let Some(label) = &state.job_label {
         ui.label(
