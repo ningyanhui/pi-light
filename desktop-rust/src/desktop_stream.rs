@@ -283,7 +283,7 @@ impl CaptureError {
 pub fn capture_primary_rgb() -> Result<(u32, u32, Vec<u8>), CaptureError> {
     #[cfg(windows)]
     {
-        return windows_capture_primary();
+        windows_capture_primary()
     }
     #[cfg(not(windows))]
     {
@@ -310,7 +310,7 @@ pub fn capture_encoded_frame(seq: u64) -> Result<DesktopFrame, CaptureError> {
 pub fn apply_input(ev: &DesktopInput) -> Result<(), String> {
     #[cfg(windows)]
     {
-        return windows_apply_input(ev);
+        windows_apply_input(ev)
     }
     #[cfg(not(windows))]
     {
@@ -421,9 +421,8 @@ fn windows_apply_input(ev: &DesktopInput) -> Result<(), String> {
 #[cfg(windows)]
 fn windows_pointer(ev: &DesktopInput) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
-        MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-        MOUSE_EVENT_FLAGS,
+        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     };
 
     windows_move_abs(ev.x, ev.y)?;
@@ -532,9 +531,7 @@ fn windows_mouse_move(
     dy: i32,
     data: i32,
 ) -> Result<(), String> {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
-    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT};
 
     let input = INPUT {
         r#type: INPUT_MOUSE,
@@ -555,7 +552,7 @@ fn windows_mouse_move(
 #[cfg(windows)]
 fn windows_key(ev: &DesktopInput) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
     };
 
     let Some(vk) = vk_from_name(&ev.key) else {
@@ -595,8 +592,7 @@ fn windows_key(ev: &DesktopInput) -> Result<(), String> {
 #[cfg(windows)]
 fn windows_text(text: &str) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-        VIRTUAL_KEY,
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VIRTUAL_KEY,
     };
 
     if text.is_empty() {
