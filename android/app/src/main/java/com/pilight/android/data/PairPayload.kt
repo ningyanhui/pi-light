@@ -75,12 +75,88 @@ data class ChatLine(
     val text: String,
 )
 
+data class ToolCard(
+    val id: String,
+    val name: String,
+    val status: String,
+    val args: String? = null,
+    val durationMs: Long? = null,
+)
+
 data class ChatSnapshot(
     val writable: Boolean,
     val streaming: Boolean,
+    val canStop: Boolean,
     val partial: String,
     val host: String,
     val sessionTitle: String,
     val messages: List<ChatLine>,
+    val tools: List<ToolCard>,
     val relay: String?,
 )
+
+data class StreamEvent(
+    val event: String,
+    val data: org.json.JSONObject,
+)
+
+fun parseToolCard(item: org.json.JSONObject): ToolCard? {
+    val id = item.optString("id").ifBlank { item.optString("tool_call_id") }
+    val name = item.optString("name").ifBlank { item.optString("tool_name") }
+    if (id.isBlank() && name.isBlank()) return null
+    val args = item.optString("args").ifBlank { null }
+    val duration =
+        if (item.has("duration_ms") && !item.isNull("duration_ms")) {
+            item.optLong("duration_ms")
+        } else {
+            null
+        }
+    return ToolCard(
+        id = id.ifBlank { name },
+        name = name.ifBlank { "tool" },
+        status = item.optString("status").ifBlank { "done" },
+        args = args,
+        durationMs = duration,
+    )
+}
+
+fun upsertTool(tools: List<ToolCard>, incoming: ToolCard): List<ToolCard> {
+    val next = tools.toMutableList()
+    val idx = next.indexOfFirst { it.id == incoming.id }
+    if (idx >= 0) {
+        val prev = next[idx]
+        next[idx] = incoming.copy(args = incoming.args ?: prev.args)
+    } else {
+        next.add(incoming)
+    }
+    return next
+}
+
+fun parseSseFrames(text: String): List<StreamEvent> {
+    val events = mutableListOf<StreamEvent>()
+    var event = "message"
+    val data = StringBuilder()
+    fun flush() {
+        if (data.isEmpty()) return
+        val obj =
+            runCatching { org.json.JSONObject(data.toString()) }.getOrElse {
+                org.json.JSONObject().put("raw", data.toString())
+            }
+        events.add(StreamEvent(event, obj))
+        event = "message"
+        data.clear()
+    }
+    for (raw in text.split("\n")) {
+        val line = raw.trimEnd('\r')
+        when {
+            line.isEmpty() -> flush()
+            line.startsWith("event:") -> event = line.substringAfter("event:").trim()
+            line.startsWith("data:") -> {
+                if (data.isNotEmpty()) data.append('\n')
+                data.append(line.substringAfter("data:").trim())
+            }
+        }
+    }
+    flush()
+    return events
+}

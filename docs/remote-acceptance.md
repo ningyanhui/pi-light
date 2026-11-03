@@ -59,6 +59,14 @@ curl -s -X POST http://127.0.0.1:17831/v1/chat \
   -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d '{"text":"ping from curl"}'
+# 可选：流式 + 停止
+curl -N -X POST http://127.0.0.1:17831/v1/chat \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'accept: text/event-stream' \
+  -H 'content-type: application/json' \
+  -d '{"text":"stream please","stream":true}'
+curl -s -X POST http://127.0.0.1:17831/v1/chat/stop \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Android 模拟器打宿主机网关可用 `http://10.0.2.2:17831`（debug 允许该 cleartext）。这只证明协议，**不是**蜂窝↔家宽验收。
