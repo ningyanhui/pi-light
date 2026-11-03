@@ -17,7 +17,7 @@ use pi_light::{
     provider_catalog,
     remote_access::RemoteAccessState,
     remote_gateway::CompanionChatEvent,
-    session_insights::{StatsFetchState, TraceDisplayState, UsageDisplayState},
+    session_insights::{StatsFetchState, TraceDisplayState},
     session_ref::{self, RefCandidate, RefChip, RefChooserState},
     session_store::{self, RpcAttach},
 };
@@ -122,7 +122,13 @@ impl PiLightApp {
             remote: RemoteAccessState::load_default(),
             companion_reply: None,
         };
+        app.admin.discover_all();
+        app.ensure_shell_path();
+        let pending_model = app.admin.persist_inferred_default();
         app.try_spawn_rpc();
+        if let Some(req) = pending_model {
+            app.handle_set_model_request(req);
+        }
         app
     }
 
@@ -131,6 +137,7 @@ impl PiLightApp {
         self.spawn_error = None;
         self.ref_chooser.close();
         self.ref_chips.clear();
+        self.ensure_shell_path();
 
         if let Some(path) = self.pi_probe.path() {
             let ctx = self.egui_ctx.clone();
@@ -348,13 +355,22 @@ impl PiLightApp {
                         self.admin.update_live_model(model.clone(), Vec::new());
                         self.sessions
                             .set_active_session_file(session_file.clone(), session_id.clone());
+                        if let Some(req) = self.admin.persist_inferred_default() {
+                            self.handle_set_model_request(req);
+                        }
                     }
                     PiRpcEvent::AvailableModels(models) => {
                         self.admin.update_live_model(None, models.clone());
+                        if let Some(req) = self.admin.persist_inferred_default() {
+                            self.handle_set_model_request(req);
+                        }
                     }
                     PiRpcEvent::ModelChanged(model) => {
                         self.admin
                             .update_live_model(Some(model.clone()), Vec::new());
+                        if let Some(req) = self.admin.persist_inferred_default() {
+                            self.handle_set_model_request(req);
+                        }
                     }
                     PiRpcEvent::SessionCommandDone {
                         cancelled: true, ..
@@ -479,6 +495,17 @@ impl PiLightApp {
         }
     }
 
+    fn ensure_shell_path(&mut self) {
+        let Some(dir) = admin_panel::pi_agent_dir() else {
+            return;
+        };
+        let path = dir.join("settings.json");
+        let probe = pi_light::bash_path::probe();
+        if let Err(e) = admin_panel::ensure_settings_shell_path(&path, &probe) {
+            self.admin.last_error = Some(format!("写入 shellPath 失败：{e}"));
+        }
+    }
+
     /// 向 Pi 发送 set_model 命令。
     fn handle_set_model_request(&mut self, req: SetModelRequest) {
         if let Some(client) = &mut self.rpc_client {
@@ -599,51 +626,85 @@ impl eframe::App for PiLightApp {
         self.show_footer(ctx);
 
         // ── Header ────────────────────────────────────────────────────────
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("⚡").size(22.0).color(amber()));
-                ui.heading("pi-light");
-                ui.weak("轻量桌面助手");
+        egui::TopBottomPanel::top("header")
+            .frame(
+                egui::Frame::none()
+                    .fill(chrome_bg())
+                    .inner_margin(egui::Margin::symmetric(14.0, 8.0))
+                    .stroke(egui::Stroke::new(1.0_f32, hairline())),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("⚡").size(20.0).color(amber()));
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("pi-light")
+                                .strong()
+                                .size(15.0)
+                                .color(egui::Color32::from_rgb(236, 237, 242)),
+                        );
+                        ui.label(
+                            egui::RichText::new("智能 Agent 工作台")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(130, 134, 148)),
+                        );
+                    });
 
-                let (dot_color, dot_tip) = pi_dot_color(&self.pi_probe, self.rpc_client.is_some());
-                ui.colored_label(dot_color, "●").on_hover_text(dot_tip);
-                if self.sessions.active_is_streaming() {
-                    ui.weak("生成中");
-                }
-                ui.separator();
-                let current = provider_catalog::current_model_spec(
-                    self.admin.model_config.live_model.as_deref(),
-                    self.admin.model_config.default_provider.as_deref(),
-                    self.admin.model_config.default_model.as_deref(),
-                );
-                let models = self.admin.model_config.available_models.clone();
-                if let Some(spec) = provider_catalog::show_model_combo(
-                    ui,
-                    "header_model_combo",
-                    &current,
-                    &models,
-                    220.0,
-                ) {
-                    if let Some((provider, model_id)) = provider_catalog::parse_model_spec(&spec) {
-                        if let Some(path) = self.admin.model_config.settings_path.clone() {
-                            if write_settings_model(&path, &provider, &model_id).is_ok() {
-                                self.admin.model_config.default_provider = Some(provider.clone());
-                                self.admin.model_config.default_model = Some(model_id.clone());
+                    ui.add_space(16.0);
+                    let current = provider_catalog::display_model_spec(
+                        self.admin.model_config.live_model.as_deref(),
+                        self.admin.model_config.default_provider.as_deref(),
+                        self.admin.model_config.default_model.as_deref(),
+                        &self.admin.model_config.available_models,
+                        &self.admin.model_config.custom_providers,
+                    );
+                    let models = provider_catalog::usable_model_specs(
+                        &self.admin.model_config.available_models,
+                        &self.admin.model_config.custom_providers,
+                    );
+                    if let Some(spec) = show_model_chip(ui, "header_model_combo", &current, &models)
+                    {
+                        if let Some((provider, model_id)) =
+                            provider_catalog::parse_model_spec(&spec)
+                        {
+                            if let Some(path) = self.admin.model_config.settings_path.clone() {
+                                if write_settings_model(&path, &provider, &model_id).is_ok() {
+                                    self.admin.model_config.default_provider =
+                                        Some(provider.clone());
+                                    self.admin.model_config.default_model = Some(model_id.clone());
+                                }
                             }
+                            self.handle_set_model_request(SetModelRequest { provider, model_id });
                         }
-                        self.handle_set_model_request(SetModelRequest { provider, model_id });
                     }
-                }
-                ui.separator();
-                let folder = self
-                    .workdir
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(".");
-                ui.weak(folder)
-                    .on_hover_text(self.workdir.to_string_lossy());
+
+                    if self.sessions.active_is_streaming() {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("生成中")
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(180, 170, 120)),
+                        );
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let folder = self
+                            .workdir
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or(".");
+                        ui.label(
+                            egui::RichText::new(folder)
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(140, 144, 158)),
+                        )
+                        .on_hover_text(self.workdir.to_string_lossy());
+                        let (dot_color, dot_tip) =
+                            pi_dot_color(&self.pi_probe, self.rpc_client.is_some());
+                        ui.colored_label(dot_color, "●").on_hover_text(dot_tip);
+                    });
+                });
             });
-        });
 
         // ── 主路径：模型引导 / 缺程序说明 / 对话 ─────────────────────────
         let surface =
@@ -699,24 +760,35 @@ impl PiLightApp {
 
         egui::SidePanel::left("session_list")
             .resizable(true)
-            .default_width(176.0)
-            .min_width(132.0)
+            .default_width(188.0)
+            .min_width(148.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(sidebar_bg())
+                    .inner_margin(egui::Margin::symmetric(10.0, 12.0))
+                    .stroke(egui::Stroke::new(1.0_f32, hairline())),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("会话").strong().size(13.0));
+                    ui.label(
+                        egui::RichText::new("◌  会话")
+                            .strong()
+                            .size(13.0)
+                            .color(egui::Color32::from_rgb(220, 222, 230)),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let btn = ui.add_enabled(!streaming, egui::Button::new("＋"));
+                        let btn = ui.add_enabled(
+                            !streaming,
+                            egui::Button::new(egui::RichText::new("＋").size(14.0))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE),
+                        );
                         if btn.on_hover_text("新建会话").clicked() {
                             want_new = true;
                         }
                     });
                 });
-                ui.label(
-                    egui::RichText::new("关闭后保留，下次启动恢复")
-                        .weak()
-                        .size(10.0),
-                );
-                ui.separator();
+                ui.add_space(4.0);
 
                 let list_height = (ui.available_height() - 96.0).max(48.0);
                 egui::ScrollArea::vertical()
@@ -736,9 +808,28 @@ impl PiLightApp {
                         }
                     });
 
+                ui.add_space(10.0);
+                sidebar_nav_row(ui, "◎", "插件", "扩展市场", || {
+                    self.admin.open = true;
+                    self.admin.active_tab = AdminTab::Marketplace;
+                });
+                sidebar_nav_row(ui, "▣", "知识库", "记忆", || {
+                    self.admin.open = true;
+                    self.admin.active_tab = AdminTab::Memory;
+                });
+                sidebar_nav_row(ui, "▤", "数据", "MCP / Skills", || {
+                    self.admin.open = true;
+                    self.admin.active_tab = AdminTab::Skills;
+                });
+
                 ui.add_space(8.0);
                 ui.separator();
-                ui.label(egui::RichText::new("工作目录").strong().size(12.0));
+                ui.label(
+                    egui::RichText::new("工作目录")
+                        .strong()
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(150, 154, 168)),
+                );
                 if self.workdir_editing {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.workdir_draft)
@@ -794,17 +885,15 @@ impl PiLightApp {
         let can_retry = self.sessions.active_chat().can_retry();
         let chips_empty = self.ref_chips.is_empty();
 
-        egui::TopBottomPanel::bottom("insights_bar")
-            .min_height(28.0)
-            .show(ctx, |ui| {
-                show_session_insights_bar(ui, self.sessions.active_chat());
-            });
-
         egui::TopBottomPanel::bottom("chat_input")
-            .min_height(56.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(chrome_bg())
+                    .inner_margin(egui::Margin::symmetric(16.0, 10.0))
+                    .stroke(egui::Stroke::new(1.0_f32, hairline())),
+            )
+            .min_height(72.0)
             .show(ctx, |ui| {
-                ui.add_space(8.0);
-
                 let mut chip_to_remove: Option<usize> = None;
                 if !self.ref_chips.is_empty() {
                     ui.horizontal_wrapped(|ui| {
@@ -833,9 +922,9 @@ impl PiLightApp {
                     let can_send = !is_streaming && (!input.trim().is_empty() || !chips_empty);
 
                     let input_response = ui.add_sized(
-                        [ui.available_width() - 140.0, 32.0],
+                        [ui.available_width() - 148.0, 36.0],
                         egui::TextEdit::singleline(input)
-                            .hint_text("输入消息，按 Enter 发送；输入 # 引用会话…")
+                            .hint_text("输入消息或使用 / 唤起工具…  # 引用会话")
                             .interactive(!is_streaming),
                     );
 
@@ -851,7 +940,22 @@ impl PiLightApp {
                     if ui
                         .add_enabled(
                             can_send,
-                            egui::Button::new("发送").min_size([60.0, 32.0].into()),
+                            egui::Button::new(
+                                egui::RichText::new("➤")
+                                    .color(if can_send {
+                                        ink()
+                                    } else {
+                                        egui::Color32::from_rgb(160, 160, 170)
+                                    })
+                                    .size(14.0),
+                            )
+                            .fill(if can_send {
+                                accent()
+                            } else {
+                                egui::Color32::from_rgb(40, 42, 54)
+                            })
+                            .rounding(egui::Rounding::same(16.0))
+                            .min_size([36.0, 36.0].into()),
                         )
                         .clicked()
                     {
@@ -1067,23 +1171,37 @@ impl PiLightApp {
         let mut toggle_settings = false;
         let mut reprobe = false;
         egui::TopBottomPanel::bottom("app_footer")
-            .exact_height(40.0)
+            .exact_height(36.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(chrome_bg())
+                    .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                    .stroke(egui::Stroke::new(1.0_f32, hairline())),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add_space(4.0);
-                    let gear = egui::Button::new(egui::RichText::new("⚙  设置").color(
+                    let online = self.rpc_client.is_some() && self.pi_probe.is_ready();
+                    ui.colored_label(
+                        if online {
+                            egui::Color32::from_rgb(80, 200, 120)
+                        } else {
+                            egui::Color32::from_rgb(200, 90, 70)
+                        },
+                        if online { "● 在线" } else { "● 离线" },
+                    );
+                    let gear = egui::Button::new(egui::RichText::new("⚙ 设置").size(12.0).color(
                         if self.admin.open {
                             ink()
                         } else {
-                            egui::Color32::from_rgb(230, 232, 238)
+                            egui::Color32::from_rgb(200, 202, 210)
                         },
                     ))
                     .fill(if self.admin.open {
-                        amber()
+                        accent()
                     } else {
-                        egui::Color32::from_rgb(36, 40, 54)
+                        egui::Color32::TRANSPARENT
                     })
-                    .min_size(egui::vec2(96.0, 28.0));
+                    .min_size(egui::vec2(72.0, 22.0));
                     if ui
                         .add(gear)
                         .on_hover_text(
@@ -1093,6 +1211,11 @@ impl PiLightApp {
                     {
                         toggle_settings = true;
                     }
+                    ui.label(
+                        egui::RichText::new("pi-light 可能会犯错，请核对别关键信息。")
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(110, 114, 128)),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .small_button("重新探测")
@@ -1100,6 +1223,15 @@ impl PiLightApp {
                             .clicked()
                         {
                             reprobe = true;
+                        }
+                        if self.onboarding_dismissed {
+                            ui.label(
+                                egui::RichText::new(
+                                    self.sessions.active_chat().insights.footer_metrics_line(),
+                                )
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(170, 174, 188)),
+                            );
                         }
                     });
                 });
@@ -1178,6 +1310,8 @@ impl PiLightApp {
                             format!("程序已找到，但这次没有启动成功：{note}"),
                         );
                     }
+                    ui.add_space(10.0);
+                    admin_panel::show_shell_source(ui);
                     ui.add_space(14.0);
                     if primary_button(ui, "+ 配置模型").clicked() {
                         open_models = true;
@@ -1210,6 +1344,9 @@ impl PiLightApp {
             self.admin.open = false;
             self.admin.opened_pass = None;
             self.admin.add_provider.close();
+            if let Some(req) = self.admin.persist_inferred_default() {
+                self.handle_set_model_request(req);
+            }
         }
     }
 
@@ -1360,25 +1497,50 @@ impl PiLightApp {
 // ── 外观：深色底 + 自绘闪电（不引用外部图片）────────────────────────────
 
 fn amber() -> egui::Color32 {
-    egui::Color32::from_rgb(244, 198, 96)
+    egui::Color32::from_rgb(232, 196, 112)
+}
+
+fn accent() -> egui::Color32 {
+    egui::Color32::from_rgb(168, 148, 255)
 }
 
 fn ink() -> egui::Color32 {
-    egui::Color32::from_rgb(28, 24, 16)
+    egui::Color32::from_rgb(16, 14, 22)
+}
+
+fn chrome_bg() -> egui::Color32 {
+    egui::Color32::from_rgb(10, 11, 16)
+}
+
+fn sidebar_bg() -> egui::Color32 {
+    egui::Color32::from_rgb(8, 8, 14)
+}
+
+fn card_bg() -> egui::Color32 {
+    egui::Color32::from_rgb(16, 17, 24)
+}
+
+fn hairline() -> egui::Color32 {
+    egui::Color32::from_rgb(28, 30, 40)
 }
 
 fn apply_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
-    visuals.window_fill = egui::Color32::from_rgb(17, 19, 27);
-    visuals.panel_fill = egui::Color32::from_rgb(22, 25, 34);
-    visuals.extreme_bg_color = egui::Color32::from_rgb(30, 34, 46);
-    visuals.faint_bg_color = egui::Color32::from_rgb(36, 40, 54);
-    visuals.code_bg_color = egui::Color32::from_rgb(28, 32, 44);
-    visuals.hyperlink_color = amber();
-    visuals.selection.bg_fill = egui::Color32::from_rgb(72, 58, 28);
-    visuals.selection.stroke.color = amber();
-    visuals.window_rounding = egui::Rounding::same(8.0);
-    visuals.menu_rounding = egui::Rounding::same(6.0);
+    visuals.window_fill = chrome_bg();
+    visuals.panel_fill = chrome_bg();
+    visuals.extreme_bg_color = card_bg();
+    visuals.faint_bg_color = egui::Color32::from_rgb(20, 22, 30);
+    visuals.code_bg_color = egui::Color32::from_rgb(18, 20, 28);
+    visuals.hyperlink_color = accent();
+    visuals.selection.bg_fill = egui::Color32::from_rgb(56, 48, 88);
+    visuals.selection.stroke.color = accent();
+    visuals.window_rounding = egui::Rounding::same(10.0);
+    visuals.menu_rounding = egui::Rounding::same(8.0);
+    visuals.widgets.noninteractive.bg_fill = card_bg();
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(18, 19, 26);
+    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(26, 28, 38);
+    visuals.widgets.active.bg_fill = egui::Color32::from_rgb(32, 34, 46);
+    visuals.widgets.open.bg_fill = egui::Color32::from_rgb(24, 26, 36);
     for widgets in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,
@@ -1386,9 +1548,67 @@ fn apply_theme(ctx: &egui::Context) {
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widgets.rounding = egui::Rounding::same(6.0);
+        widgets.rounding = egui::Rounding::same(8.0);
+        widgets.fg_stroke.color = egui::Color32::from_rgb(214, 216, 224);
     }
     ctx.set_visuals(visuals);
+}
+
+fn show_model_chip(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    current: &str,
+    models: &[String],
+) -> Option<String> {
+    let mut selected = None;
+    let chip = if current.is_empty() {
+        "✦  模型 · 尚未选择".to_owned()
+    } else {
+        let short = current.rsplit('/').next().unwrap_or(current);
+        format!("✦  模型 · {short}")
+    };
+    let mut choices: Vec<String> = models.to_vec();
+    if !current.is_empty() && !choices.iter().any(|m| m == current) {
+        choices.insert(0, current.to_owned());
+    }
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+        .rounding(egui::Rounding::same(8.0))
+        .fill(egui::Color32::from_rgb(18, 19, 28))
+        .stroke(egui::Stroke::new(1.0_f32, hairline()))
+        .show(ui, |ui| {
+            egui::ComboBox::from_id_salt(id_salt)
+                .width(188.0)
+                .selected_text(egui::RichText::new(chip).size(12.5))
+                .show_ui(ui, |ui| {
+                    if choices.is_empty() {
+                        ui.weak("连上 Pi 后会列出可用模型");
+                        return;
+                    }
+                    for model in &choices {
+                        if ui.selectable_label(model == current, model).clicked() {
+                            selected = Some(model.clone());
+                        }
+                    }
+                });
+        });
+    selected.filter(|m| m != current)
+}
+
+fn sidebar_nav_row(ui: &mut egui::Ui, icon: &str, label: &str, tip: &str, on_click: impl FnOnce()) {
+    let resp = ui.add(
+        egui::Button::new(
+            egui::RichText::new(format!("{icon}  {label}"))
+                .size(13.0)
+                .color(egui::Color32::from_rgb(168, 172, 186)),
+        )
+        .fill(egui::Color32::TRANSPARENT)
+        .stroke(egui::Stroke::NONE)
+        .min_size(egui::vec2(ui.available_width(), 28.0)),
+    );
+    if resp.on_hover_text(tip).clicked() {
+        on_click();
+    }
 }
 
 fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
@@ -1468,44 +1688,6 @@ fn paint_lightning_backdrop(ui: &egui::Ui) {
 
 // ── M3′ Trace / Token UI ──────────────────────────────────────────────────
 
-fn show_session_insights_bar(ui: &mut egui::Ui, chat: &ChatState) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Token").strong().size(12.0));
-        match chat.insights.usage_display_state() {
-            UsageDisplayState::Available => {
-                if let Some(line) = chat.insights.usage_summary_line() {
-                    ui.label(egui::RichText::new(line).monospace().size(11.0));
-                } else {
-                    ui.weak("（字段不完整）");
-                }
-            }
-            UsageDisplayState::Unknown => {
-                if chat.insights.stats_fetch == StatsFetchState::Pending {
-                    ui.weak("用量统计中…");
-                } else {
-                    ui.weak("用量未知 — Pi 尚未上报 usage / stats 字段");
-                }
-            }
-            UsageDisplayState::Unsupported => {
-                ui.weak("不支持 — 当前 Pi 无法提供 get_session_stats");
-            }
-        }
-        let running = chat
-            .insights
-            .trace_steps
-            .iter()
-            .filter(|s| s.running)
-            .count();
-        if running > 0 {
-            ui.separator();
-            ui.colored_label(
-                egui::Color32::from_rgb(210, 160, 50),
-                format!("🛠 {running} 个工具运行中"),
-            );
-        }
-    });
-}
-
 fn show_tool_cards(ui: &mut egui::Ui, chat: &ChatState) {
     for step in &chat.insights.trace_steps {
         show_tool_card(ui, step);
@@ -1515,45 +1697,64 @@ fn show_tool_cards(ui: &mut egui::Ui, chat: &ChatState) {
 
 fn show_tool_card(ui: &mut egui::Ui, step: &pi_light::pi_rpc::TraceStep) {
     let (status, color) = if step.running {
-        ("运行中…", egui::Color32::from_rgb(210, 160, 50))
+        ("运行中", egui::Color32::from_rgb(210, 170, 80))
     } else if step.is_error {
-        ("失败", egui::Color32::from_rgb(210, 80, 60))
+        ("失败", egui::Color32::from_rgb(210, 90, 80))
     } else {
-        ("完成", egui::Color32::from_rgb(80, 160, 100))
+        ("完成", egui::Color32::from_rgb(90, 180, 120))
     };
     let dur = step
         .duration_ms
-        .map(|ms| format!(" · {ms} ms"))
-        .unwrap_or_default();
+        .map(|ms| format!("{:.1}s", ms as f64 / 1000.0))
+        .unwrap_or_else(|| "—".to_owned());
     egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-        .rounding(egui::Rounding::same(6.0))
-        .fill(ui.visuals().extreme_bg_color)
-        .stroke(egui::Stroke::new(1.0_f32, color))
+        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .rounding(egui::Rounding::same(10.0))
+        .fill(card_bg())
+        .stroke(egui::Stroke::new(1.0_f32, hairline()))
         .show(ui, |ui| {
-            ui.set_max_width(ui.available_width() * 0.85);
+            ui.set_max_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("🛠").size(12.0));
                 ui.label(
                     egui::RichText::new(&step.tool_name)
                         .strong()
                         .monospace()
-                        .size(12.0),
+                        .size(12.5)
+                        .color(egui::Color32::from_rgb(230, 232, 240)),
                 );
-                ui.colored_label(color, status);
-                if !dur.is_empty() {
-                    ui.weak(dur);
-                }
+                ui.label(
+                    egui::RichText::new("TOOL")
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(140, 150, 200)),
+                );
+                ui.label(
+                    egui::RichText::new(step.args_preview.as_deref().unwrap_or(status))
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(150, 154, 168)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(dur)
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(140, 144, 158)),
+                    );
+                    ui.colored_label(color, status);
+                });
             });
-            if let Some(args) = &step.args_preview {
-                ui.label(egui::RichText::new(args).monospace().weak().size(10.0));
-            }
         });
 }
 
 fn show_trace_section(ui: &mut egui::Ui, chat: &ChatState) {
     ui.add_space(10.0);
-    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("✦  思考过程")
+                .strong()
+                .size(13.0)
+                .color(egui::Color32::from_rgb(210, 212, 222)),
+        );
+    });
+    ui.add_space(4.0);
     egui::CollapsingHeader::new("Trace / 工具调用")
         .default_open(true)
         .id_salt("pi_light_trace")
@@ -1572,14 +1773,15 @@ fn show_trace_section(ui: &mut egui::Ui, chat: &ChatState) {
 fn show_user_message(ui: &mut egui::Ui, text: &str) {
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
         egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-            .rounding(egui::Rounding::same(8.0))
-            .fill(egui::Color32::from_rgb(40, 100, 180))
+            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+            .rounding(egui::Rounding::same(12.0))
+            .fill(egui::Color32::from_rgb(22, 24, 34))
+            .stroke(egui::Stroke::new(1.0_f32, hairline()))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.75);
+                ui.set_max_width(ui.available_width() * 0.72);
                 ui.label(
                     egui::RichText::new(text)
-                        .color(egui::Color32::WHITE)
+                        .color(egui::Color32::from_rgb(232, 234, 240))
                         .size(14.0),
                 );
             });
@@ -1589,16 +1791,21 @@ fn show_user_message(ui: &mut egui::Ui, text: &str) {
 fn show_assistant_message(ui: &mut egui::Ui, text: &str, streaming: bool) {
     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
         egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+            .inner_margin(egui::Margin::symmetric(4.0, 6.0))
             .rounding(egui::Rounding::same(8.0))
-            .fill(ui.visuals().code_bg_color)
+            .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.75);
-                if streaming {
-                    ui.label(egui::RichText::new(format!("{text}▌")).size(14.0));
+                ui.set_max_width(ui.available_width() * 0.92);
+                let body = if streaming {
+                    format!("{text}▌")
                 } else {
-                    ui.label(egui::RichText::new(text).size(14.0));
-                }
+                    text.to_owned()
+                };
+                ui.label(
+                    egui::RichText::new(body)
+                        .size(14.0)
+                        .color(egui::Color32::from_rgb(214, 216, 224)),
+                );
             });
     });
 }

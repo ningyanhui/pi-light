@@ -133,25 +133,10 @@ pub enum PiRpcEvent {
 
 // ── Bash PATH injection ───────────────────────────────────────────────────
 
-/// Prepend bundled bash/MSYS dirs to the child process PATH (Windows only).
-///
-/// This ensures Pi can locate `bash.exe` when running shell commands, using
-/// the portable MinGit environment bundled in `sidecar/bash/`.  If no bundled
-/// bash exists the function is a no-op; Pi falls back to whatever `bash` is in
-/// the inherited PATH.
+/// Prepend the preferred bash (embedded MinGit, else real Git) to PATH.
+/// Never advertises `C:\Windows\System32\bash.exe` as SHELL.
 fn inject_bundled_bash_path(cmd: &mut Command) {
-    let extra_dirs = crate::bash_path::bundled_path_dirs();
-    if extra_dirs.is_empty() {
-        return;
-    }
-    let base = std::env::var_os("PATH").unwrap_or_default();
-    let all: Vec<std::path::PathBuf> = extra_dirs
-        .into_iter()
-        .chain(std::env::split_paths(&base))
-        .collect();
-    if let Ok(new_path) = std::env::join_paths(&all) {
-        cmd.env("PATH", new_path);
-    }
+    crate::bash_path::apply_to_command(cmd);
 }
 
 // ── Client ────────────────────────────────────────────────────────────────
@@ -600,8 +585,14 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 
 /// M4′: 将 model 对象序列化为 "{provider}/{modelId}" 字符串。
 fn format_model_str(model: &Value) -> Option<String> {
+    if let Some(s) = model.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(s.to_owned());
+    }
     let provider = model.get("provider").and_then(Value::as_str)?;
-    let model_id = model.get("modelId").and_then(Value::as_str)?;
+    let model_id = model
+        .get("modelId")
+        .or_else(|| model.get("id"))
+        .and_then(Value::as_str)?;
     Some(format!("{provider}/{model_id}"))
 }
 
@@ -813,6 +804,20 @@ mod tests {
             r#"{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello"}}"#,
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn parse_get_state_accepts_string_model() {
+        let events = parse_one(
+            r#"{"type":"response","command":"get_state","success":true,"data":{"model":"alibaba/deepseek-v4-flash"}}"#,
+        );
+        assert!(matches!(
+            &events[0],
+            PiRpcEvent::StateInfo {
+                model: Some(m),
+                ..
+            } if m == "alibaba/deepseek-v4-flash"
+        ));
     }
 
     #[test]

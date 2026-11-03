@@ -2,6 +2,8 @@
 //
 // Session-level Trace / Token insights (M3′) — parsed from Pi RPC only.
 
+use std::time::{Duration, Instant};
+
 use crate::pi_rpc::{PiRpcEvent, SessionStats, TokenUsage, TraceStep};
 
 /// How much token usage we can honestly show in the UI.
@@ -41,6 +43,9 @@ pub struct SessionInsights {
     pub session_stats: Option<SessionStats>,
     pub stats_fetch: StatsFetchState,
     pub trace_steps: Vec<TraceStep>,
+    turn_started_at: Option<Instant>,
+    pub last_elapsed: Option<Duration>,
+    pub last_tps: Option<f64>,
 }
 
 impl SessionInsights {
@@ -75,6 +80,83 @@ impl SessionInsights {
 
     pub fn on_stats_request_sent(&mut self) {
         self.stats_fetch = StatsFetchState::Pending;
+    }
+
+    pub fn on_turn_start(&mut self) {
+        self.turn_started_at = Some(Instant::now());
+        self.last_elapsed = None;
+        self.last_tps = None;
+    }
+
+    pub fn on_turn_end(&mut self) {
+        let Some(start) = self.turn_started_at.take() else {
+            return;
+        };
+        let elapsed = start.elapsed();
+        self.last_elapsed = Some(elapsed);
+        if let Some(out) = self.effective_usage().output {
+            let secs = elapsed.as_secs_f64().max(0.001);
+            self.last_tps = Some(out as f64 / secs);
+        }
+    }
+
+    fn compact_count(n: u64) -> String {
+        if n >= 10_000 {
+            format!("{:.1}K", n as f64 / 1000.0)
+        } else {
+            n.to_string()
+        }
+    }
+
+    /// 底栏：Tokens · Trace · tok/s（对齐验收原型）。
+    pub fn footer_metrics_line(&self) -> String {
+        let tokens = self.tokens_chip();
+        let (trace_n, trace_time) = self.trace_chip();
+        let tps = self
+            .last_tps
+            .map(|v| format!("{v:.0} tok/s"))
+            .unwrap_or_else(|| "— tok/s".to_owned());
+        format!("Tokens {tokens}  ·  Trace {trace_n}调用 · {trace_time}  ·  {tps}")
+    }
+
+    fn tokens_chip(&self) -> String {
+        let used = self
+            .session_stats
+            .as_ref()
+            .and_then(|s| s.context_tokens)
+            .or_else(|| self.effective_usage().total)
+            .or_else(
+                || match (self.effective_usage().input, self.effective_usage().output) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    _ => None,
+                },
+            );
+        let window = self.session_stats.as_ref().and_then(|s| s.context_window);
+        match (used, window) {
+            (Some(u), Some(w)) => format!("{}/{}", Self::compact_count(u), Self::compact_count(w)),
+            (Some(u), None) => Self::compact_count(u),
+            (None, Some(w)) => format!("—/{}", Self::compact_count(w)),
+            (None, None) => "—".to_owned(),
+        }
+    }
+
+    fn trace_chip(&self) -> (usize, String) {
+        let n = self.trace_steps.len();
+        let ms: u64 = self.trace_steps.iter().filter_map(|s| s.duration_ms).sum();
+        let elapsed = self
+            .last_elapsed
+            .map(|d| d.as_secs_f64())
+            .filter(|s| *s > 0.0);
+        let time = if ms > 0 {
+            format!("{:.1}s", ms as f64 / 1000.0)
+        } else if let Some(s) = elapsed {
+            format!("{s:.1}s")
+        } else {
+            "—".to_owned()
+        };
+        (n, time)
     }
 
     pub fn handle_rpc_event(&mut self, event: &PiRpcEvent) {
@@ -235,5 +317,29 @@ mod tests {
             ins.trace_steps[0].args_preview.as_deref(),
             Some("{\"command\":\"ls\"}")
         );
+    }
+
+    #[test]
+    fn footer_metrics_include_tokens_trace_tps() {
+        let mut ins = SessionInsights::default();
+        ins.on_turn_start();
+        ins.handle_rpc_event(&PiRpcEvent::UsageUpdate(TokenUsage {
+            input: Some(100),
+            output: Some(50),
+            total: Some(150),
+            cache_read: None,
+            cache_write: None,
+        }));
+        ins.handle_rpc_event(&PiRpcEvent::ToolTraceEnd {
+            tool_call_id: "c1".to_owned(),
+            tool_name: "bash".to_owned(),
+            is_error: false,
+            duration_ms: Some(7300),
+        });
+        ins.on_turn_end();
+        let line = ins.footer_metrics_line();
+        assert!(line.contains("Tokens"), "{line}");
+        assert!(line.contains("Trace 1调用"), "{line}");
+        assert!(line.contains("tok/s"), "{line}");
     }
 }

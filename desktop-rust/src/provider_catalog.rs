@@ -165,6 +165,81 @@ pub fn current_model_spec(
     }
 }
 
+/// 自定义提供商里的模型拼成 `provider/modelId`；模型 id 已含 `/` 时原样使用。
+pub fn custom_model_spec(provider: &CustomProvider, model: &str) -> String {
+    let model = model.trim();
+    if model.is_empty() {
+        return String::new();
+    }
+    if model.contains('/') {
+        model.to_owned()
+    } else {
+        format!("{}/{}", provider.id, model)
+    }
+}
+
+/// RPC 列表 + models.json 自定义端点中的可用模型（去重、保序）。
+pub fn usable_model_specs(available: &[String], custom: &[CustomProvider]) -> Vec<String> {
+    let mut out = Vec::new();
+    for spec in available {
+        let spec = spec.trim();
+        if spec.is_empty() || out.iter().any(|existing| existing == spec) {
+            continue;
+        }
+        out.push(spec.to_owned());
+    }
+    for provider in custom {
+        for model in &provider.models {
+            let spec = custom_model_spec(provider, model);
+            if spec.is_empty() || out.iter().any(|existing| existing == &spec) {
+                continue;
+            }
+            out.push(spec);
+        }
+    }
+    out
+}
+
+/// 设置里还没有默认模型时：优先用正在用的 live，否则在恰好只有一个可用模型时选它。
+pub fn infer_default_model(
+    live: Option<&str>,
+    default_provider: Option<&str>,
+    default_model: Option<&str>,
+    available: &[String],
+    custom: &[CustomProvider],
+) -> Option<(String, String)> {
+    if let (Some(p), Some(m)) = (default_provider, default_model) {
+        if !p.is_empty() && !m.is_empty() {
+            return None;
+        }
+    }
+    if let Some(live) = live.filter(|s| !s.is_empty()) {
+        return parse_model_spec(live);
+    }
+    let usable = usable_model_specs(available, custom);
+    if usable.len() == 1 {
+        return parse_model_spec(&usable[0]);
+    }
+    None
+}
+
+/// 顶栏 / 设置下拉用的当前模型：live → 已存默认 → 可推断的唯一模型。
+pub fn display_model_spec(
+    live: Option<&str>,
+    default_provider: Option<&str>,
+    default_model: Option<&str>,
+    available: &[String],
+    custom: &[CustomProvider],
+) -> String {
+    let current = current_model_spec(live, default_provider, default_model);
+    if !current.is_empty() {
+        return current;
+    }
+    infer_default_model(live, default_provider, default_model, available, custom)
+        .map(|(p, m)| format!("{p}/{m}"))
+        .unwrap_or_default()
+}
+
 /// 模型下拉。返回新选中的 `provider/modelId`。
 pub fn show_model_combo(
     ui: &mut egui::Ui,
@@ -1039,6 +1114,53 @@ mod tests {
             "anthropic/claude"
         );
         assert_eq!(current_model_spec(None, None, None), "");
+    }
+
+    fn tex_provider() -> CustomProvider {
+        CustomProvider {
+            id: "tex".to_owned(),
+            name: "Tex".to_owned(),
+            base_url: "https://example/v1".to_owned(),
+            api: "openai-completions".to_owned(),
+            models: vec!["alibaba/deepseek-v4-flash".to_owned()],
+        }
+    }
+
+    #[test]
+    fn infer_default_uses_live_then_single_usable() {
+        assert_eq!(
+            infer_default_model(
+                Some("alibaba/deepseek-v4-flash"),
+                None,
+                None,
+                &[],
+                &[tex_provider()]
+            ),
+            Some(("alibaba".to_owned(), "deepseek-v4-flash".to_owned()))
+        );
+        assert_eq!(
+            infer_default_model(None, None, None, &[], &[tex_provider()]),
+            Some(("alibaba".to_owned(), "deepseek-v4-flash".to_owned()))
+        );
+        assert_eq!(
+            infer_default_model(None, Some("openai"), Some("gpt-4o"), &[], &[tex_provider()]),
+            None
+        );
+        assert!(
+            infer_default_model(None, None, None, &["a/one".into(), "b/two".into()], &[]).is_none()
+        );
+    }
+
+    #[test]
+    fn display_model_avoids_empty_when_configured() {
+        assert_eq!(
+            display_model_spec(None, None, None, &[], &[tex_provider()]),
+            "alibaba/deepseek-v4-flash"
+        );
+        assert_eq!(
+            display_model_spec(Some(""), Some(""), Some(""), &["tex/only".into()], &[]),
+            "tex/only"
+        );
     }
 
     #[test]

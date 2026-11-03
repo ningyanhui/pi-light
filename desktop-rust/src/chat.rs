@@ -48,6 +48,7 @@ impl ChatState {
         self.is_streaming = true;
         self.streaming_buf.clear();
         self.error = None;
+        self.insights.on_turn_start();
     }
 
     /// Append a text delta to the current streaming buffer.
@@ -67,6 +68,7 @@ impl ChatState {
             self.messages
                 .push(ChatMessage::Assistant("[已中止]".to_owned()));
         }
+        self.insights.on_turn_end();
         self.scroll_to_bottom = true;
     }
 
@@ -74,6 +76,7 @@ impl ChatState {
     pub fn set_error(&mut self, error: String) {
         self.is_streaming = false;
         self.streaming_buf.clear();
+        self.insights.on_turn_end();
         self.error = Some(error);
     }
 
@@ -108,6 +111,12 @@ impl ChatState {
                 self.set_error("Pi 进程已退出，请重新探测或重启。".to_owned());
             }
             PiRpcEvent::CommandError { command, error } => {
+                if matches!(
+                    command.as_str(),
+                    "set_model" | "get_available_models" | "get_state"
+                ) {
+                    return;
+                }
                 self.set_error(format!("命令 `{command}` 失败：{error}"));
             }
             PiRpcEvent::UsageUpdate(_)

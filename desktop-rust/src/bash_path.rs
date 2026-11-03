@@ -11,7 +11,10 @@
 // PATH 注入：bundled_path_dirs() 返回需要前置插入子进程 PATH 的目录列表。
 // 调用者（pi_rpc::PiRpcClient::spawn）在 spawn 时一次性注入，满足"单次校验入口"约束。
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 // ── 公共类型 ───────────────────────────────────────────────────────────────
 
@@ -49,6 +52,16 @@ impl BashProbe {
     }
 }
 
+/// `C:\Windows\System32\bash.exe` 是 WSL 启动器，不能当 Git Bash / 默认 shellPath。
+pub fn is_wsl_launcher(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    normalized.contains(r"\windows\system32\bash.exe")
+        || normalized.contains(r"\windows\sysnative\bash.exe")
+}
+
 // ── 公开探测入口 ────────────────────────────────────────────────────────────
 
 /// 按探测顺序返回 bash 就绪状态。
@@ -61,8 +74,39 @@ pub fn probe() -> BashProbe {
     let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|v| std::env::split_paths(&v).collect())
         .unwrap_or_default();
+    let known = known_system_git_bash();
 
-    probe_impl(exe_dir.as_deref(), &path_dirs)
+    probe_impl_full(exe_dir.as_deref(), &path_dirs, &known)
+}
+
+/// 给 sidecar / `pi install` 注入 PATH 与 SHELL。内嵌 MinGit 优先，排除 WSL。
+pub fn apply_to_command(cmd: &mut Command) {
+    let probe = probe();
+    let mut extras = bundled_path_dirs();
+    if extras.is_empty() {
+        if let Some(exe) = probe.bash_exe() {
+            if !is_wsl_launcher(exe) {
+                if let Some(dir) = exe.parent() {
+                    extras.push(dir.to_path_buf());
+                }
+            }
+        }
+    }
+    if !extras.is_empty() {
+        let base = std::env::var_os("PATH").unwrap_or_default();
+        let all: Vec<PathBuf> = extras
+            .into_iter()
+            .chain(std::env::split_paths(&base))
+            .collect();
+        if let Ok(new_path) = std::env::join_paths(&all) {
+            cmd.env("PATH", new_path);
+        }
+    }
+    if let Some(exe) = probe.bash_exe() {
+        if !is_wsl_launcher(exe) {
+            cmd.env("SHELL", exe);
+        }
+    }
 }
 
 /// 返回需要前置插入子进程 PATH 的捆绑目录列表（有序，优先级由高到低）。
@@ -81,7 +125,17 @@ pub fn bundled_path_dirs() -> Vec<PathBuf> {
 // ── 可测试的内部实现 ────────────────────────────────────────────────────────
 
 /// 依赖注入版本：接受显式参数，方便单元测试。
+#[cfg(test)]
 pub(crate) fn probe_impl(exe_dir: Option<&Path>, path_dirs: &[PathBuf]) -> BashProbe {
+    probe_impl_full(exe_dir, path_dirs, &[])
+}
+
+/// 与 [`probe_impl`] 相同，另加「常见自定义盘 Git」候选（测试可注入）。
+pub(crate) fn probe_impl_full(
+    exe_dir: Option<&Path>,
+    path_dirs: &[PathBuf],
+    known_system: &[PathBuf],
+) -> BashProbe {
     // 1. 捆绑 sidecar（仅 Windows）：先 bash.exe，再 MinGit 原件 sh.exe
     if let Some(dir) = exe_dir {
         for d in bundled_path_dirs_from(dir) {
@@ -96,10 +150,13 @@ pub(crate) fn probe_impl(exe_dir: Option<&Path>, path_dirs: &[PathBuf]) -> BashP
         }
     }
 
-    // 2. 系统 PATH 回退（只认正式 bash 名，避免把无关 sh 当成系统 bash）
+    // 2. 系统 PATH 回退（只认正式 bash 名；跳过 WSL 启动器）
     let bash_name = bash_binary_name();
     for dir in path_dirs {
         let candidate = dir.join(bash_name);
+        if is_wsl_launcher(&candidate) {
+            continue;
+        }
         if candidate.is_file() {
             return BashProbe::System {
                 bash_exe: candidate,
@@ -107,7 +164,64 @@ pub(crate) fn probe_impl(exe_dir: Option<&Path>, path_dirs: &[PathBuf]) -> BashP
         }
     }
 
+    // 3. 常见 Git 安装位置（含 D:\programs\Git\bin\bash.exe 等自定义盘）
+    for candidate in known_system {
+        if is_wsl_launcher(candidate) {
+            continue;
+        }
+        if candidate.is_file() {
+            return BashProbe::System {
+                bash_exe: candidate.clone(),
+            };
+        }
+    }
+
     BashProbe::NotAvailable
+}
+
+/// 常见 Git Bash 相对盘符路径。含 Program Files 与自定义 `programs\Git`。
+pub fn known_git_bash_relatives() -> &'static [&'static str] {
+    &[
+        "programs/Git/bin/bash.exe",
+        "Program Files/Git/bin/bash.exe",
+        "Program Files (x86)/Git/bin/bash.exe",
+        "Git/bin/bash.exe",
+        "dev/Git/bin/bash.exe",
+        "tools/Git/bin/bash.exe",
+    ]
+}
+
+fn known_system_git_bash() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut out = Vec::new();
+        if let Ok(root) = std::env::var("ProgramFiles") {
+            out.push(PathBuf::from(root).join("Git").join("bin").join("bash.exe"));
+        }
+        if let Ok(root) = std::env::var("ProgramFiles(x86)") {
+            out.push(PathBuf::from(root).join("Git").join("bin").join("bash.exe"));
+        }
+        if let Ok(root) = std::env::var("LOCALAPPDATA") {
+            out.push(
+                PathBuf::from(root)
+                    .join("Programs")
+                    .join("Git")
+                    .join("bin")
+                    .join("bash.exe"),
+            );
+        }
+        for letter in b'A'..=b'Z' {
+            let drive = format!("{}:\\", letter as char);
+            for rel in known_git_bash_relatives() {
+                out.push(PathBuf::from(&drive).join(rel));
+            }
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
 }
 
 /// 从给定的 exe_dir 计算捆绑 bash 所需的 PATH 目录列表。
@@ -282,5 +396,45 @@ mod tests {
         let n = BashProbe::NotAvailable;
         assert!(!n.is_available());
         assert!(n.bash_exe().is_none());
+    }
+
+    #[test]
+    fn wsl_launcher_is_never_default() {
+        assert!(is_wsl_launcher(Path::new(r"C:\Windows\System32\bash.exe")));
+        assert!(is_wsl_launcher(Path::new(r"C:/Windows/Sysnative/bash.exe")));
+        assert!(!is_wsl_launcher(Path::new(r"D:\programs\Git\bin\bash.exe")));
+        assert!(!is_wsl_launcher(Path::new(
+            r"C:\Program Files\Git\bin\bash.exe"
+        )));
+
+        let result = probe_impl(None, &[PathBuf::from(r"C:\Windows\System32")]);
+        assert_eq!(result, BashProbe::NotAvailable);
+    }
+
+    #[test]
+    fn known_custom_drive_git_beats_wsl_path() {
+        let tmp = TempDir::new().unwrap();
+        let git_bin = tmp.path().join("programs").join("Git").join("bin");
+        fs::create_dir_all(&git_bin).unwrap();
+        let bash = touch(&git_bin, "bash.exe");
+
+        let result = probe_impl_full(
+            None,
+            &[PathBuf::from(r"C:\Windows\System32")],
+            std::slice::from_ref(&bash),
+        );
+        assert!(
+            matches!(result, BashProbe::System { .. }),
+            "expected System Git, got {:?}",
+            result
+        );
+        assert_eq!(result.bash_exe(), Some(bash.as_path()));
+    }
+
+    #[test]
+    fn known_relatives_include_custom_programs_git() {
+        assert!(known_git_bash_relatives()
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case("programs/Git/bin/bash.exe")));
     }
 }
