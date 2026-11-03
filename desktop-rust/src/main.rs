@@ -11,6 +11,7 @@ use pi_light::{
     admin_panel::{
         self, write_settings_model, AdminPanelReturn, AdminPanelState, AdminTab, SetModelRequest,
     },
+    app_icon,
     chat::{ChatMessage, ChatState, SessionHub},
     fonts,
     onboarding::{self, FirstRunSurface},
@@ -30,7 +31,8 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("pi-light")
             .with_inner_size([1180.0, 760.0])
-            .with_min_inner_size([720.0, 480.0]),
+            .with_min_inner_size([720.0, 480.0])
+            .with_icon(app_icon::icon_data()),
         ..Default::default()
     };
 

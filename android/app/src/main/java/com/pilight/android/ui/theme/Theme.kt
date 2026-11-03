@@ -11,8 +11,10 @@ val PurpleDeep = Color(0xFF2A1648)
 val Bg = Color(0xFF0B0714)
 val Surface = Color(0xFF161022)
 val SurfaceCard = Color(0xFF1C1333)
+val SurfaceElevated = Color(0xFF22183A)
 val Connected = Color(0xFF4ADE80)
 val Muted = Color(0xFF9CA3AF)
+val AccentBlue = Color(0xFF3B82F6)
 
 private val DarkColors =
     darkColorScheme(

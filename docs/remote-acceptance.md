@@ -1,8 +1,8 @@
 # 远程访问验收（v3 M5 + M6-lite）
 
-桌面设置抽屉 **远程访问** 页对照原型 `acceptance/04-desktop-remote`。Android companion 对照 `acceptance/03-mobile-pair`、`acceptance/05-mobile-chat`、`mobile-v2/01-home`、`mobile-v2/05-chat`（只学信息架构，不拷贝他仓实现）。
+桌面设置抽屉 **远程访问** 页对照原型 `acceptance/04-desktop-remote`。Android companion 对照 `acceptance/03-mobile-pair`、`acceptance/05-mobile-chat`、`acceptance/06-mobile-desktop`、`mobile-v2/01-home`、`02-desktop-modes`、`03-touch`、`04-fullscreen`、`05-chat`、`06-security`（只学信息架构，不拷贝他仓实现）。
 
-本里程碑交付：**公网配对 + 一通远程聊天**。远程桌面三档（浏览 / 触控 / 全屏）不在范围。
+本里程碑交付：**公网配对 + 一通远程聊天**，以及 companion 上的浏览 / 触控 / 全屏三档壳。像素流尚未接入 `/v1` 协议，预览面显示中继主机状态，不假装直播帧率。
 
 ## 配对流程
 
@@ -68,7 +68,7 @@ Android 模拟器打宿主机网关可用 `http://10.0.2.2:17831`（debug 允许
 ## 诚实限制
 
 - 这不是局域网产品。未建立公网中继就不能声称「手机在外面能连」。
-- 远程桌面三档（浏览 / 触控 / 全屏）不在本里程碑；companion 上的「远程桌面」入口会说明即将推出。
+- 远程桌面三档（浏览 / 触控 / 全屏）已有 companion 壳；像素流与键鼠注入尚未接入协议，不能当成完整远程桌面验收。
 - 电脑操控扩展不会因为打开远程而自动启用。
 - 聊天默认可写同一 Pi 会话；只读观察不是默认，本里程碑不做该设置项。
 - cloudflared 体积较大；未过 SHA 的文件不得留在 sidecar/relay，也不得打进 Release。

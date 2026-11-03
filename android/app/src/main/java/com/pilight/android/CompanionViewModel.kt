@@ -10,6 +10,7 @@ import com.pilight.android.data.CompanionSession
 import com.pilight.android.data.CompanionStore
 import com.pilight.android.data.PairCodes
 import com.pilight.android.data.PairPayload
+import com.pilight.android.data.SecurityPrefs
 import com.pilight.android.data.describeChatError
 import com.pilight.android.data.describeClaimError
 import com.pilight.android.data.normalizeRelayUrl
@@ -53,7 +54,11 @@ class CompanionViewModel(app: Application) : AndroidViewModel(app) {
     private val _chat = MutableStateFlow(ChatUi())
     val chat: StateFlow<ChatUi> = _chat
 
+    private val _security = MutableStateFlow(store.loadSecurity())
+    val security: StateFlow<SecurityPrefs> = _security
+
     private var pollJob: Job? = null
+    private var lastDesktopActivityMs: Long = 0L
 
     init {
         if (_home.value.session != null) {
@@ -161,6 +166,22 @@ class CompanionViewModel(app: Application) : AndroidViewModel(app) {
         store.clear()
         _home.value = HomeUi()
         _chat.value = ChatUi()
+    }
+
+    fun updateSecurity(transform: (SecurityPrefs) -> SecurityPrefs) {
+        val next = transform(_security.value)
+        store.saveSecurity(next)
+        _security.value = next
+    }
+
+    fun markDesktopActivity() {
+        lastDesktopActivityMs = System.currentTimeMillis()
+    }
+
+    fun desktopTimedOut(): Boolean {
+        val window = _security.value.timeoutMinutes.coerceAtLeast(1) * 60_000L
+        if (lastDesktopActivityMs == 0L) return false
+        return System.currentTimeMillis() - lastDesktopActivityMs > window
     }
 
     fun clearError() {

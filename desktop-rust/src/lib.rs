@@ -3,6 +3,7 @@
 
 pub mod admin_panel;
 pub mod api_keys;
+pub mod app_icon;
 pub mod bash_path;
 pub mod chat;
 pub mod ext_market;
