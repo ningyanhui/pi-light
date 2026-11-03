@@ -2,97 +2,218 @@ package com.pilight.android.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pilight.android.BuildConfig
 import com.pilight.android.CompanionViewModel
+import com.pilight.android.data.RelayRegion
+import com.pilight.android.data.TimeoutOptions
+import com.pilight.android.ui.theme.PurpleBright
+import com.pilight.android.ui.theme.PurplePrimary
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     vm: CompanionViewModel,
     onPair: () -> Unit,
 ) {
     val home by vm.home.collectAsStateWithLifecycle()
-    Column(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-        Text(
-            "本客户端不内嵌 Pi。配对成功后经 Cloudflare Tunnel 中继访问家里的桌面会话。",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.secondary,
-        )
+    val security by vm.security.collectAsStateWithLifecycle()
+    var pickTimeout by remember { mutableStateOf(false) }
+    var pickRegion by remember { mutableStateOf(false) }
 
-        HorizontalDivider()
-
-        ListItem(
-            headlineContent = { Text("应用版本") },
-            supportingContent = { Text("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})") },
-        )
-        ListItem(
-            headlineContent = { Text("构建类型") },
-            supportingContent = { Text("${BuildConfig.BUILD_TYPE} · companion M6-lite") },
-        )
-        ListItem(
-            headlineContent = { Text("Pi sidecar") },
-            supportingContent = { Text("未捆绑 · 由 Windows desktop-rust 托管") },
-        )
-        ListItem(
-            headlineContent = { Text("当前桌面") },
-            supportingContent = {
-                Text(
-                    home.session?.let { "${it.hostName} · ${it.relayUrl}" } ?: "未配对",
-                )
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = {
+                Text("安全设置", fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth())
             },
+            actions = {
+                IconButton(onClick = { }) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "更多")
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
         )
-        ListItem(
-            headlineContent = { Text("相机") },
-            supportingContent = { Text("仅用于扫描桌面配对二维码；也可手输配对码") },
-        )
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SectionLabel("设备安全")
+            ListItem(
+                leadingContent = { Icon(Icons.Outlined.Shield, contentDescription = null, tint = PurplePrimary) },
+                headlineContent = { Text("撤销设备") },
+                supportingContent = {
+                    Text("断开此设备与帐户的关联，终止所有远程访问权限。")
+                },
+                trailingContent = {
+                    if (home.session == null) {
+                        TextButton(onClick = onPair) { Text("去配对") }
+                    } else {
+                        OutlinedButton(onClick = { vm.unpair() }) { Text("撤销设备") }
+                    }
+                },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
 
-        if (home.session == null) {
-            TextButton(onClick = onPair) { Text("去配对") }
-        } else {
-            OutlinedButton(
-                onClick = { vm.unpair() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-            ) {
-                Text("解除本机配对")
-            }
+            SectionLabel("远程桌面安全")
+            ListItem(
+                leadingContent = { Icon(Icons.Outlined.Fingerprint, contentDescription = null, tint = PurplePrimary) },
+                headlineContent = { Text("远程桌面需生物识别解锁") },
+                supportingContent = { Text("在建立远程桌面连接前，必须完成生物识别验证。") },
+                trailingContent = {
+                    Switch(
+                        checked = security.biometricLock,
+                        onCheckedChange = { on -> vm.updateSecurity { it.copy(biometricLock = on) } },
+                        colors = SwitchDefaults.colors(checkedTrackColor = PurpleBright),
+                    )
+                },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
+            ListItem(
+                leadingContent = { Icon(Icons.Outlined.Schedule, contentDescription = null, tint = PurplePrimary) },
+                headlineContent = { Text("会话超时") },
+                supportingContent = { Text("在没有活动的情况下，自动断开远程桌面会话。") },
+                trailingContent = {
+                    TextButton(onClick = { pickTimeout = true }) { Text(security.timeoutLabel) }
+                },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
+            ListItem(
+                leadingContent = { Icon(Icons.Outlined.Language, contentDescription = null, tint = PurplePrimary) },
+                headlineContent = { Text("中继区域") },
+                supportingContent = { Text("选择中继服务器的地理区域以优化连接延迟。当前仍使用桌面给出的公网中继 URL。") },
+                trailingContent = {
+                    TextButton(onClick = { pickRegion = true }) { Text(security.relayRegion.label) }
+                },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
+            ListItem(
+                leadingContent = { Icon(Icons.Outlined.Info, contentDescription = null, tint = PurplePrimary) },
+                headlineContent = { Text("为什么选择中继区域？") },
+                supportingContent = { Text("靠近您的区域可提供更低的延迟和更稳定的连接。") },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
+            ListItem(
+                leadingContent = { Icon(Icons.Outlined.Shield, contentDescription = null, tint = PurplePrimary) },
+                headlineContent = { Text("提示") },
+                supportingContent = { Text("这些设置仅影响远程桌面连接和行为，不影响设备本地的安全。") },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            SectionLabel("关于")
+            ListItem(
+                headlineContent = { Text("应用版本") },
+                supportingContent = { Text("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})") },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
+            ListItem(
+                headlineContent = { Text("当前桌面") },
+                supportingContent = {
+                    Text(home.session?.let { "${it.hostName} · ${it.relayUrl}" } ?: "未配对")
+                },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+            )
             Text(
-                "这只清除手机上的 token。若要从桌面撤销授权，请到设置 → 远程访问 → 已授权设备。",
+                "本客户端不内嵌 Pi。配对成功后经 Cloudflare Tunnel 中继访问家里的桌面会话。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            Text(
+                "诚实限制：远程依赖公网中继；临时 trycloudflare 主机名每次启动都会变。浏览 / 触控 / 全屏是 companion 壳；像素流尚未接入协议。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
         }
+    }
 
-        HorizontalDivider()
-        Text("诚实限制", fontWeight = FontWeight.SemiBold)
-        Text("• 远程依赖公网中继；临时 trycloudflare 主机名每次启动都会变。")
-        Text("• 同一局域网并不能代替公网验收。演示请用蜂窝网手机 + 家宽桌面。")
-        Text("• 远程桌面三档（浏览 / 触控 / 全屏）尚未开放。")
-        Text("• 默认可写桌面当前 Pi 会话，不是只读观察。")
+    if (pickTimeout) {
+        AlertDialog(
+            onDismissRequest = { pickTimeout = false },
+            title = { Text("会话超时") },
+            text = {
+                Column {
+                    TimeoutOptions.minutes.forEach { m ->
+                        TextButton(
+                            onClick = {
+                                vm.updateSecurity { it.copy(timeoutMinutes = m) }
+                                pickTimeout = false
+                            },
+                        ) { Text("${m}分钟") }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { pickTimeout = false }) { Text("关闭") } },
+        )
+    }
+    if (pickRegion) {
+        AlertDialog(
+            onDismissRequest = { pickRegion = false },
+            title = { Text("中继区域") },
+            text = {
+                Column {
+                    RelayRegion.entries.forEach { region ->
+                        TextButton(
+                            onClick = {
+                                vm.updateSecurity { it.copy(relayRegionId = region.id) }
+                                pickRegion = false
+                            },
+                        ) { Text(region.label) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { pickRegion = false }) { Text("关闭") } },
+        )
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(text, color = PurplePrimary, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.size(1.dp))
     }
 }

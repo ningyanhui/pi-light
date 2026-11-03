@@ -101,6 +101,16 @@ License:      MIT OR Apache-2.0
 Used to generate pairing codes and device tokens.
 
 ------------------------------------------------------------------------
+Component: winres
+------------------------------------------------------------------------
+Repository:   https://github.com/mxre/winres
+Version:      0.1 (pinned in desktop-rust/Cargo.toml, Windows build-only)
+License:      MIT
+
+Embeds `desktop-rust/assets/pi-light.ico` into the Windows PE resource
+table so Explorer and the taskbar show the brand mark.
+
+------------------------------------------------------------------------
 Component: cloudflared
 ------------------------------------------------------------------------
 Repository:   https://github.com/cloudflare/cloudflared
@@ -126,7 +136,8 @@ Repository:   https://github.com/zxing/zxing
 Version:      3.5.3 (pinned in android/app/build.gradle.kts)
 License:      Apache-2.0
 
-Used to decode desktop pairing QR codes from CameraX frames.
+Used to decode desktop pairing QR codes from CameraX frames, and to
+render a pair-code QR on the companion pair screen.
 
 ------------------------------------------------------------------------
 Component: CameraX

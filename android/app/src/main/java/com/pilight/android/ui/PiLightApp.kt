@@ -8,11 +8,16 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -21,6 +26,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.pilight.android.CompanionViewModel
+import com.pilight.android.ui.theme.PurpleBright
 
 private data class Tab(
     val route: String,
@@ -39,12 +45,14 @@ fun PiLightApp(vm: CompanionViewModel = viewModel()) {
         )
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val current = navBackStackEntry?.destination
-    val showBar = current?.route in setOf("home", "sessions", "settings")
+    var desktopFullscreen by rememberSaveable { mutableStateOf(false) }
+    val showBar = current?.route in setOf("home", "sessions", "settings") && !desktopFullscreen
 
     Scaffold(
+        containerColor = Color.Transparent,
         bottomBar = {
             if (showBar) {
-                NavigationBar {
+                NavigationBar(containerColor = Color(0xFF12081E)) {
                     tabs.forEach { tab ->
                         NavigationBarItem(
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
@@ -59,6 +67,12 @@ fun PiLightApp(vm: CompanionViewModel = viewModel()) {
                                     restoreState = true
                                 }
                             },
+                            colors =
+                                NavigationBarItemDefaults.colors(
+                                    selectedIconColor = PurpleBright,
+                                    selectedTextColor = PurpleBright,
+                                    indicatorColor = Color(0x332A1648),
+                                ),
                         )
                     }
                 }
@@ -79,13 +93,19 @@ fun PiLightApp(vm: CompanionViewModel = viewModel()) {
                             launchSingleTop = true
                         }
                     },
-                    onDesktop = { navController.navigate("desktop-soon") },
+                    onDesktop = { navController.navigate("desktop") },
+                    onSettings = {
+                        navController.navigate("settings") {
+                            launchSingleTop = true
+                        }
+                    },
                 )
             }
             composable("sessions") {
                 ChatScreen(
                     vm = vm,
                     onNeedPair = { navController.navigate("pair") },
+                    onOpenDesktop = { navController.navigate("desktop") },
                 )
             }
             composable("settings") {
@@ -113,8 +133,21 @@ fun PiLightApp(vm: CompanionViewModel = viewModel()) {
                     onCancel = { navController.popBackStack() },
                 )
             }
-            composable("desktop-soon") {
-                DesktopSoonScreen(onBack = { navController.popBackStack() })
+            composable("desktop") {
+                DesktopScreen(
+                    vm = vm,
+                    onBack = {
+                        desktopFullscreen = false
+                        navController.popBackStack()
+                    },
+                    onSettings = {
+                        desktopFullscreen = false
+                        navController.navigate("settings") {
+                            launchSingleTop = true
+                        }
+                    },
+                    onFullscreenChange = { desktopFullscreen = it },
+                )
             }
         }
     }

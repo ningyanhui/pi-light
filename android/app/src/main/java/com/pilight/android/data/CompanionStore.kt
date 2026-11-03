@@ -45,8 +45,30 @@ class CompanionStore(context: Context) {
         prefs.edit().remove(KEY).apply()
     }
 
+    fun loadSecurity(): SecurityPrefs =
+        SecurityPrefs(
+            biometricLock = prefs.getBoolean(SEC_BIO, false),
+            timeoutMinutes = prefs.getInt(SEC_TIMEOUT, 30).let { m ->
+                if (m in TimeoutOptions.minutes) m else 30
+            },
+            relayRegionId = prefs.getString(SEC_REGION, RelayRegion.ASIA_SINGAPORE.id)
+                ?: RelayRegion.ASIA_SINGAPORE.id,
+        )
+
+    fun saveSecurity(prefsValue: SecurityPrefs) {
+        this.prefs
+            .edit()
+            .putBoolean(SEC_BIO, prefsValue.biometricLock)
+            .putInt(SEC_TIMEOUT, prefsValue.timeoutMinutes)
+            .putString(SEC_REGION, prefsValue.relayRegionId)
+            .apply()
+    }
+
     companion object {
         private const val PREFS = "pi_light_companion"
         private const val KEY = "session"
+        private const val SEC_BIO = "sec_biometric"
+        private const val SEC_TIMEOUT = "sec_timeout_min"
+        private const val SEC_REGION = "sec_relay_region"
     }
 }
