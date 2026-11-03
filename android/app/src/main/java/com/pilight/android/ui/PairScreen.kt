@@ -117,7 +117,7 @@ fun PairScreen(
                 Column {
                     Text("扫码配对", fontWeight = FontWeight.SemiBold, color = PurplePrimary)
                     Text(
-                        "使用桌面版 pi-light 扫描二维码，或点下方框扫描桌面码",
+                        "在桌面端「设置 → 远程访问」打开配对码，然后在此处扫描桌面二维码，或手动输入配对码与中继地址。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary,
                     )
