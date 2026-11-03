@@ -35,7 +35,6 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Keyboard
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.OpenWith
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.TouchApp
@@ -362,9 +361,6 @@ private fun DesktopTopBar(
                 Icon(Icons.Outlined.DesktopWindows, contentDescription = null, tint = PurplePrimary)
             }
             DesktopMode.FULLSCREEN -> Unit
-        }
-        IconButton(onClick = { }) {
-            Icon(Icons.Outlined.MoreVert, contentDescription = "更多")
         }
     }
 }

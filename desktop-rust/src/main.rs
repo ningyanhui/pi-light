@@ -1548,8 +1548,11 @@ impl PiLightApp {
                     });
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        let _ = theme::icon_button(ui, "📎", "附件：用 # 引用会话消息");
-                        let _ = theme::icon_button(ui, "🌐", "网络与工具由 Skills / MCP 提供");
+                        ui.label(
+                            egui::RichText::new("# 引用会话  ·  工具由 Skills / MCP 提供")
+                                .size(11.0)
+                                .color(theme::text_dim()),
+                        );
                         if theme::icon_button(ui, "⚙", "打开设置").clicked() {
                             open_settings = true;
                         }
@@ -2641,8 +2644,6 @@ fn show_assistant_message(
                         if theme::icon_button(ui, "⧉", "复制回复").clicked() {
                             ui.ctx().copy_text(row.text.clone());
                         }
-                        let _ = theme::icon_button(ui, "▲", "有帮助");
-                        let _ = theme::icon_button(ui, "▼", "没帮助");
                         if theme::icon_button(ui, "↻", "重新生成").clicked() && enabled {
                             action = Some(ChatUiAction::Regen(row.id));
                         }
