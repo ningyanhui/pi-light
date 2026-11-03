@@ -25,14 +25,16 @@ use pi_light::{
     session_ref::{self, RefCandidate, RefChip, RefChooserState},
     session_store::{self, RpcAttach},
     theme,
+    workspace::{self, CwdSwitchPlan, DockAction, WorkspaceUi},
+    workspace_git,
 };
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("pi-light")
-            .with_inner_size([1180.0, 760.0])
-            .with_min_inner_size([720.0, 480.0])
+            .with_inner_size([1280.0, 820.0])
+            .with_min_inner_size([880.0, 560.0])
             .with_icon(app_icon::icon_data()),
         ..Default::default()
     };
@@ -62,11 +64,13 @@ struct PiLightApp {
     ref_chips: Vec<RefChip>,
     /// M5′ 候选缓存（在 # 触发时构建，每次触发刷新）。
     ref_candidates_cache: Vec<RefCandidate>,
-    /// Pi sidecar 工作目录（写入 `Command::current_dir`）。
+    /// 当前活动工作区（写入 `Command::current_dir`；同时只有一个）。
     workdir: PathBuf,
     workdir_draft: String,
     workdir_error: Option<String>,
-    workdir_editing: bool,
+    /// 最近一次成功 spawn 的 sidecar cwd。同路径切会话时复用进程。
+    sidecar_cwd: PathBuf,
+    workspace: WorkspaceUi,
     /// 壳侧会话文件。None 表示没有可写的用户目录。
     state_path: Option<PathBuf>,
     persist_dirty: bool,
@@ -90,7 +94,7 @@ impl PiLightApp {
         let egui_ctx = cc.egui_ctx.clone();
         let fallback_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let state_path = session_store::default_path();
-        let (sessions, workdir) = match state_path
+        let (mut sessions, fallback_workdir) = match state_path
             .as_ref()
             .and_then(|path| session_store::load(path))
         {
@@ -103,7 +107,16 @@ impl PiLightApp {
             }
             None => (SessionHub::new(), fallback_dir),
         };
+        sessions.fill_missing_workdirs(&fallback_workdir);
+        let workdir = sessions
+            .active()
+            .workdir
+            .clone()
+            .filter(|path| path.is_dir())
+            .unwrap_or(fallback_workdir);
         let workdir_draft = workdir.to_string_lossy().into_owned();
+        let mut workspace = WorkspaceUi::default();
+        workspace.bind_root(workdir.clone());
         let stored_onboarding = cc
             .storage
             .and_then(|storage| storage.get_string(onboarding::SHOW_ONBOARDING_KEY));
@@ -122,10 +135,11 @@ impl PiLightApp {
             ref_chooser: RefChooserState::default(),
             ref_chips: Vec::new(),
             ref_candidates_cache: Vec::new(),
-            workdir,
+            workdir: workdir.clone(),
             workdir_draft,
             workdir_error: None,
-            workdir_editing: false,
+            sidecar_cwd: workdir,
+            workspace,
             state_path,
             persist_dirty: false,
             persist_retry_at: None,
@@ -146,10 +160,16 @@ impl PiLightApp {
     }
 
     fn try_spawn_rpc(&mut self) {
+        let _ = self.spawn_rpc(false);
+    }
+
+    fn spawn_rpc(&mut self, workspace_switch: bool) -> bool {
         self.rpc_client = None;
         self.spawn_error = None;
         self.ref_chooser.close();
-        self.ref_chips.clear();
+        if !workspace_switch {
+            self.ref_chips.clear();
+        }
         self.ensure_shell_path();
 
         if let Some(path) = self.pi_probe.path() {
@@ -171,18 +191,29 @@ impl PiLightApp {
                     let _ = client.request_get_state();
                     let _ = client.request_available_models();
                     self.rpc_client = Some(client);
+                    self.sidecar_cwd = self.workdir.clone();
                     if detached {
                         self.sessions.active_chat_mut().set_error(
                             "已恢复本机会话记录。Pi 侧会话文件不在，模型上下文从新会话开始。"
                                 .to_owned(),
                         );
                     }
+                    return true;
                 }
                 Err(e) => {
-                    self.spawn_error = Some(format!("启动 Pi 失败：{e}"));
+                    self.spawn_error = Some(if workspace_switch {
+                        workspace::SWITCH_FAIL_COPY.to_owned()
+                    } else {
+                        format!("启动 Pi 失败：{e}")
+                    });
+                    return false;
                 }
             }
         }
+        if workspace_switch {
+            self.spawn_error = Some(workspace::SWITCH_FAIL_COPY.to_owned());
+        }
+        false
     }
 
     /// Re-probe Pi binary and re-spawn RPC if found.
@@ -199,21 +230,83 @@ impl PiLightApp {
         self.admin.rediscover();
     }
 
-    fn apply_workdir(&mut self) {
-        match pi_rpc::validate_cwd(&self.workdir_draft) {
-            Ok(path) => {
-                self.workdir = path;
-                self.workdir_draft = self.workdir.to_string_lossy().into_owned();
-                self.workdir_error = None;
-                self.workdir_editing = false;
-                self.touch_sessions();
-                self.persist_sessions(true);
-                self.try_spawn_rpc();
-            }
-            Err(e) => {
-                self.workdir_error = Some(e);
+    fn request_workdir_change(&mut self, raw: &str) {
+        match pi_rpc::validate_cwd(raw) {
+            Ok(path) => self.apply_workdir_path(path),
+            Err(_) => {
+                self.workdir_error = Some(workspace::SWITCH_FAIL_COPY.to_owned());
+                self.workspace.switch_error = Some(workspace::SWITCH_FAIL_COPY.to_owned());
+                let retry = PathBuf::from(raw.trim());
+                self.workspace.retry_path = if retry.as_os_str().is_empty() {
+                    None
+                } else {
+                    Some(retry)
+                };
             }
         }
+    }
+
+    fn apply_workdir_path(&mut self, path: PathBuf) {
+        self.workspace.cwd_popover = false;
+        self.workdir_error = None;
+        self.workspace.switch_error = None;
+        match workspace::plan_cwd_switch(&self.sidecar_cwd, &path) {
+            CwdSwitchPlan::Reuse => {
+                self.commit_workdir_success(path);
+            }
+            CwdSwitchPlan::Respawn => {
+                if self.sessions.any_streaming() {
+                    self.workspace.switch_error = Some(workspace::SWITCH_FAIL_COPY.to_owned());
+                    self.workspace.retry_path = Some(path);
+                    return;
+                }
+                let previous = self.workdir.clone();
+                self.workspace.switching = true;
+                self.workdir = path.clone();
+                self.workdir_draft = path.to_string_lossy().into_owned();
+                let ok = self.spawn_rpc(true);
+                self.workspace.switching = false;
+                if ok {
+                    self.commit_workdir_success(path);
+                } else {
+                    self.workdir = previous.clone();
+                    self.workdir_draft = previous.to_string_lossy().into_owned();
+                    let _ = self.spawn_rpc(false);
+                    self.workspace.switch_error = Some(workspace::SWITCH_FAIL_COPY.to_owned());
+                    self.workspace.retry_path = Some(path);
+                }
+            }
+        }
+    }
+
+    fn commit_workdir_success(&mut self, path: PathBuf) {
+        self.workdir = path.clone();
+        self.workdir_draft = path.to_string_lossy().into_owned();
+        self.sessions.set_active_workdir(path.clone());
+        self.workspace.bind_root(path.clone());
+        self.workspace.retry_path = None;
+        self.touch_sessions();
+        self.persist_sessions(true);
+        self.workspace.show_toast(format!(
+            "已切换到 {} · 树与 Git 已刷新",
+            workspace::display_workdir(&path)
+        ));
+    }
+
+    fn insert_composer_path(&mut self, rel: &str) {
+        let input = &mut self.sessions.active_chat_mut().input;
+        let token = if rel.starts_with('@') {
+            rel.to_owned()
+        } else {
+            format!("@{rel}")
+        };
+        if input.split_whitespace().any(|part| part == token) {
+            return;
+        }
+        if !input.is_empty() && !input.ends_with([' ', '\n']) {
+            input.push(' ');
+        }
+        input.push_str(&token);
     }
 
     /// 发送当前输入（含 chips 引用上下文）给 Pi。
@@ -222,7 +315,7 @@ impl PiLightApp {
         if user_text.is_empty() && self.ref_chips.is_empty() {
             return;
         }
-        if self.rpc_client.is_none() {
+        if self.rpc_client.is_none() || self.workspace.switching {
             return;
         }
         self.touch_sessions();
@@ -382,7 +475,7 @@ impl PiLightApp {
     }
 
     fn do_new_session(&mut self) {
-        if self.sessions.any_streaming() {
+        if self.sessions.any_streaming() || self.workspace.switching {
             return;
         }
         self.ref_chooser.close();
@@ -390,6 +483,7 @@ impl PiLightApp {
         self.editing_node = None;
         self.edit_draft.clear();
         self.sessions.create_new();
+        self.sessions.set_active_workdir(self.workdir.clone());
         self.touch_sessions();
         if let Some(client) = &mut self.rpc_client {
             if let Err(e) = client.send_new_session() {
@@ -407,9 +501,16 @@ impl PiLightApp {
         if index == self.sessions.active_index() {
             return;
         }
-        if self.sessions.any_streaming() {
+        if self.sessions.any_streaming() || self.workspace.switching {
             return;
         }
+        let target_wd = self
+            .sessions
+            .list()
+            .get(index)
+            .and_then(|s| s.workdir.clone())
+            .filter(|path| path.is_dir())
+            .unwrap_or_else(|| self.workdir.clone());
         let file = self
             .sessions
             .list()
@@ -423,18 +524,29 @@ impl PiLightApp {
         self.ref_chips.clear();
         self.editing_node = None;
         self.edit_draft.clear();
-        if let Some(path) = file {
-            if let Some(client) = &mut self.rpc_client {
-                if let Err(e) = client.send_switch_session(&path) {
-                    self.sessions
-                        .active_chat_mut()
-                        .set_error(format!("切换会话失败：{e}"));
-                    return;
+        match workspace::plan_cwd_switch(&self.sidecar_cwd, &target_wd) {
+            CwdSwitchPlan::Reuse => {
+                self.workdir = target_wd.clone();
+                self.workdir_draft = target_wd.to_string_lossy().into_owned();
+                self.sessions.set_active_workdir(target_wd.clone());
+                self.workspace.bind_root(target_wd);
+                if let Some(path) = file {
+                    if let Some(client) = &mut self.rpc_client {
+                        if let Err(e) = client.send_switch_session(&path) {
+                            self.sessions
+                                .active_chat_mut()
+                                .set_error(format!("切换会话失败：{e}"));
+                            return;
+                        }
+                        let _ = client.request_get_state();
+                    }
                 }
-                let _ = client.request_get_state();
+                self.persist_sessions(true);
+            }
+            CwdSwitchPlan::Respawn => {
+                self.apply_workdir_path(target_wd);
             }
         }
-        self.persist_sessions(true);
     }
 
     fn drain_rpc_events(&mut self) {
@@ -647,6 +759,7 @@ impl PiLightApp {
     }
 
     fn touch_sessions(&mut self) {
+        self.sessions.touch_active();
         self.persist_dirty = true;
     }
 
@@ -817,9 +930,10 @@ impl eframe::App for PiLightApp {
             self.primed_model_tab = true;
         }
 
+        self.workspace.poll_toast();
         if matches!(surface, FirstRunSurface::Chat) {
             self.show_status_bar(ctx);
-            self.show_session_sidebar(ctx);
+            self.show_workspace_dock(ctx);
             self.show_header(ctx);
         }
 
@@ -863,116 +977,120 @@ impl eframe::App for PiLightApp {
 impl PiLightApp {
     // ── Chat UI ───────────────────────────────────────────────────────────
 
-    fn show_session_sidebar(&mut self, ctx: &egui::Context) {
+    fn show_workspace_dock(&mut self, ctx: &egui::Context) {
         let streaming = self.sessions.any_streaming();
-        let active = self.sessions.active_index();
-        let mut switch_to: Option<usize> = None;
-        let mut want_new = false;
-        let mut open_tab: Option<AdminTab> = None;
-        let mut toggle_settings = false;
-
-        egui::SidePanel::left("session_list")
+        let switching = self.workspace.switching;
+        let workdir = self.workdir.clone();
+        let mut action = None;
+        egui::SidePanel::left("workspace_dock")
             .resizable(false)
-            .exact_width(188.0)
+            .exact_width(256.0)
             .frame(
                 egui::Frame::none()
-                    .fill(theme::sidebar_bg())
-                    .inner_margin(egui::Margin::symmetric(12.0, 14.0))
-                    .stroke(egui::Stroke::new(1.0_f32, theme::hairline())),
+                    .fill(egui::Color32::from_rgba_unmultiplied(10, 8, 18, 236))
+                    .inner_margin(egui::Margin::symmetric(12.0, 12.0))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgba_unmultiplied(124, 77, 255, 40),
+                    )),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("⚡").size(18.0).color(theme::amber()));
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new("pi-light")
-                                .strong()
-                                .size(15.0)
-                                .color(theme::text_primary()),
-                        );
-                        ui.label(
-                            egui::RichText::new("智能 Agent 工作台")
-                                .size(10.0)
-                                .color(theme::text_muted()),
-                        );
-                    });
-                });
-                ui.add_space(16.0);
-
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("◌  会话")
-                            .strong()
-                            .size(13.0)
-                            .color(theme::text_primary()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let btn = ui.add_enabled(
-                            !streaming,
-                            egui::Button::new(egui::RichText::new("＋").size(14.0))
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE),
-                        );
-                        if btn.on_hover_text("新建会话").clicked() {
-                            want_new = true;
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-
-                let list_height = (ui.available_height() - 168.0).max(36.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("session_list_scroll")
-                    .max_height(list_height)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for (i, session) in self.sessions.list().iter().enumerate() {
-                            let selected = i == active;
-                            let resp = ui.add_enabled(
-                                !streaming || selected,
-                                egui::SelectableLabel::new(selected, &session.title),
-                            );
-                            if resp.clicked() {
-                                switch_to = Some(i);
-                            }
-                        }
-                    });
-
-                ui.add_space(10.0);
-                if sidebar_nav_row(ui, "◎", "插件", "扩展市场", false) {
-                    open_tab = Some(AdminTab::Marketplace);
-                }
-                if sidebar_nav_row(ui, "▣", "知识库", "记忆", false) {
-                    open_tab = Some(AdminTab::Memory);
-                }
-                if sidebar_nav_row(ui, "▤", "数据", "MCP / Skills", false) {
-                    open_tab = Some(AdminTab::Skills);
-                }
-
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    if sidebar_nav_row(ui, "⚙", "设置", "打开设置抽屉", self.admin.open) {
-                        toggle_settings = true;
-                    }
-                });
+                action = workspace::show_dock(
+                    ui,
+                    &mut self.workspace,
+                    &self.sessions,
+                    &workdir,
+                    streaming,
+                    switching,
+                );
             });
+        if let Some(next) = action {
+            self.apply_dock_action(ctx, next);
+        }
+    }
 
-        if want_new {
-            self.do_new_session();
-        }
-        if let Some(i) = switch_to {
-            self.do_switch_session(i);
-        }
-        if let Some(tab) = open_tab {
-            self.admin.open = true;
-            self.admin.active_tab = tab;
-            self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
-        }
-        if toggle_settings {
-            self.admin.open = !self.admin.open;
-            if self.admin.open {
+    fn apply_dock_action(&mut self, ctx: &egui::Context, action: DockAction) {
+        match action {
+            DockAction::NewSession => self.do_new_session(),
+            DockAction::SwitchSession(i) => self.do_switch_session(i),
+            DockAction::OpenSettings => {
+                self.admin.open = !self.admin.open;
+                if self.admin.open {
+                    self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+                } else {
+                    self.admin.opened_pass = None;
+                }
+            }
+            DockAction::OpenMarketplace => {
+                self.admin.open = true;
+                self.admin.active_tab = AdminTab::Marketplace;
                 self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
-            } else {
-                self.admin.opened_pass = None;
+            }
+            DockAction::OpenRemote => {
+                self.admin.open = true;
+                self.admin.active_tab = AdminTab::RemoteAccess;
+                self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+            }
+            DockAction::InsertPath(rel) => self.insert_composer_path(&rel),
+            DockAction::RequestWorkdir(raw) => self.request_workdir_change(&raw),
+            DockAction::OpenCwdPopover => {
+                self.workdir_draft = self.workdir.to_string_lossy().into_owned();
+                self.workspace.cwd_popover = true;
+            }
+            DockAction::CloseCwdPopover => {
+                self.workspace.cwd_popover = false;
+                self.workdir_draft = self.workdir.to_string_lossy().into_owned();
+            }
+            DockAction::GitStage => {
+                if let Some(path) = self.workspace.selected_git.clone() {
+                    match self.workspace.git.stage(&path) {
+                        Ok(()) => self.workspace.git_action_error = None,
+                        Err(err) => self.workspace.git_action_error = Some(err),
+                    }
+                }
+            }
+            DockAction::GitUnstage => {
+                if let Some(path) = self.workspace.selected_git.clone() {
+                    match self.workspace.git.unstage(&path) {
+                        Ok(()) => self.workspace.git_action_error = None,
+                        Err(err) => self.workspace.git_action_error = Some(err),
+                    }
+                }
+            }
+            DockAction::GitCommit => match self
+                .workspace
+                .git
+                .commit(&self.workspace.commit_draft.clone())
+            {
+                Ok(()) => {
+                    self.workspace.commit_draft.clear();
+                    self.workspace.commit_confirm = false;
+                    self.workspace.git_action_error = None;
+                }
+                Err(err) => {
+                    self.workspace.git_action_error = Some(err);
+                    self.workspace.commit_confirm = false;
+                }
+            },
+            DockAction::GitReveal => {
+                if let Some(rel) = self.workspace.selected_git.clone() {
+                    let abs = self.workdir.join(&rel);
+                    if let Err(err) = workspace_git::reveal_in_file_manager(&abs) {
+                        self.workspace.git_action_error = Some(err);
+                    }
+                }
+            }
+            DockAction::SelectGitPath(path) => {
+                self.workspace.selected_git = Some(path);
+            }
+            DockAction::RetrySwitch => {
+                if let Some(path) = self.workspace.retry_path.clone() {
+                    self.request_workdir_change(&path.to_string_lossy());
+                }
+            }
+            DockAction::DismissError => {
+                self.workspace.switch_error = None;
+                self.workdir_error = None;
             }
         }
     }
@@ -980,6 +1098,8 @@ impl PiLightApp {
     fn show_header(&mut self, ctx: &egui::Context) {
         let mut reprobe = false;
         let mut open_models = false;
+        let mut cwd_action = None;
+        let recent = workspace::recent_workdirs(&self.sessions, &self.workdir);
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::none()
@@ -989,7 +1109,20 @@ impl PiLightApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if let Some(spec) = self.show_model_picker(ui, "header_model_combo", 200.0) {
+                    cwd_action = workspace::show_topbar_cwd(
+                        ui,
+                        &self.workdir,
+                        &mut self.workdir_draft,
+                        self.workspace.switching,
+                        self.workspace.cwd_popover,
+                        &recent,
+                        self.workspace
+                            .switch_error
+                            .as_deref()
+                            .or(self.workdir_error.as_deref()),
+                    );
+                    ui.add_space(8.0);
+                    if let Some(spec) = self.show_model_picker(ui, "header_model_combo", 188.0) {
                         self.apply_model_spec(&spec);
                     }
                     if self.sessions.active_is_streaming() {
@@ -1007,10 +1140,12 @@ impl PiLightApp {
                         if theme::icon_button(ui, "↻", "重新扫描 Pi 并重连").clicked() {
                             reprobe = true;
                         }
-                        let _ = theme::icon_button(ui, "⚡", "pi-light");
                     });
                 });
             });
+        if let Some(action) = cwd_action {
+            self.apply_dock_action(ctx, action);
+        }
         if reprobe {
             self.reprobe();
         }
@@ -1111,7 +1246,9 @@ impl PiLightApp {
                 theme::card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let input = &mut self.sessions.active_chat_mut().input;
-                        let can_send = !is_streaming && (!input.trim().is_empty() || !chips_empty);
+                        let can_send = !is_streaming
+                            && !self.workspace.switching
+                            && (!input.trim().is_empty() || !chips_empty);
                         let input_response = ui.add_sized(
                             [ui.available_width() - 168.0, 36.0],
                             egui::TextEdit::singleline(input)
@@ -1299,6 +1436,9 @@ impl PiLightApp {
         if let Some(next) = action {
             self.apply_chat_action(next);
         }
+        if let Some(toast) = self.workspace.toast.as_ref() {
+            workspace::show_toast_overlay(ctx, &toast.text);
+        }
     }
 
     fn show_message_tree_panel(
@@ -1396,16 +1536,11 @@ impl PiLightApp {
 
     fn show_session_bar(&mut self, ctx: &egui::Context) {
         let streaming = self.sessions.any_streaming();
-        let active = self.sessions.active_index();
-        let titles: Vec<String> = self
-            .sessions
-            .list()
-            .iter()
-            .map(|s| s.title.clone())
-            .collect();
-        let mut switch_to: Option<usize> = None;
+        let switching = self.workspace.switching;
+        let title = self.sessions.active().title.clone();
+        let id = self.sessions.active().id;
         let mut want_new = false;
-        let mut apply_cwd = false;
+        let mut banner_action = None;
 
         egui::TopBottomPanel::top("session_bar")
             .frame(
@@ -1415,45 +1550,29 @@ impl PiLightApp {
                     .stroke(egui::Stroke::new(1.0_f32, theme::hairline())),
             )
             .show(ctx, |ui| {
+                if let Some(err) = self.workspace.switch_error.clone() {
+                    banner_action = workspace::show_switch_error_banner(ui, &err);
+                    ui.add_space(4.0);
+                }
                 ui.horizontal(|ui| {
-                    let current = titles
-                        .get(active)
-                        .cloned()
-                        .unwrap_or_else(|| "会话".to_owned());
-                    egui::ComboBox::from_id_salt("session_switcher")
-                        .width(280.0)
-                        .selected_text(format!("#session  {current}"))
-                        .show_ui(ui, |ui| {
-                            for (i, title) in titles.iter().enumerate() {
-                                if ui
-                                    .add_enabled(
-                                        !streaming || i == active,
-                                        egui::SelectableLabel::new(i == active, title),
-                                    )
-                                    .clicked()
-                                {
-                                    switch_to = Some(i);
-                                }
-                            }
-                        });
+                    ui.label(
+                        egui::RichText::new(format!("#sess-{id}  {title}"))
+                            .strong()
+                            .size(14.0)
+                            .color(theme::text_primary()),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.menu_button("⋯", |ui| {
-                            ui.label(egui::RichText::new("工作目录").weak().size(11.0));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.workdir_draft)
-                                    .desired_width(240.0)
-                                    .hint_text("绝对路径"),
-                            );
-                            if ui.button("应用并重启 Pi").clicked() {
-                                apply_cwd = true;
-                                ui.close_menu();
-                            }
-                            if let Some(err) = &self.workdir_error {
-                                ui.colored_label(theme::danger(), err);
-                            }
-                        });
                         if ui
-                            .add_enabled(!streaming, egui::Button::new("＋ 新会话"))
+                            .add_enabled(
+                                !streaming && !switching,
+                                egui::Button::new(
+                                    egui::RichText::new("+ 新会话")
+                                        .color(egui::Color32::WHITE)
+                                        .size(12.0),
+                                )
+                                .fill(theme::accent())
+                                .rounding(egui::Rounding::same(12.0)),
+                            )
                             .clicked()
                         {
                             want_new = true;
@@ -1465,12 +1584,8 @@ impl PiLightApp {
         if want_new {
             self.do_new_session();
         }
-        if let Some(i) = switch_to {
-            self.do_switch_session(i);
-        }
-        if apply_cwd {
-            self.workdir_editing = true;
-            self.apply_workdir();
+        if let Some(action) = banner_action {
+            self.apply_dock_action(ctx, action);
         }
     }
 
@@ -1984,28 +2099,6 @@ fn show_model_chip(
                 });
         });
     selected.filter(|m| m != current)
-}
-
-fn sidebar_nav_row(ui: &mut egui::Ui, icon: &str, label: &str, tip: &str, selected: bool) -> bool {
-    let resp = ui.add(
-        egui::Button::new(
-            egui::RichText::new(format!("{icon}  {label}"))
-                .size(13.0)
-                .color(if selected {
-                    theme::text_primary()
-                } else {
-                    theme::text_muted()
-                }),
-        )
-        .fill(if selected {
-            egui::Color32::from_rgb(24, 26, 36)
-        } else {
-            egui::Color32::TRANSPARENT
-        })
-        .stroke(egui::Stroke::NONE)
-        .min_size(egui::vec2(ui.available_width(), 32.0)),
-    );
-    resp.on_hover_text(tip).clicked()
 }
 
 // ── M3′ Trace / Token UI ──────────────────────────────────────────────────

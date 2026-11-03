@@ -2,6 +2,11 @@
 //
 // Chat state machine for the pi-light chat UI (M2′ + 多会话 / 重试).
 
+use std::{
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use crate::message_tree::{MessageTree, NodeId, PathRow, TreeRow, TreeSnapshot};
 use crate::pi_rpc::PiRpcEvent;
 use crate::session_insights::SessionInsights;
@@ -215,6 +220,8 @@ pub struct ChatSession {
     pub title: String,
     pub session_file: Option<String>,
     pub session_id: Option<String>,
+    pub workdir: Option<PathBuf>,
+    pub updated_at: u64,
 }
 
 impl ChatSession {
@@ -224,6 +231,8 @@ impl ChatSession {
             title: format!("会话 {id}"),
             session_file: None,
             session_id: None,
+            workdir: None,
+            updated_at: now_secs(),
         }
     }
 }
@@ -247,6 +256,8 @@ pub struct ExportedSession {
     pub messages: Vec<ChatMessage>,
     pub tree: TreeSnapshot,
     pub pi_stale: bool,
+    pub workdir: Option<PathBuf>,
+    pub updated_at: u64,
 }
 
 /// Live session list + per-slot chat state.
@@ -304,12 +315,44 @@ impl SessionHub {
 
     /// Create a new empty slot and make it active. Returns its index.
     pub fn create_new(&mut self) -> usize {
+        let inherited = self.active().workdir.clone();
         let id = self.next_id;
         self.next_id += 1;
-        self.sessions.push(ChatSession::new(id));
+        let mut session = ChatSession::new(id);
+        session.workdir = inherited;
+        self.sessions.push(session);
         self.chats.push(ChatState::default());
         self.active = self.sessions.len() - 1;
         self.active
+    }
+
+    pub fn set_active_workdir(&mut self, path: PathBuf) {
+        self.sessions[self.active].workdir = Some(path);
+        self.touch_active();
+    }
+
+    pub fn fill_missing_workdirs(&mut self, fallback: &Path) {
+        for session in &mut self.sessions {
+            if session.workdir.is_none() {
+                session.workdir = Some(fallback.to_path_buf());
+            }
+        }
+    }
+
+    pub fn touch_active(&mut self) {
+        self.sessions[self.active].updated_at = now_secs();
+    }
+
+    /// 按更新时间倒序的原始下标（当前会话并列时仍可稳定点选）。
+    pub fn indices_by_updated(&self) -> Vec<usize> {
+        let mut indices: Vec<usize> = (0..self.sessions.len()).collect();
+        indices.sort_by(|a, b| {
+            self.sessions[*b]
+                .updated_at
+                .cmp(&self.sessions[*a].updated_at)
+                .then_with(|| a.cmp(b))
+        });
+        indices
     }
 
     /// Switch the active slot. Returns false if `index` is out of range.
@@ -318,6 +361,7 @@ impl SessionHub {
             return false;
         }
         self.active = index;
+        self.touch_active();
         true
     }
 
@@ -368,6 +412,8 @@ impl SessionHub {
                     messages,
                     tree: tree.to_snapshot(),
                     pi_stale: chat.pi_stale || chat.tree.has_branches(),
+                    workdir: session.workdir.clone(),
+                    updated_at: session.updated_at,
                 }
             })
             .collect();
@@ -397,6 +443,12 @@ impl SessionHub {
                 title,
                 session_file: session.session_file,
                 session_id: session.session_id,
+                workdir: session.workdir,
+                updated_at: if session.updated_at == 0 {
+                    now_secs()
+                } else {
+                    session.updated_at
+                },
             });
             let tree = if session.tree.nodes.is_empty() {
                 MessageTree::from_linear(&session.messages)
@@ -425,6 +477,13 @@ impl SessionHub {
             next_id,
         }
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn truncate_title(s: &str, max_chars: usize) -> String {
@@ -536,6 +595,19 @@ mod tests {
         }
         assert_eq!(hub.active().title, "in first");
         assert_eq!(hub.list().len(), 2);
+    }
+
+    #[test]
+    fn new_session_inherits_workdir_and_sorts_by_updated() {
+        let mut hub = SessionHub::new();
+        hub.set_active_workdir(PathBuf::from("/tmp/a"));
+        hub.active_chat_mut().push_user("old".to_owned());
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        hub.create_new();
+        assert_eq!(hub.active().workdir.as_deref(), Some(Path::new("/tmp/a")));
+        hub.set_active_workdir(PathBuf::from("/tmp/b"));
+        let order = hub.indices_by_updated();
+        assert_eq!(order.first().copied(), Some(hub.active_index()));
     }
 
     #[test]

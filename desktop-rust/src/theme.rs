@@ -9,7 +9,7 @@ pub fn amber() -> Color32 {
 }
 
 pub fn accent() -> Color32 {
-    Color32::from_rgb(124, 92, 255)
+    Color32::from_rgb(124, 77, 255)
 }
 
 pub fn accent_soft() -> Color32 {
@@ -458,6 +458,17 @@ pub fn paint_lightning_backdrop(ui: &egui::Ui) {
         bolt_polyline(small_origin, small),
         Stroke::new(2.2_f32, Color32::from_rgba_unmultiplied(255, 214, 130, 140)),
     ));
+
+    painter.circle_filled(
+        egui::pos2(rect.left() + rect.width() * 0.18, rect.top() + 40.0),
+        rect.height() * 0.42,
+        Color32::from_rgba_unmultiplied(124, 77, 255, 18),
+    );
+    painter.circle_filled(
+        egui::pos2(rect.right() - 80.0, rect.center().y),
+        rect.height() * 0.55,
+        Color32::from_rgba_unmultiplied(80, 40, 160, 16),
+    );
 }
 
 #[cfg(test)]

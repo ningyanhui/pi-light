@@ -44,17 +44,19 @@ pi-light 把官方 Pi（MIT，钉定 **v1.4.0**）以 sidecar 方式嵌进 [egui
 
 ### 对话工作台
 
-找到 Pi 之后，主界面是侧栏 + 聊天区：
+找到 Pi 之后，主界面是三栏工作区：左 dock（会话 / 文件 / Git）+ 中央聊天。
 
 - **流式对话**：官方 JSONL RPC 真连；生成中可停止，空闲时可重发上一条 prompt。
-- **多会话**：侧栏列表新建 / 切换；会话条也可切换。壳发 `new_session` / `switch_session`。列表、消息树、草稿和工作目录写入 `~/.pi-light/sessions.json`（`PI_LIGHT_STATE_PATH` 可改路径），下次启动读回；对应 Pi 会话文件仍在则切回。
+- **多会话**：左 dock「会话」列表新建 / 切换，按更新时间排序。壳发 `new_session` / `switch_session`。列表、消息树、草稿和每会话工作区写入 `~/.pi-light/sessions.json`（`PI_LIGHT_STATE_PATH` 可改路径），下次启动读回；对应 Pi 会话文件仍在则切回。
+- **工作区**：顶栏「当前工作区」徽章可点。**当前活动工作区唯一**；切换时会短暂同步环境，徽章 / 文件树 / Git 跟随新路径。同一路径的会话复用当前 sidecar；路径变化时静默对齐进程 cwd（Pi v1.4.0 无 `set_cwd`）。
+- **文件树**：根 = 当前工作区；展开两级以上；默认忽略 `node_modules`、`.git`、`target` 等巨型目录。单击文件把相对路径插入输入框。
+- **Git**：Changes 显示 `git status` 风格列表，可揭示到系统文件管理器，并做最小 stage / unstage / commit。History 显示最近 50 条短 hash / 标题 / 作者 / 时间。非 git 仓给诚实空态。
 - **同会话消息树**：编辑用户消息或重新生成助手会在同一会话内分出兄弟分支，可切换兄弟、展开消息树导航。树由壳维护（Pi v1.4.0 无同会话 `navigate_tree`）；改写或切换后对 Pi 回放当前路径。
 - **工具卡片**：名称、状态、耗时、参数预览（`tool_execution_*`）。
 - **`#` 引用**：输入 `#` 引用当前会话消息或本机历史会话文件，chip 拼入 prompt。
-- **工作目录**：会话条菜单查看 / 切换 cwd，校验后重启 sidecar。
 - **用量**：底栏展示 Pi 上报的 Token、工具 Trace 与吞吐（`message_update.usage` / `get_session_stats`）。
 - **中文**：Windows 用系统微软雅黑等 CJK 字体作为 egui 回退；可用 `PI_LIGHT_CJK_FONT` 指定字体文件。
-- **外观**：深色壳、自绘闪电底纹、Windows 嵌入品牌图标。
+- **外观**：深色壳、indigo 强调、自绘闪电底纹、Windows 嵌入品牌图标。
 
 ### 设置、模型与扩展
 
@@ -117,7 +119,7 @@ SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 与 [`docs/preset-packages.md`](
 
 官方便携包已经带好 Pi。启动后默认进入对话，**不会**自动弹出模型引导。
 
-1. 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，主界面是侧栏 + 聊天区。
+1. 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，主界面是左 dock（会话 / 文件 / Git）+ 中央聊天。
 2. 模型与 API 密钥在侧栏「设置」→「模型」配置：内置厂商或「自定义模型 API」。
 3. 若要再看引导页：设置 →「通用」打开「显示首次引导」（默认关，记在 `pi_light.show_onboarding`）。
 4. 若这次没找到 Pi：主界面说明便携包应已包含它，并提供「重新探测」。自己指定 Pi 程序收在折叠高级区。
@@ -126,7 +128,7 @@ SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 与 [`docs/preset-packages.md`](
 
 1. 在输入框写消息，Enter 或发送按钮提交；生成中点「停止」，空闲时点「重试」。消息上可编辑 / 重新生成，并在同会话内切换分支。
 2. 输入 `#` 挑选本会话或历史消息，chip 会跟 prompt 一起发出。
-3. 侧栏或会话条新建 / 切换会话；会话条「⋯」改工作目录。
+3. 左 dock 新建 / 切换会话；点顶栏工作区徽章换路径（当前活动工作区唯一，切换时短暂同步环境）。
 4. 顶栏或输入区切换模型。
 5. 需要装包时打开「扩展市场」，在详情卡确认后再安装。
 
@@ -170,8 +172,8 @@ cargo run
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  desktop-rust/   egui + eframe                               │
-│  侧栏：品牌 / 会话 / 插件·知识库·数据 / 设置                    │
-│  顶栏：模型下拉 · 重新探测 · 账户                                │
+│  左 dock：会话 / 文件树 / Git（Changes + History）             │
+│  顶栏：品牌 · 模型 · 当前工作区徽章 · 重新探测 · 账户            │
 │  主区：流式聊天 + 工具卡片 + Tokens / Trace                    │
 │  抽屉：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用   │
 └────────────────────────────┬────────────────────────────────┘
@@ -187,7 +189,10 @@ android/   Kotlin Compose companion（配对 + /v1/chat + /v1/desktop）
 
 ```
 desktop-rust/src/
-├── main.rs              # egui App、侧栏 / 顶栏 / 会话条 / 输入区
+├── main.rs              # egui App、三栏 dock / 顶栏 / 输入区
+├── workspace.rs         # 工作区 dock、无感知 cwd 切换
+├── workspace_tree.rs    # 文件树
+├── workspace_git.rs     # Git Changes / History
 ├── theme.rs             # 深色壳与共用控件
 ├── app_icon.rs          # 窗口与 Windows exe 品牌图标
 ├── fonts.rs             # 系统 CJK 字体回退
@@ -260,6 +265,7 @@ cd android
 | 文档 | 说明 |
 |------|------|
 | [`docs/architecture.md`](./docs/architecture.md) | 架构、模块、里程碑 |
+| [`docs/workspace.md`](./docs/workspace.md) | 工作区 cwd：无感知切换与上游限制 |
 | [`docs/remote-acceptance.md`](./docs/remote-acceptance.md) | 公网远程配对、中继启停与验收剧本 |
 | [`docs/companion-protocol.md`](./docs/companion-protocol.md) | companion 配对 / claim / `/v1/chat` / `/v1/desktop` |
 | [`docs/preset-packages.md`](./docs/preset-packages.md) | Slim / 操控预置包钉版本与 tarball SHA-256 |
