@@ -247,7 +247,7 @@ pub fn show_topbar_cwd(
                 .size(12.0)
                 .color(theme::text_primary()),
         )
-        .fill(Color32::from_rgba_unmultiplied(28, 24, 48, 220))
+        .fill(theme::card_bg())
         .stroke(Stroke::new(1.0_f32, theme::glass_stroke()))
         .rounding(Rounding::same(14.0)),
     );
@@ -282,7 +282,7 @@ pub fn show_topbar_cwd(
             .anchor(egui::Align2::CENTER_TOP, [0.0, 64.0])
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(16, 14, 28, 245))
+                    .fill(theme::sidebar_bg())
                     .stroke(Stroke::new(1.0_f32, theme::glass_stroke_strong()))
                     .rounding(Rounding::same(12.0))
                     .inner_margin(egui::Margin::same(14.0)),
@@ -330,7 +330,7 @@ pub fn show_topbar_cwd(
                                         .size(12.0)
                                         .color(theme::text_primary()),
                                 )
-                                .fill(Color32::from_rgb(22, 20, 36))
+                                .fill(theme::card_bg())
                                 .min_size(egui::vec2(ui.available_width(), 26.0)),
                             )
                             .clicked()
@@ -437,7 +437,7 @@ pub fn show_dock(
                     .fill(if selected {
                         theme::accent()
                     } else {
-                        Color32::from_rgba_unmultiplied(16, 14, 28, 160)
+                        theme::card_bg()
                     })
                     .stroke(Stroke::NONE)
                     .rounding(Rounding::same(10.0))
@@ -602,7 +602,7 @@ fn session_row(
 ) -> (egui::Response, Option<DockAction>) {
     let mut action = None;
     let fill = if selected {
-        Color32::from_rgba_unmultiplied(48, 32, 88, 200)
+        Color32::from_rgb(35, 51, 73)
     } else {
         Color32::from_rgba_unmultiplied(16, 14, 28, 70)
     };

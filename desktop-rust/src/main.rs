@@ -1098,10 +1098,8 @@ impl PiLightApp {
         }
     }
 
-    fn paint_main_backdrop(&self, ui: &egui::Ui) {
-        if let Some(tex) = self.textures.atmosphere.as_ref() {
-            theme::paint_atmosphere(ui, tex);
-        }
+    fn paint_main_backdrop(&self, _ui: &egui::Ui) {
+        // Keep the conversation surface calm and readable; no decorative image overlay.
     }
 }
 
@@ -1496,9 +1494,9 @@ impl PiLightApp {
                             let btn = egui::Button::new(
                                 egui::RichText::new(label)
                                     .size(12.0)
-                                    .color(egui::Color32::from_rgb(180, 220, 255)),
+                                    .color(egui::Color32::from_rgb(184, 204, 255)),
                             )
-                            .fill(egui::Color32::from_rgba_unmultiplied(48, 32, 88, 220))
+                            .fill(egui::Color32::from_rgb(35, 51, 73))
                             .rounding(egui::Rounding::same(10.0));
                             if ui.add(btn).on_hover_text("点击移除此引用").clicked() {
                                 chip_to_remove = Some(i);
@@ -1878,7 +1876,7 @@ impl PiLightApp {
                     .size(11.0)
                     .color(theme::text_primary()),
             )
-            .fill(egui::Color32::from_rgba_unmultiplied(28, 24, 48, 200))
+            .fill(egui::Color32::from_rgb(29, 38, 52))
             .stroke(egui::Stroke::new(1.0_f32, theme::accent_stroke_think()))
             .rounding(egui::Rounding::same(12.0)),
         );
@@ -2385,7 +2383,7 @@ fn show_model_chip(
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(8.0, 2.0))
         .rounding(egui::Rounding::same(8.0))
-        .fill(egui::Color32::from_rgb(18, 19, 28))
+        .fill(egui::Color32::from_rgb(28, 36, 48))
         .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
         .show(ui, |ui| {
             egui::ComboBox::from_id_salt(id_salt)
@@ -2549,7 +2547,7 @@ fn show_user_message(
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .rounding(egui::Rounding::same(12.0))
-            .fill(egui::Color32::from_rgba_unmultiplied(40, 28, 72, 200))
+            .fill(egui::Color32::from_rgb(36, 52, 75))
             .stroke(egui::Stroke::new(1.0_f32, theme::glass_stroke()))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.72);
