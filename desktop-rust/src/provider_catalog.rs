@@ -10,6 +10,7 @@ use eframe::egui;
 use serde_json::{json, Map, Value};
 
 use crate::api_keys::{self, ApiKeyForm, KeyPresence, KeyUiResult, STORED_KEY_MASK};
+use crate::theme;
 
 /// Pi `models.json` 支持的 API 协议（界面文案，值为写入文件的 id）。
 pub const API_PROTOCOLS: &[(&str, &str)] = &[
@@ -539,7 +540,11 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
     } = input;
     let mut result = ModelsTabResult::default();
 
-    ui.label(egui::RichText::new("默认模型").strong().size(14.0));
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("默认模型").strong().size(14.0));
+        ui.label(egui::RichText::new("ⓘ").weak().size(11.0))
+            .on_hover_text("新对话将默认使用此模型。");
+    });
     ui.label(
         egui::RichText::new("新对话将默认使用此模型。")
             .weak()
@@ -576,7 +581,7 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
 
     for row in &mut form.rows {
         let (caption, color) = presence_caption(row.presence, &row.env_var);
-        provider_card(ui, &row.label, &caption, color, |ui| {
+        provider_card(ui, &row.provider_id, &row.label, &caption, color, |ui| {
             if row.presence == KeyPresence::Oauth {
                 ui.label(egui::RichText::new("OAuth").weak().size(11.0));
             } else if row.presence == KeyPresence::Stored {
@@ -588,12 +593,21 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
                         clear_builtin = Some(row.provider_id.clone());
                     }
                 } else {
-                    if ui.small_button("清除").clicked() {
-                        clear_builtin = Some(format!("arm:{}", row.provider_id));
-                    }
-                    if ui.small_button("配置").clicked() {
-                        configure_builtin = Some(row.provider_id.clone());
-                    }
+                    ui.menu_button("⋯", |ui| {
+                        if ui.button("配置").clicked() {
+                            configure_builtin = Some(row.provider_id.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button("清除").clicked() {
+                            clear_builtin = Some(format!("arm:{}", row.provider_id));
+                            ui.close_menu();
+                        }
+                    });
+                    if ui
+                        .small_button("⧉")
+                        .on_hover_text("密钥不回显，无法复制明文")
+                        .clicked()
+                    {}
                 }
             } else if ui.small_button("配置").clicked() {
                 configure_builtin = Some(row.provider_id.clone());
@@ -619,6 +633,7 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
             };
             provider_card(
                 ui,
+                &provider.id,
                 &title,
                 &subtitle,
                 egui::Color32::from_rgb(160, 170, 190),
@@ -637,7 +652,7 @@ pub fn render_models_tab(ui: &mut egui::Ui, input: ModelsTabInput<'_>) -> Models
 
     ui.add_space(8.0);
     if ui
-        .add(egui::Button::new("+ 添加模型提供商").min_size([ui.available_width(), 32.0].into()))
+        .add(egui::Button::new("+  添加模型提供商").min_size([ui.available_width(), 36.0].into()))
         .clicked()
     {
         add.open_builtin(None);
@@ -717,32 +732,30 @@ fn merge_key_result(out: &mut ModelsTabResult, key: KeyUiResult) {
 
 fn provider_card(
     ui: &mut egui::Ui,
+    provider_id: &str,
     title: &str,
     subtitle: &str,
     subtitle_color: egui::Color32,
     trailing: impl FnOnce(&mut egui::Ui),
 ) {
-    egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-        .rounding(egui::Rounding::same(8.0))
-        .stroke(egui::Stroke::new(
-            1.0_f32,
-            egui::Color32::from_rgb(48, 52, 68),
-        ))
-        .fill(ui.visuals().extreme_bg_color)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(title).strong().size(14.0));
-                    ui.label(
-                        egui::RichText::new(subtitle)
-                            .color(subtitle_color)
-                            .size(11.0),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), trailing);
+    theme::card_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            theme::glyph_circle(
+                ui,
+                theme::first_letter(title),
+                theme::provider_glyph_color(provider_id),
+            );
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(title).strong().size(14.0));
+                ui.label(
+                    egui::RichText::new(subtitle)
+                        .color(subtitle_color)
+                        .size(11.0),
+                );
             });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), trailing);
         });
+    });
 }
 
 /// 「添加模型提供商」对话框。
@@ -753,17 +766,12 @@ pub fn render_add_provider(
     auth_path: Option<&Path>,
     models_path: Option<&Path>,
 ) -> ModelsTabResult {
-    let mut result = ModelsTabResult::default();
     if !add.open {
-        return result;
+        return ModelsTabResult::default();
     }
 
     let mut still_open = true;
-    let mut want_save = false;
-    let mut want_cancel = false;
-    let mut add_model = false;
-    let mut fetch_models = false;
-    let mut remove_model: Option<usize> = None;
+    let mut actions = AddProviderActions::default();
 
     egui::Window::new("添加模型提供商")
         .id(egui::Id::new("pi_light_add_provider"))
@@ -772,102 +780,131 @@ pub fn render_add_provider(
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .order(egui::Order::Tooltip)
-        .default_size(egui::vec2(520.0, 480.0))
+        .default_size(egui::vec2(540.0, 520.0))
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                for tab in [AddProviderTab::Builtin, AddProviderTab::Custom] {
-                    let selected = add.tab == tab;
-                    if ui
-                        .add_sized(
-                            [230.0, 28.0],
-                            egui::SelectableLabel::new(selected, tab.label()),
-                        )
-                        .clicked()
-                    {
-                        add.tab = tab;
-                    }
-                }
-            });
-            ui.add_space(8.0);
+            actions = render_add_provider_body(ui, add, form, false);
+        });
 
-            match add.tab {
-                AddProviderTab::Builtin => {
-                    ui.label(
+    apply_add_provider_actions(add, form, auth_path, models_path, actions, !still_open)
+}
+
+/// 首次引导右侧内嵌表单（不使用独立窗口）。
+pub fn render_add_provider_inline(
+    ui: &mut egui::Ui,
+    add: &mut AddProviderForm,
+    form: &mut ApiKeyForm,
+    auth_path: Option<&Path>,
+    models_path: Option<&Path>,
+    primary_save: bool,
+) -> ModelsTabResult {
+    let actions = render_add_provider_body(ui, add, form, primary_save);
+    apply_add_provider_actions(add, form, auth_path, models_path, actions, false)
+}
+
+#[derive(Default)]
+struct AddProviderActions {
+    want_save: bool,
+    want_cancel: bool,
+    add_model: bool,
+    fetch_models: bool,
+    remove_model: Option<usize>,
+}
+
+fn render_add_provider_body(
+    ui: &mut egui::Ui,
+    add: &mut AddProviderForm,
+    form: &ApiKeyForm,
+    primary_save: bool,
+) -> AddProviderActions {
+    let mut actions = AddProviderActions::default();
+    theme::segmented_tabs(
+        ui,
+        [
+            (AddProviderTab::Builtin, AddProviderTab::Builtin.label()),
+            (AddProviderTab::Custom, AddProviderTab::Custom.label()),
+        ],
+        &mut add.tab,
+    );
+    ui.add_space(10.0);
+
+    match add.tab {
+        AddProviderTab::Builtin => {
+            ui.label(
                         egui::RichText::new(
                             "从内置目录中选择 OpenAI、Anthropic、DeepSeek 等提供商，填入其 API 密钥即可使用。",
                         )
                         .weak()
                         .size(12.0),
                     );
-                    ui.add_space(10.0);
-                    ui.label("提供商");
-                    let current_label = api_keys::builtin_providers()
-                        .iter()
-                        .find(|(id, _, _)| *id == add.builtin_provider)
-                        .map(|(_, label, _)| *label)
-                        .unwrap_or(add.builtin_provider.as_str());
-                    egui::ComboBox::from_id_salt("add_builtin_provider")
-                        .selected_text(current_label)
-                        .width(ui.available_width())
-                        .show_ui(ui, |ui| {
-                            for (id, label, _) in api_keys::builtin_providers() {
-                                if ui
-                                    .selectable_label(&add.builtin_provider == id, *label)
-                                    .clicked()
-                                {
-                                    add.builtin_provider = (*id).to_owned();
-                                }
-                            }
-                        });
-                    ui.add_space(10.0);
-                    let env_var = api_keys::builtin_providers()
-                        .iter()
-                        .find(|(id, _, _)| *id == add.builtin_provider)
-                        .map(|(_, _, env)| *env)
-                        .unwrap_or("");
-                    ui.horizontal(|ui| {
-                        ui.label("API 密钥");
-                        ui.weak("?");
-                    });
-                    ui.add(
-                        egui::TextEdit::singleline(&mut add.builtin_key)
-                            .password(true)
-                            .hint_text(format!("留空使用环境认证 ({env_var})"))
-                            .desired_width(f32::INFINITY),
-                    );
-                    let env_set = std::env::var_os(env_var).is_some_and(|v| !v.is_empty());
-                    if add.builtin_key.trim().is_empty() && !env_set {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(220, 160, 70),
-                            format!("未检测到环境变量。请填写 API 密钥，或设置环境变量 {env_var}。"),
-                        );
-                    } else if env_set && add.builtin_key.trim().is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("将使用环境变量 {env_var}（不显示值）。"))
-                                .weak()
-                                .size(11.0),
-                        );
-                    }
-                    if let Some(row) = form
-                        .rows
-                        .iter()
-                        .find(|row| row.provider_id == add.builtin_provider)
-                    {
-                        if row.presence == KeyPresence::Oauth {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(220, 160, 70),
-                                "该提供商已有 OAuth 登录，保存不会覆盖。",
-                            );
-                        } else if row.presence == KeyPresence::Stored {
-                            ui.label(
-                                egui::RichText::new(format!("已保存 · {STORED_KEY_MASK}"))
-                                    .weak()
-                                    .size(11.0),
-                            );
+            ui.add_space(10.0);
+            ui.label("提供商");
+            let current_label = api_keys::builtin_providers()
+                .iter()
+                .find(|(id, _, _)| *id == add.builtin_provider)
+                .map(|(_, label, _)| *label)
+                .unwrap_or(add.builtin_provider.as_str());
+            egui::ComboBox::from_id_salt("add_builtin_provider")
+                .selected_text(current_label)
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    for (id, label, _) in api_keys::builtin_providers() {
+                        if ui
+                            .selectable_label(&add.builtin_provider == id, *label)
+                            .clicked()
+                        {
+                            add.builtin_provider = (*id).to_owned();
                         }
                     }
-                    ui.add_space(8.0);
-                    egui::CollapsingHeader::new("自定义设置")
+                });
+            ui.add_space(10.0);
+            let env_var = api_keys::builtin_providers()
+                .iter()
+                .find(|(id, _, _)| *id == add.builtin_provider)
+                .map(|(_, _, env)| *env)
+                .unwrap_or("");
+            ui.horizontal(|ui| {
+                ui.label("API 密钥");
+                ui.weak("?");
+            });
+            ui.add(
+                egui::TextEdit::singleline(&mut add.builtin_key)
+                    .password(true)
+                    .hint_text(format!("留空使用环境认证 ({env_var})"))
+                    .desired_width(f32::INFINITY),
+            );
+            let env_set = std::env::var_os(env_var).is_some_and(|v| !v.is_empty());
+            if add.builtin_key.trim().is_empty() && !env_set {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 160, 70),
+                    format!("未检测到环境变量。请填写 API 密钥，或设置环境变量 {env_var}。"),
+                );
+            } else if env_set && add.builtin_key.trim().is_empty() {
+                ui.label(
+                    egui::RichText::new(format!("将使用环境变量 {env_var}（不显示值）。"))
+                        .weak()
+                        .size(11.0),
+                );
+            }
+            if let Some(row) = form
+                .rows
+                .iter()
+                .find(|row| row.provider_id == add.builtin_provider)
+            {
+                if row.presence == KeyPresence::Oauth {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 160, 70),
+                        "该提供商已有 OAuth 登录，保存不会覆盖。",
+                    );
+                } else if row.presence == KeyPresence::Stored {
+                    ui.label(
+                        egui::RichText::new(format!("已保存 · {STORED_KEY_MASK}"))
+                            .weak()
+                            .size(11.0),
+                    );
+                }
+            }
+            ui.add_space(8.0);
+            egui::CollapsingHeader::new("自定义设置")
                         .default_open(false)
                         .id_salt("add_builtin_advanced")
                         .show(ui, |ui| {
@@ -879,141 +916,148 @@ pub fn render_add_provider(
                                 .size(11.0),
                             );
                         });
-                }
-                AddProviderTab::Custom => {
-                    ui.label(
+        }
+        AddProviderTab::Custom => {
+            ui.label(
                         egui::RichText::new(
                             "连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。",
                         )
                         .weak()
                         .size(12.0),
                     );
-                    ui.add_space(10.0);
-                    ui.label("Provider ID");
-                    ui.add_enabled(
-                        !add.editing_custom,
-                        egui::TextEdit::singleline(&mut add.custom_id)
-                            .hint_text("my-gateway")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 160, 70),
-                        "创建后不可改",
-                    );
-                    ui.add_space(6.0);
-                    ui.label("显示名称");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut add.custom_name)
-                            .hint_text("可选")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.add_space(6.0);
-                    ui.label("API 地址");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut add.custom_base_url)
-                            .hint_text("https://gateway.example/v1")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.add_space(6.0);
-                    ui.label("API 协议");
-                    let proto_label = protocol_label(&add.custom_api);
-                    egui::ComboBox::from_id_salt("add_custom_api")
-                        .selected_text(proto_label)
-                        .width(ui.available_width())
-                        .show_ui(ui, |ui| {
-                            for (id, label) in API_PROTOCOLS {
-                                if ui.selectable_label(&add.custom_api == id, *label).clicked() {
-                                    add.custom_api = (*id).to_owned();
-                                }
-                            }
-                        });
-                    ui.add_space(6.0);
-                    ui.label("API 密钥");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut add.custom_key)
-                            .password(true)
-                            .hint_text("保存后只显示掩码")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.label("模型目录");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("获取可用模型").clicked() {
-                                fetch_models = true;
-                            }
-                        });
-                    });
-                    ui.horizontal(|ui| {
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut add.custom_model_draft)
-                                .hint_text("deepseek-chat")
-                                .desired_width((ui.available_width() - 72.0).max(120.0)),
-                        );
-                        if ui.button("添加").clicked()
-                            || (resp.lost_focus()
-                                && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                        {
-                            add_model = true;
+            ui.add_space(10.0);
+            ui.label("Provider ID");
+            ui.add_enabled(
+                !add.editing_custom,
+                egui::TextEdit::singleline(&mut add.custom_id)
+                    .hint_text("my-gateway")
+                    .desired_width(f32::INFINITY),
+            );
+            ui.colored_label(egui::Color32::from_rgb(220, 160, 70), "创建后不可改");
+            ui.add_space(6.0);
+            ui.label("显示名称");
+            ui.add(
+                egui::TextEdit::singleline(&mut add.custom_name)
+                    .hint_text("可选")
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(6.0);
+            ui.label("API 地址");
+            ui.add(
+                egui::TextEdit::singleline(&mut add.custom_base_url)
+                    .hint_text("https://gateway.example/v1")
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(6.0);
+            ui.label("API 协议");
+            let proto_label = protocol_label(&add.custom_api);
+            egui::ComboBox::from_id_salt("add_custom_api")
+                .selected_text(proto_label)
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    for (id, label) in API_PROTOCOLS {
+                        if ui.selectable_label(&add.custom_api == id, *label).clicked() {
+                            add.custom_api = (*id).to_owned();
                         }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        for (i, model) in add.custom_models.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(model)
-                                        .monospace()
-                                        .size(12.0),
-                                );
-                                if ui.small_button("×").clicked() {
-                                    remove_model = Some(i);
-                                }
-                            });
-                        }
-                    });
-                    if let Some(hint) = &add.fetch_hint {
-                        ui.label(
-                            egui::RichText::new(hint)
-                                .weak()
-                                .size(11.0),
-                        );
                     }
-                }
-            }
-
-            ui.add_space(16.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(egui::Button::new("保存").min_size([72.0, 28.0].into()))
-                    .clicked()
+                });
+            ui.add_space(6.0);
+            ui.label("API 密钥");
+            ui.add(
+                egui::TextEdit::singleline(&mut add.custom_key)
+                    .password(true)
+                    .hint_text("保存后只显示掩码")
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label("模型目录");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("获取可用模型").clicked() {
+                        actions.fetch_models = true;
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut add.custom_model_draft)
+                        .hint_text("deepseek-chat")
+                        .desired_width((ui.available_width() - 72.0).max(120.0)),
+                );
+                if ui.button("添加").clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 {
-                    want_save = true;
-                }
-                if ui.button("取消").clicked() {
-                    want_cancel = true;
+                    actions.add_model = true;
                 }
             });
-        });
+            ui.horizontal_wrapped(|ui| {
+                for (i, model) in add.custom_models.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(model).monospace().size(12.0));
+                        if ui.small_button("×").clicked() {
+                            actions.remove_model = Some(i);
+                        }
+                    });
+                }
+            });
+            if let Some(hint) = &add.fetch_hint {
+                ui.label(egui::RichText::new(hint).weak().size(11.0));
+            }
+        }
+    }
 
-    if add_model {
+    ui.add_space(16.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let save_label = if primary_save {
+            "保存并启用"
+        } else {
+            "保存"
+        };
+        if ui
+            .add(
+                egui::Button::new(save_label)
+                    .fill(theme::accent())
+                    .min_size([88.0, 30.0].into()),
+            )
+            .clicked()
+        {
+            actions.want_save = true;
+        }
+        if ui.button("取消").clicked() {
+            actions.want_cancel = true;
+        }
+    });
+    actions
+}
+
+fn apply_add_provider_actions(
+    add: &mut AddProviderForm,
+    form: &mut ApiKeyForm,
+    auth_path: Option<&Path>,
+    models_path: Option<&Path>,
+    actions: AddProviderActions,
+    closed: bool,
+) -> ModelsTabResult {
+    let mut result = ModelsTabResult::default();
+    if actions.add_model {
         let id = add.custom_model_draft.trim().to_owned();
         if !id.is_empty() && !add.custom_models.iter().any(|m| m == &id) {
             add.custom_models.push(id);
         }
         add.custom_model_draft.clear();
     }
-    if let Some(i) = remove_model {
+    if let Some(i) = actions.remove_model {
         if i < add.custom_models.len() {
             add.custom_models.remove(i);
         }
     }
-    if fetch_models {
+    if actions.fetch_models {
         add.fetch_hint = Some(
             "请手动添加模型 ID（例如 deepseek-chat）。远程目录拉取不在本里程碑范围。".to_owned(),
         );
     }
 
-    if want_save {
+    if actions.want_save {
         match add.tab {
             AddProviderTab::Builtin => {
                 let key = add.builtin_key.trim().to_owned();
@@ -1081,7 +1125,7 @@ pub fn render_add_provider(
         }
     }
 
-    if want_cancel || !still_open {
+    if actions.want_cancel || closed {
         add.close();
     }
 

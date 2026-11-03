@@ -35,7 +35,7 @@ pub enum StatsFetchState {
     Failed,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct SessionInsights {
     /// Latest cumulative usage from `message_update.usage` (when Pi sends fields).
     pub live_usage: TokenUsage,
@@ -110,16 +110,42 @@ impl SessionInsights {
 
     /// 底栏：Tokens · Trace · tok/s（对齐验收原型）。
     pub fn footer_metrics_line(&self) -> String {
-        let tokens = self.tokens_chip();
-        let (trace_n, trace_time) = self.trace_chip();
-        let tps = self
-            .last_tps
-            .map(|v| format!("{v:.0} tok/s"))
-            .unwrap_or_else(|| "— tok/s".to_owned());
-        format!("Tokens {tokens}  ·  Trace {trace_n}调用 · {trace_time}  ·  {tps}")
+        let (tokens, trace, tps) = self.footer_metric_parts();
+        format!("{tokens}  ·  {trace}  ·  {tps}")
     }
 
-    fn tokens_chip(&self) -> String {
+    pub fn footer_metric_parts(&self) -> (String, String, String) {
+        let tokens = format!("Tokens {}", self.tokens_chip());
+        let (trace_n, trace_time) = self.trace_chip();
+        let trace = format!("Trace {trace_n}调用 · {trace_time}");
+        let tps = self
+            .last_tps
+            .map(|v| format!("{v:.0}tok/s"))
+            .unwrap_or_else(|| "— tok/s".to_owned());
+        (tokens, trace, tps)
+    }
+
+    pub fn token_slices(&self) -> Vec<(&'static str, u64)> {
+        let usage = self.effective_usage();
+        let mut out = Vec::new();
+        if let Some(v) = usage.input {
+            out.push(("输入消息", v));
+        }
+        if let Some(v) = usage.output {
+            out.push(("工具调用", v));
+        }
+        if let Some(v) = usage.cache_read.or(usage.cache_write) {
+            out.push(("缓存读取", v));
+        }
+        if out.is_empty() {
+            if let Some(total) = usage.total {
+                out.push(("总计", total));
+            }
+        }
+        out
+    }
+
+    pub fn tokens_chip(&self) -> String {
         let used = self
             .session_stats
             .as_ref()
