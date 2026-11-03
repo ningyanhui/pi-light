@@ -1615,8 +1615,8 @@ impl PiLightApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::TRANSPARENT)
-                    .inner_margin(16.0),
+                    .fill(theme::chrome_bg())
+                    .inner_margin(egui::Margin::symmetric(24.0, 18.0)),
             )
             .show(ctx, |ui| {
                 self.paint_main_backdrop(ui);
@@ -1836,7 +1836,7 @@ impl PiLightApp {
                                         .size(12.0),
                                 )
                                 .fill(theme::accent())
-                                .rounding(egui::Rounding::same(12.0)),
+                                .rounding(egui::Rounding::same(8.0)),
                             )
                             .clicked()
                         {
@@ -2550,7 +2550,7 @@ fn show_user_message(
             .fill(egui::Color32::from_rgb(36, 52, 75))
             .stroke(egui::Stroke::new(1.0_f32, theme::glass_stroke()))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.72);
+                ui.set_max_width(ui.available_width().min(760.0));
                 if editing {
                     ui.add(
                         egui::TextEdit::multiline(draft)
@@ -2617,7 +2617,7 @@ fn show_assistant_message(
             .inner_margin(egui::Margin::symmetric(4.0, 6.0))
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.92);
+                ui.set_max_width(ui.available_width().min(920.0));
                 markdown_ui::show_markdown(
                     ui,
                     &row.text,

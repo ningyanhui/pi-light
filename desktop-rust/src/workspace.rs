@@ -515,8 +515,8 @@ fn show_sessions_panel(
                 .size(13.0),
         )
         .fill(theme::accent())
-        .rounding(Rounding::same(10.0))
-        .min_size(egui::vec2(ui.available_width(), 34.0)),
+        .rounding(Rounding::same(8.0))
+        .min_size(egui::vec2(ui.available_width(), 36.0)),
     );
     theme::paint_purple_glow(ui, new_resp.rect, 8.0);
     if new_resp.clicked() {
@@ -608,7 +608,7 @@ fn session_row(
     let fill = if selected {
         Color32::from_rgb(35, 51, 73)
     } else {
-        Color32::from_rgba_unmultiplied(16, 14, 28, 70)
+        Color32::from_rgb(22, 29, 39)
     };
     let inner = egui::Frame::none()
         .fill(fill)
