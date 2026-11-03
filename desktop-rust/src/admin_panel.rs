@@ -747,7 +747,7 @@ impl AdminPanelState {
 
                 if let Some(err) = self.last_error.clone() {
                     ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(220, 120, 80), format!("⚠ {err}"));
+                        ui.colored_label(crate::theme::warn(), format!("⚠ {err}"));
                         if ui.small_button("×").clicked() {
                             self.last_error = None;
                         }
@@ -1418,9 +1418,9 @@ fn render_item_list(
         let is_enabled = item.state == ItemState::Enabled;
         let can_toggle = item.capability == ItemCapability::ReadWrite;
         let (state_text, state_color) = match item.state {
-            ItemState::Enabled => ("已启用", egui::Color32::from_rgb(90, 180, 110)),
-            ItemState::Disabled => ("已关闭", egui::Color32::from_rgb(180, 100, 80)),
-            ItemState::Unknown => ("未知", egui::Color32::from_rgb(180, 160, 70)),
+            ItemState::Enabled => ("已启用", crate::theme::ok()),
+            ItemState::Disabled => ("已关闭", crate::theme::danger()),
+            ItemState::Unknown => ("未知", crate::theme::warn()),
         };
 
         egui::Frame::none()
@@ -1479,7 +1479,7 @@ fn render_memory_editor(ui: &mut egui::Ui, editor: &mut MemoryEditorState) -> (b
         if editor.is_dirty() {
             ui.label(
                 egui::RichText::new("● 已修改")
-                    .color(egui::Color32::from_rgb(220, 160, 40))
+                    .color(crate::theme::warn())
                     .size(11.0),
             );
         }
@@ -1492,7 +1492,7 @@ fn render_memory_editor(ui: &mut egui::Ui, editor: &mut MemoryEditorState) -> (b
     );
 
     if let Some(err) = &editor.save_error {
-        ui.colored_label(egui::Color32::from_rgb(210, 80, 60), format!("✗ {err}"));
+        ui.colored_label(crate::theme::danger(), format!("✗ {err}"));
     }
 
     ui.add_space(4.0);
@@ -1643,7 +1643,7 @@ pub fn show_shell_source(ui: &mut egui::Ui) {
         );
         if crate::bash_path::is_wsl_launcher(path) {
             ui.colored_label(
-                egui::Color32::from_rgb(210, 150, 70),
+                crate::theme::warn(),
                 "这是 WSL 启动器，不会把它当作默认 shellPath。",
             );
         }
@@ -1771,7 +1771,7 @@ fn render_models(
     if cfg.live_model.is_some() {
         ui.label(
             egui::RichText::new("  ● 来自实时 RPC get_state")
-                .color(egui::Color32::from_rgb(60, 160, 80))
+                .color(crate::theme::ok())
                 .size(11.0),
         );
     } else if cfg.settings_path.is_some() {

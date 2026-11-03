@@ -82,7 +82,9 @@ import com.pilight.android.CompanionViewModel
 import com.pilight.android.DesktopUi
 import com.pilight.android.data.DesktopMode
 import com.pilight.android.ui.theme.AccentBlue
+import com.pilight.android.ui.theme.Bg
 import com.pilight.android.ui.theme.Connected
+import com.pilight.android.ui.theme.Surface
 import com.pilight.android.ui.theme.PurpleBright
 import com.pilight.android.ui.theme.PurplePrimary
 import com.pilight.android.ui.theme.SurfaceCard
@@ -443,7 +445,7 @@ private fun HostPreview(
             Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF101010))
+                .background(Bg)
                 .then(streamInputModifier(interactive, desktop, onPointer, onScroll)),
     ) {
         if (bitmap != null) {
@@ -542,11 +544,11 @@ private fun WaitingPane(
                 .fillMaxWidth()
                 .padding(12.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF161616))
-                .border(1.dp, Color(0xFF2A2A2A), RoundedCornerShape(10.dp)),
+                .background(SurfaceCard)
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp)),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().background(Color(0xFF1C1C1C)).padding(horizontal = 10.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BrandMark(size = 16.dp)
@@ -579,7 +581,7 @@ private fun InfoTile(title: String, value: String, modifier: Modifier = Modifier
         modifier =
             modifier
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF111111))
+                .background(SurfaceElevated)
                 .padding(10.dp),
     ) {
         Text(title, color = MaterialTheme.colorScheme.secondary, fontSize = 11.sp)
@@ -616,7 +618,7 @@ private fun ModeBar(
     mode: DesktopMode,
     onMode: (DesktopMode) -> Unit,
 ) {
-    NavigationBar(containerColor = Color(0xFF0E0E12), modifier = Modifier.navigationBarsPadding()) {
+    NavigationBar(containerColor = Surface, modifier = Modifier.navigationBarsPadding()) {
         DesktopMode.entries.forEach { item ->
             NavigationBarItem(
                 selected = mode == item,
@@ -769,7 +771,7 @@ private fun FullscreenStage(
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(Bg)
                 .then(streamInputModifier(true, desktop, onPointer, onScroll)),
     ) {
         if (bitmap != null) {
@@ -781,7 +783,7 @@ private fun FullscreenStage(
             )
         } else {
             Box(
-                modifier = Modifier.fillMaxSize().background(Color(0xFF7EB6F0)),
+                modifier = Modifier.fillMaxSize().background(Bg),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(if (connected) "等待首帧" else "中继未连接", color = Color.White)
@@ -812,7 +814,7 @@ private fun FullscreenStage(
                 modifier =
                     Modifier
                         .clip(RoundedCornerShape(20.dp))
-                        .background(Color(0x99000000))
+                        .background(SurfaceElevated.copy(alpha = 0.92f))
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -836,11 +838,11 @@ private fun FullscreenStage(
                     .statusBarsPadding()
                     .padding(top = 52.dp, end = 16.dp)
                     .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xE6FFFFFF)),
+                    .background(SurfaceElevated),
         ) {
-            Icon(Icons.Outlined.OpenWith, contentDescription = null, tint = Color.DarkGray)
+            Icon(Icons.Outlined.OpenWith, contentDescription = null, tint = Color.White)
             Spacer(Modifier.size(6.dp))
-            Text("退出全屏", color = Color.DarkGray)
+            Text("退出全屏", color = Color.White)
         }
         if (bitmap == null) {
             Column(

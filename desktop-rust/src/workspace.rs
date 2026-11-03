@@ -423,7 +423,7 @@ pub fn show_dock(
         ] {
             let selected = workspace.dock == tab;
             let text = egui::RichText::new(label).size(12.0).color(if selected {
-                Color32::WHITE
+                theme::text_primary()
             } else {
                 theme::text_muted()
             });
@@ -435,11 +435,15 @@ pub fn show_dock(
             let resp = ui.add(
                 button
                     .fill(if selected {
-                        theme::accent()
+                        Color32::from_rgb(35, 51, 73)
                     } else {
                         theme::card_bg()
                     })
-                    .stroke(Stroke::NONE)
+                    .stroke(if selected {
+                        Stroke::new(1.0_f32, theme::accent_stroke_soft())
+                    } else {
+                        Stroke::NONE
+                    })
                     .rounding(Rounding::same(10.0))
                     .min_size(egui::vec2(72.0, 36.0)),
             );

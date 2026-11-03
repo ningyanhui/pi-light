@@ -2334,7 +2334,7 @@ impl PiLightApp {
                         theme::soft_card(ui, |ui| {
                             ui.label(
                                 egui::RichText::new("Pi 没有启动")
-                                    .color(egui::Color32::from_rgb(210, 120, 80))
+                                    .color(theme::warn())
                                     .strong()
                                     .size(20.0),
                             );
@@ -2677,25 +2677,25 @@ fn show_streaming_assistant(ui: &mut egui::Ui, text: &str) {
 fn pi_dot_color(probe: &PiProbe, rpc_alive: bool) -> (egui::Color32, &'static str) {
     if !probe.is_ready() {
         return (
-            egui::Color32::from_rgb(200, 90, 70),
+            theme::danger(),
             "Pi 未就绪。恢复说明在主界面折叠区和设置「通用」页。",
         );
     }
     if rpc_alive {
         match probe {
             PiProbe::BundledReady(_) => (
-                egui::Color32::from_rgb(80, 200, 100),
+                theme::ok(),
                 "Pi 就绪 — 内嵌 sidecar（Bundled Ready）",
             ),
             PiProbe::DetectedLocal { .. } => (
-                egui::Color32::from_rgb(80, 160, 230),
+                theme::accent_bright(),
                 "Pi 就绪 — 本机安装（Detected Local）",
             ),
             PiProbe::NotReady => unreachable!(),
         }
     } else {
         (
-            egui::Color32::from_rgb(210, 150, 50),
+            theme::warn(),
             "Pi 路径已找到但 RPC 尚未启动",
         )
     }
