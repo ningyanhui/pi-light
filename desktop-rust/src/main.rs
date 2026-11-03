@@ -2683,10 +2683,7 @@ fn pi_dot_color(probe: &PiProbe, rpc_alive: bool) -> (egui::Color32, &'static st
     }
     if rpc_alive {
         match probe {
-            PiProbe::BundledReady(_) => (
-                theme::ok(),
-                "Pi 就绪 — 内嵌 sidecar（Bundled Ready）",
-            ),
+            PiProbe::BundledReady(_) => (theme::ok(), "Pi 就绪 — 内嵌 sidecar（Bundled Ready）"),
             PiProbe::DetectedLocal { .. } => (
                 theme::accent_bright(),
                 "Pi 就绪 — 本机安装（Detected Local）",
@@ -2694,10 +2691,7 @@ fn pi_dot_color(probe: &PiProbe, rpc_alive: bool) -> (egui::Color32, &'static st
             PiProbe::NotReady => unreachable!(),
         }
     } else {
-        (
-            theme::warn(),
-            "Pi 路径已找到但 RPC 尚未启动",
-        )
+        (theme::warn(), "Pi 路径已找到但 RPC 尚未启动")
     }
 }
 
