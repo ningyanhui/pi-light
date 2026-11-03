@@ -569,7 +569,7 @@ private fun WaitingPane(
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
                 color = AccentBlue,
-                trackColor = Color(0xFF2A2A2A),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
         }
     }
