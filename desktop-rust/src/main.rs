@@ -1823,12 +1823,19 @@ impl PiLightApp {
                     ui.add_space(4.0);
                 }
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("#sess-{id}  {title}"))
-                            .strong()
-                            .size(14.0)
-                            .color(theme::text_primary()),
-                    );
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(truncate_display(&title, 56))
+                                .strong()
+                                .size(14.0)
+                                .color(theme::text_primary()),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("会话 #{id}"))
+                                .size(10.0)
+                                .color(theme::text_dim()),
+                        );
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_enabled(
