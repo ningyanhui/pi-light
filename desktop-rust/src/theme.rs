@@ -439,7 +439,6 @@ pub fn paint_lightning_backdrop(_ui: &egui::Ui) {}
 pub fn paint_atmosphere(_ui: &egui::Ui, _texture: &egui::TextureHandle) {}
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -457,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn accent_stays_indigo() {
+    fn accent_uses_cobalt_palette() {
         assert_eq!(accent(), Color32::from_rgb(91, 137, 255));
         assert_eq!(accent_bright(), Color32::from_rgb(126, 164, 255));
     }
@@ -485,9 +484,9 @@ mod tests {
         let stroke = session_row_stroke(true);
         assert_ne!(stroke.color, accent());
         let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
-        assert!((56..=115).contains(&a), "alpha={a}");
-        assert!((110..=140).contains(&r), "r={r}");
-        assert!((60..=95).contains(&g), "g={g}");
-        assert!(b >= 230, "b={b}");
+        assert!((80..=110).contains(&a), "alpha={a}");
+        assert!((80..=105).contains(&r), "r={r}");
+        assert!((120..=150).contains(&g), "g={g}");
+        assert!(b >= 240, "b={b}");
     }
 }
