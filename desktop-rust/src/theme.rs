@@ -37,7 +37,7 @@ pub fn card_bg() -> Color32 {
 }
 
 pub fn hairline() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 20)
+    Color32::from_rgb(43, 53, 68)
 }
 
 pub fn text_primary() -> Color32 {
