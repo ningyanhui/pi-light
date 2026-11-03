@@ -265,6 +265,7 @@ cd android
 | 文档 | 说明 |
 |------|------|
 | [`docs/architecture.md`](./docs/architecture.md) | 架构、模块、里程碑 |
+| [`docs/ui-system.md`](./docs/ui-system.md) | 桌面与 Android 共用视觉系统、布局和交互规则 |
 | [`docs/workspace.md`](./docs/workspace.md) | 工作区 cwd：无感知切换与上游限制 |
 | [`docs/remote-acceptance.md`](./docs/remote-acceptance.md) | 公网远程配对、中继启停与验收剧本 |
 | [`docs/companion-protocol.md`](./docs/companion-protocol.md) | companion 配对 / claim / `/v1/chat` / `/v1/desktop` |
