@@ -54,8 +54,6 @@ struct PiLightApp {
     egui_ctx: egui::Context,
     /// M4′ 管理面 / 设置面状态。
     admin: AdminPanelState,
-    /// 用户已从首次模型引导进入对话。
-    onboarding_dismissed: bool,
     /// 引导期间只把设置切到「模型」一次。
     primed_model_tab: bool,
     /// M5′ `#` 引用选择器状态。
@@ -106,19 +104,20 @@ impl PiLightApp {
             None => (SessionHub::new(), fallback_dir),
         };
         let workdir_draft = workdir.to_string_lossy().into_owned();
-        let onboarding_dismissed = cc
+        let stored_onboarding = cc
             .storage
-            .and_then(|storage| storage.get_string(onboarding::ONBOARDING_DISMISSED_KEY))
-            .as_deref()
-            == Some("1");
+            .and_then(|storage| storage.get_string(onboarding::SHOW_ONBOARDING_KEY));
+        let admin = AdminPanelState {
+            show_onboarding: onboarding::show_onboarding_from_storage(stored_onboarding.as_deref()),
+            ..AdminPanelState::default()
+        };
         let mut app = Self {
             pi_probe: probe,
             rpc_client: None,
             sessions,
             spawn_error: None,
             egui_ctx,
-            admin: AdminPanelState::default(),
-            onboarding_dismissed,
+            admin,
             primed_model_tab: false,
             ref_chooser: RefChooserState::default(),
             ref_chips: Vec::new(),
@@ -752,9 +751,10 @@ impl PiLightApp {
 
 impl eframe::App for PiLightApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if self.onboarding_dismissed {
-            storage.set_string(onboarding::ONBOARDING_DISMISSED_KEY, "1".to_owned());
-        }
+        storage.set_string(
+            onboarding::SHOW_ONBOARDING_KEY,
+            onboarding::show_onboarding_storage_value(self.admin.show_onboarding).to_owned(),
+        );
         self.persist_sessions(true);
     }
 
@@ -811,7 +811,7 @@ impl eframe::App for PiLightApp {
         }
 
         let surface =
-            onboarding::first_run_surface(self.pi_probe.is_ready(), self.onboarding_dismissed);
+            onboarding::first_run_surface(self.pi_probe.is_ready(), self.admin.show_onboarding);
         if matches!(surface, FirstRunSurface::ModelSetup) && !self.primed_model_tab {
             self.admin.add_provider.open_builtin(None);
             self.primed_model_tab = true;
@@ -1789,7 +1789,8 @@ impl PiLightApp {
             self.admin.last_error = Some(err);
         }
         if dismiss {
-            self.onboarding_dismissed = true;
+            self.admin.show_onboarding = false;
+            self.primed_model_tab = false;
             self.admin.open = false;
             self.admin.opened_pass = None;
             self.admin.add_provider.close();
