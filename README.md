@@ -68,7 +68,7 @@ pi-light 把官方 Pi（MIT，钉定 **v1.4.0**）以 sidecar 方式嵌进 [egui
 | 扩展市场 | 浏览 / 搜索 / Extension·Skill·Prompt·Theme 滤镜；详情卡展示许可证、关键词、install 脚本等注册表元数据；确认后 sidecar 执行 `pi install npm:…`；已安装可 list / remove。目录来源与 [pi.dev/packages](https://pi.dev/packages) 相同（npm `pi-package`）。 |
 | 记忆 | Project / User / Session 三层；内联编辑写回文件。 |
 | 远程访问 | 允许手机远程、配对码 / 二维码、Cloudflare Tunnel 启停、已授权设备可撤销。浏览 / 触控 / 全屏远程桌面走同一中继。 |
-| 通用 | Pi 程序位置等高级项（环境变量、sidecar 目录、PATH）收在折叠区。 |
+| 通用 | 可选「显示首次引导」（默认关）；Pi 程序位置等高级项（环境变量、sidecar 目录、PATH）收在折叠区。 |
 
 侧栏另有「插件 / 知识库 / 数据」快捷入口，分别打开扩展市场、记忆、Skills。顶栏与作曲框都有模型下拉，选项来自 Pi 上报的可用模型。
 
@@ -115,11 +115,11 @@ SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 与 [`docs/preset-packages.md`](
 
 ### 第一次打开
 
-官方便携包已经带好 Pi。第一次运行的主界面是**配置模型 / API 密钥**：
+官方便携包已经带好 Pi。启动后默认进入对话，**不会**自动弹出模型引导。
 
-1. 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，左侧欢迎「配置模型」，右侧是添加提供商表单。
-2. 从内置厂商或「自定义模型 API」填写密钥与端点，保存后点「进入对话」。
-3. 之后用侧栏「设置」打开抽屉，继续改模型、Skills、MCP、市场或远程访问。
+1. 程序在 `pi-light.exe` 旁边找到 `sidecar/pi/pi.exe` 后，主界面是侧栏 + 聊天区。
+2. 模型与 API 密钥在侧栏「设置」→「模型」配置：内置厂商或「自定义模型 API」。
+3. 若要再看引导页：设置 →「通用」打开「显示首次引导」（默认关，记在 `pi_light.show_onboarding`）。
 4. 若这次没找到 Pi：主界面说明便携包应已包含它，并提供「重新探测」。自己指定 Pi 程序收在折叠高级区。
 
 ### 日常使用
@@ -204,7 +204,7 @@ desktop-rust/src/
 ├── preset_packages.rs   # Slim 预置同步、操控包启用
 ├── api_keys.rs          # 应用内 API 密钥（掩码，不回显明文）
 ├── provider_catalog.rs  # 内置厂商 + 自定义 API / models.json
-├── onboarding.rs        # 首次打开：引导配置模型与密钥
+├── onboarding.rs        # 启动主路径：默认进对话，引导可选手动打开
 ├── session_ref.rs       # # 引用
 ├── remote_access.rs     # 远程访问页：配对码 / 二维码 / 设备
 ├── desktop_stream.rs    # JPEG 编码、Windows 主屏捕获、键鼠注入

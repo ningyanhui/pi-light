@@ -296,6 +296,8 @@ pub struct AdminPanelState {
     pub opened_pass: Option<u64>,
     /// 记忆页右侧 Trace/Token 面板用的本轮快照。
     pub memory_insights: Option<crate::session_insights::SessionInsights>,
+    /// 是否显示首次模型引导。默认关，仅「通用」页可打开。
+    pub show_onboarding: bool,
 }
 
 impl AdminPanelState {
@@ -549,7 +551,7 @@ impl AdminPanelState {
         }
     }
 
-    /// 日常配置表单（模型与密钥状态）。首次打开的主界面与设置页共用这一份。
+    /// 日常配置表单（模型与密钥状态）。可选引导页与设置「模型」页共用这一份。
     pub fn show_everyday_setup(
         &mut self,
         ui: &mut egui::Ui,
@@ -821,6 +823,15 @@ impl AdminPanelState {
                                     .size(13.0),
                                 );
                                 ui.add_space(10.0);
+                                ui.checkbox(&mut self.show_onboarding, "显示首次引导");
+                                ui.label(
+                                    egui::RichText::new(
+                                        "默认关闭。打开后会进入模型与密钥引导页；日常配置仍在「模型」页。",
+                                    )
+                                    .weak()
+                                    .size(12.0),
+                                );
+                                ui.add_space(10.0);
                                 show_shell_source(ui);
                                 ui.add_space(8.0);
                                 egui::CollapsingHeader::new("高级：自己指定 Pi 程序")
@@ -988,7 +999,7 @@ fn drawer_subtitle(tab: AdminTab) -> &'static str {
         AdminTab::Marketplace => "浏览 pi.dev/packages，确认后经 sidecar 安装或卸载。",
         AdminTab::Memory => "查看与编辑记忆文件。",
         AdminTab::RemoteAccess => "手机配对、Cloudflare Tunnel 与已授权设备。",
-        AdminTab::General => "通用与高级选项。",
+        AdminTab::General => "通用、首次引导与高级选项。",
     }
 }
 
@@ -2819,6 +2830,7 @@ mod tests {
         let panel = AdminPanelState::default();
         assert!(!panel.open);
         assert_eq!(panel.active_tab, AdminTab::Models);
+        assert!(!panel.show_onboarding);
     }
 
     #[test]
@@ -3077,6 +3089,7 @@ mod tests {
         assert_eq!(drawer_heading(AdminTab::Marketplace), "扩展市场");
         assert!(drawer_subtitle(AdminTab::Marketplace).contains("sidecar"));
         assert!(drawer_subtitle(AdminTab::RemoteAccess).contains("Cloudflare"));
+        assert!(drawer_subtitle(AdminTab::General).contains("首次引导"));
     }
 
     #[test]

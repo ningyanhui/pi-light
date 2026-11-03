@@ -75,7 +75,7 @@ pi-light/
 │   │   ├── preset_packages.rs    # Slim/操控 lockfile、settings 本地 path 同步
 │   │   ├── api_keys.rs           # 应用内 API 密钥（写入 auth.json，保存后掩码）
 │   │   ├── provider_catalog.rs   # 内置厂商 + 自定义 API / models.json
-│   │   ├── onboarding.rs         # 首次打开：只引导配置模型与密钥
+│   │   ├── onboarding.rs         # 启动主路径：默认进对话；引导可选手动打开
 │   │   ├── remote_access.rs      # 远程访问页（配对码 / QR / 设备）
 │   │   ├── desktop_stream.rs     # JPEG 编码、Windows 主屏捕获、键鼠注入
 │   │   ├── remote_gateway.rs     # 本机 loopback 控制面
@@ -119,7 +119,7 @@ pi-light/
 | `ext_market` | 扩展市场：npm `pi-package` 目录、类型滤镜、详情卡、元数据审计、确认安装；操控三包一键启用 |
 | `pi_pkg` | 经 sidecar 执行 `pi install` / `pi list` / `pi remove`；解析 `settings.json` `packages` |
 | `preset_packages` | 嵌入 lockfile；Slim 本地 path 写入 settings；操控包启用/停用；computer-use 权限向导闸门 |
-| `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
+| `onboarding` | 启动主路径：默认进对话（`pi_light.show_onboarding` 缺省关）；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `remote_access` | 远程访问页：允许手机远程、配对码/QR（TTL 10 分钟）、设备列表撤销、中继选项 |
 | `desktop_stream` | Windows 主屏 GDI 捕获 + JPEG；触控/全屏 `SendInput`；浏览不注入 |
