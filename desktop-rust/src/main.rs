@@ -14,6 +14,7 @@ use pi_light::{
     app_icon,
     chat::{ChatMessage, ChatState, SessionHub},
     fonts,
+    message_tree::{self, NodeId, NodeRole, BRANCH_HONESTY},
     onboarding::{self, FirstRunSurface},
     pi_path::{self, PiProbe},
     pi_rpc::{self, PiRpcClient, PiRpcEvent},
@@ -76,6 +77,11 @@ struct PiLightApp {
     remote: RemoteAccessState,
     /// M6-lite：当前 companion HTTP 回合的回包通道。
     companion_reply: Option<std::sync::mpsc::Sender<CompanionChatEvent>>,
+    /// 正在编辑的用户消息节点。
+    editing_node: Option<NodeId>,
+    edit_draft: String,
+    /// 消息树导航是否展开。
+    tree_open: bool,
 }
 
 impl PiLightApp {
@@ -126,6 +132,9 @@ impl PiLightApp {
             persist_retry_at: None,
             remote: RemoteAccessState::load_default(),
             companion_reply: None,
+            editing_node: None,
+            edit_draft: String::new(),
+            tree_open: false,
         };
         app.admin.discover_all();
         app.ensure_shell_path();
@@ -218,32 +227,29 @@ impl PiLightApp {
             return;
         }
         self.touch_sessions();
-        if let Some(client) = &mut self.rpc_client {
-            let chips = std::mem::take(&mut self.ref_chips);
-            let effective_prompt = session_ref::build_prompt_text(&chips, &user_text);
+        let chips = std::mem::take(&mut self.ref_chips);
+        let effective_prompt = session_ref::build_prompt_text(&chips, &user_text);
 
-            let display_text = if chips.is_empty() {
-                user_text.clone()
-            } else {
-                let labels: Vec<&str> = chips.iter().map(|c| c.display.as_str()).collect();
-                format!("[引用: {}]\n{}", labels.join(", "), user_text)
-            };
+        let display_text = if chips.is_empty() {
+            user_text.clone()
+        } else {
+            let labels: Vec<&str> = chips.iter().map(|c| c.display.as_str()).collect();
+            format!("[引用: {}]\n{}", labels.join(", "), user_text)
+        };
 
-            self.sessions.set_active_title_from_user(&user_text);
-            {
-                let chat = self.sessions.active_chat_mut();
-                chat.push_user(display_text);
-                chat.last_sent_prompt = Some(effective_prompt.clone());
-                chat.input.clear();
-                chat.begin_streaming();
-            }
-            self.ref_chooser.close();
-            if let Err(e) = client.send_prompt(&effective_prompt) {
-                self.sessions
-                    .active_chat_mut()
-                    .set_error(format!("发送失败：{e}"));
-            }
+        self.sessions.set_active_title_from_user(&user_text);
+        let prefix = self.sessions.active_chat().messages.clone();
+        let stale = self.sessions.active_chat().pi_stale;
+        {
+            let chat = self.sessions.active_chat_mut();
+            chat.push_user(display_text);
+            chat.last_sent_prompt = Some(effective_prompt.clone());
+            chat.input.clear();
+            chat.begin_streaming();
         }
+        self.ref_chooser.close();
+        self.editing_node = None;
+        self.send_prompt_maybe_replay(&effective_prompt, &prefix, stale);
         self.persist_sessions(true);
     }
 
@@ -257,6 +263,10 @@ impl PiLightApp {
         if self.sessions.active_is_streaming() {
             return;
         }
+        if let Some(id) = self.sessions.active_chat().tree.last_assistant_on_path() {
+            self.do_regenerate(id);
+            return;
+        }
         let prompt = match self.sessions.active_chat().last_sent_prompt.clone() {
             Some(p) => p,
             None => return,
@@ -265,14 +275,111 @@ impl PiLightApp {
             return;
         }
         self.touch_sessions();
-        if let Some(client) = &mut self.rpc_client {
-            let chat = self.sessions.active_chat_mut();
-            chat.drop_trailing_assistant();
-            chat.begin_streaming();
-            if let Err(e) = client.send_prompt(&prompt) {
-                chat.set_error(format!("重试失败：{e}"));
-            }
+        let prefix = self
+            .sessions
+            .active_chat()
+            .tree
+            .last_user_on_path()
+            .map(|id| self.sessions.active_chat().tree.ancestor_messages(id))
+            .unwrap_or_default();
+        self.sessions.active_chat_mut().begin_streaming();
+        self.send_prompt_maybe_replay(&prompt, &prefix, true);
+        self.persist_sessions(true);
+    }
+
+    fn do_regenerate(&mut self, assistant: NodeId) {
+        if self.sessions.active_is_streaming() || self.rpc_client.is_none() {
+            return;
         }
+        self.touch_sessions();
+        let Some((prefix, user_text)) = self
+            .sessions
+            .active_chat_mut()
+            .prepare_regenerate(assistant)
+        else {
+            return;
+        };
+        {
+            let chat = self.sessions.active_chat_mut();
+            chat.last_sent_prompt = Some(user_text.clone());
+            chat.begin_streaming();
+        }
+        self.send_prompt_maybe_replay(&user_text, &prefix, true);
+        self.persist_sessions(true);
+    }
+
+    fn do_edit_user(&mut self, user: NodeId, new_text: String) {
+        let new_text = new_text.trim().to_owned();
+        if new_text.is_empty() || self.sessions.active_is_streaming() || self.rpc_client.is_none() {
+            return;
+        }
+        self.touch_sessions();
+        let Some(prefix) = self
+            .sessions
+            .active_chat_mut()
+            .prepare_user_branch(user, new_text.clone())
+        else {
+            return;
+        };
+        self.sessions.set_active_title_from_user(&new_text);
+        {
+            let chat = self.sessions.active_chat_mut();
+            chat.last_sent_prompt = Some(new_text.clone());
+            chat.begin_streaming();
+        }
+        self.editing_node = None;
+        self.send_prompt_maybe_replay(&new_text, &prefix, true);
+        self.persist_sessions(true);
+    }
+
+    fn do_select_sibling(&mut self, id: NodeId, delta: i32) {
+        if self.sessions.active_is_streaming() {
+            return;
+        }
+        if self.sessions.active_chat_mut().select_sibling(id, delta) {
+            self.editing_node = None;
+            self.touch_sessions();
+            self.persist_sessions(true);
+        }
+    }
+
+    fn do_navigate(&mut self, id: NodeId) {
+        if self.sessions.active_is_streaming() {
+            return;
+        }
+        if self.sessions.active_chat_mut().navigate_to(id) {
+            self.editing_node = None;
+            self.touch_sessions();
+            self.persist_sessions(true);
+        }
+    }
+
+    /// 活动路径与 Pi 不一致时：new_session + 回放前缀后再发当前用户消息。
+    fn send_prompt_maybe_replay(
+        &mut self,
+        user_prompt: &str,
+        prefix: &[ChatMessage],
+        replay: bool,
+    ) {
+        let Some(client) = self.rpc_client.as_mut() else {
+            return;
+        };
+        let payload = if replay {
+            let _ = client.send_new_session();
+            message_tree::replay_prompt(prefix, user_prompt)
+        } else {
+            user_prompt.to_owned()
+        };
+        if let Err(e) = client.send_prompt(&payload) {
+            self.sessions
+                .active_chat_mut()
+                .set_error(format!("发送失败：{e}"));
+            return;
+        }
+        if replay {
+            let _ = client.request_get_state();
+        }
+        self.sessions.active_chat_mut().pi_stale = false;
     }
 
     fn do_new_session(&mut self) {
@@ -281,6 +388,8 @@ impl PiLightApp {
         }
         self.ref_chooser.close();
         self.ref_chips.clear();
+        self.editing_node = None;
+        self.edit_draft.clear();
         self.sessions.create_new();
         self.touch_sessions();
         if let Some(client) = &mut self.rpc_client {
@@ -313,6 +422,8 @@ impl PiLightApp {
         self.touch_sessions();
         self.ref_chooser.close();
         self.ref_chips.clear();
+        self.editing_node = None;
+        self.edit_draft.clear();
         if let Some(path) = file {
             if let Some(client) = &mut self.rpc_client {
                 if let Err(e) = client.send_switch_session(&path) {
@@ -443,19 +554,22 @@ impl PiLightApp {
         let text = pending.text;
         self.touch_sessions();
         self.sessions.set_active_title_from_user(&text);
+        let prefix = self.sessions.active_chat().messages.clone();
+        let stale = self.sessions.active_chat().pi_stale;
         {
             let chat = self.sessions.active_chat_mut();
             chat.push_user(text.clone());
             chat.last_sent_prompt = Some(text.clone());
             chat.begin_streaming();
         }
-        let send_err = self
-            .rpc_client
-            .as_mut()
-            .and_then(|client| client.send_prompt(&text).err());
-        if let Some(e) = send_err {
-            let msg = format!("发送失败：{e}");
-            self.sessions.active_chat_mut().set_error(msg.clone());
+        self.send_prompt_maybe_replay(&text, &prefix, stale);
+        if self.sessions.active_chat().error.is_some() {
+            let msg = self
+                .sessions
+                .active_chat()
+                .error
+                .clone()
+                .unwrap_or_else(|| "发送失败".into());
             let _ = pending.reply.send(CompanionChatEvent::Error {
                 code: "send_failed".into(),
                 message: msg,
@@ -982,7 +1096,9 @@ impl PiLightApp {
                                     can_retry,
                                     egui::Button::new("重试").min_size([60.0, 26.0].into()),
                                 )
-                                .on_hover_text("重试上一条已发送的 prompt")
+                                .on_hover_text(
+                                    "重新生成当前活动路径的最后一条助手回复（同会话分支）",
+                                )
                                 .clicked()
                             {
                                 retry_now = true;
@@ -1024,7 +1140,7 @@ impl PiLightApp {
         let is_streaming = self.sessions.active_is_streaming();
         let empty = self.sessions.active_chat().messages.is_empty();
 
-        let mut retry_from_actions = false;
+        let mut action: Option<ChatUiAction> = None;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -1049,6 +1165,10 @@ impl PiLightApp {
                     ui.separator();
                 }
 
+                if let Some(tree_action) = self.show_message_tree_panel(ui, is_streaming) {
+                    action = Some(tree_action);
+                }
+
                 let scroll_to_bottom = self.sessions.active_chat().scroll_to_bottom;
                 self.sessions.active_chat_mut().scroll_to_bottom = false;
 
@@ -1062,24 +1182,32 @@ impl PiLightApp {
                         let streaming_buf = self.sessions.active_chat().streaming_buf.clone();
                         let has_tools =
                             !self.sessions.active_chat().insights.trace_steps.is_empty();
-                        let last_assistant = self
-                            .sessions
-                            .active_chat()
-                            .messages
-                            .iter()
-                            .rposition(|msg| matches!(msg, ChatMessage::Assistant(_)));
-                        for (i, msg) in self.sessions.active_chat().messages.iter().enumerate() {
-                            match msg {
-                                ChatMessage::User(text) => {
-                                    show_user_message(ui, text);
+                        let rows = self.sessions.active_chat().path_rows();
+                        let last_assistant =
+                            rows.iter().rposition(|row| row.role == NodeRole::Assistant);
+                        let editing_node = self.editing_node;
+                        for (i, row) in rows.iter().enumerate() {
+                            match row.role {
+                                NodeRole::User => {
+                                    let editing = editing_node == Some(row.id);
+                                    if let Some(next) = show_user_message(
+                                        ui,
+                                        row,
+                                        editing,
+                                        &mut self.edit_draft,
+                                        !streaming,
+                                    ) {
+                                        action = Some(next);
+                                    }
                                 }
-                                ChatMessage::Assistant(text) => {
+                                NodeRole::Assistant => {
                                     if Some(i) == last_assistant && has_tools && !streaming {
                                         show_thinking_block(ui, self.sessions.active_chat());
                                         ui.add_space(8.0);
                                     }
-                                    if show_assistant_message(ui, text, false) {
-                                        retry_from_actions = true;
+                                    if let Some(next) = show_assistant_message(ui, row, !streaming)
+                                    {
+                                        action = Some(next);
                                     }
                                 }
                             }
@@ -1091,7 +1219,7 @@ impl PiLightApp {
                                 show_thinking_block(ui, self.sessions.active_chat());
                                 ui.add_space(8.0);
                             }
-                            show_assistant_message(ui, &streaming_buf, true);
+                            show_streaming_assistant(ui, &streaming_buf);
                             ui.add_space(6.0);
                         }
 
@@ -1100,8 +1228,101 @@ impl PiLightApp {
                         }
                     });
             });
-        if retry_from_actions {
-            self.do_retry();
+        if let Some(next) = action {
+            self.apply_chat_action(next);
+        }
+    }
+
+    fn show_message_tree_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        streaming: bool,
+    ) -> Option<ChatUiAction> {
+        let rows = self.sessions.active_chat().tree_rows();
+        if rows.is_empty() {
+            return None;
+        }
+        let mut action = None;
+        let has_branches = self.sessions.active_chat().tree.has_branches();
+        ui.horizontal(|ui| {
+            let label = if has_branches {
+                format!("消息树  {} 节点 · 有分支", rows.len())
+            } else {
+                format!("消息树  {} 节点", rows.len())
+            };
+            ui.strong(label);
+            if ui
+                .small_button(if self.tree_open { "收起" } else { "展开" })
+                .clicked()
+            {
+                self.tree_open = !self.tree_open;
+            }
+        });
+        ui.label(
+            egui::RichText::new(BRANCH_HONESTY)
+                .size(10.0)
+                .color(theme::text_dim()),
+        );
+        if self.tree_open {
+            theme::card_frame().show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("message_tree_nav")
+                    .max_height(160.0)
+                    .show(ui, |ui| {
+                        for row in &rows {
+                            let indent = "    ".repeat(row.depth);
+                            let role = match row.role {
+                                NodeRole::User => "用户",
+                                NodeRole::Assistant => "助手",
+                            };
+                            let mark = if row.on_active_path { "●" } else { "○" };
+                            let snippet = truncate_display(&row.text.replace('\n', " "), 36);
+                            let text = format!("{indent}{mark} {role}  {snippet}");
+                            let color = if row.on_active_path {
+                                theme::text_primary()
+                            } else {
+                                theme::text_muted()
+                            };
+                            let resp = ui.add_enabled(
+                                !streaming,
+                                egui::SelectableLabel::new(
+                                    row.on_active_path,
+                                    egui::RichText::new(text).size(12.0).color(color),
+                                ),
+                            );
+                            if resp.clicked() {
+                                action = Some(ChatUiAction::Navigate(row.id));
+                            }
+                        }
+                    });
+            });
+            ui.add_space(8.0);
+        }
+        action
+    }
+
+    fn apply_chat_action(&mut self, action: ChatUiAction) {
+        match action {
+            ChatUiAction::Prev(id) => self.do_select_sibling(id, -1),
+            ChatUiAction::Next(id) => self.do_select_sibling(id, 1),
+            ChatUiAction::EditStart(id) => {
+                if let Some(text) = self.sessions.active_chat().tree.text(id) {
+                    self.editing_node = Some(id);
+                    self.edit_draft = text.to_owned();
+                }
+            }
+            ChatUiAction::EditConfirm => {
+                if let Some(id) = self.editing_node {
+                    let draft = self.edit_draft.clone();
+                    self.do_edit_user(id, draft);
+                }
+            }
+            ChatUiAction::EditCancel => {
+                self.editing_node = None;
+                self.edit_draft.clear();
+            }
+            ChatUiAction::Regen(id) => self.do_regenerate(id),
+            ChatUiAction::Navigate(id) => self.do_navigate(id),
         }
     }
 
@@ -1291,9 +1512,11 @@ impl PiLightApp {
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new("输入 # 可引用本会话或历史消息。")
-                        .weak()
-                        .size(13.0),
+                    egui::RichText::new(
+                        "输入 # 可引用本会话或历史消息。消息上可编辑 / 重新生成并切换同会话分支。",
+                    )
+                    .weak()
+                    .size(13.0),
                 );
             });
         });
@@ -1793,7 +2016,65 @@ fn show_tool_card(ui: &mut egui::Ui, step: &pi_light::pi_rpc::TraceStep) {
 
 // ── Chat message renderers ────────────────────────────────────────────────
 
-fn show_user_message(ui: &mut egui::Ui, text: &str) {
+enum ChatUiAction {
+    Prev(NodeId),
+    Next(NodeId),
+    EditStart(NodeId),
+    EditConfirm,
+    EditCancel,
+    Regen(NodeId),
+    Navigate(NodeId),
+}
+
+fn show_branch_nav(
+    ui: &mut egui::Ui,
+    id: NodeId,
+    sibling_index: usize,
+    sibling_count: usize,
+    enabled: bool,
+) -> Option<ChatUiAction> {
+    if sibling_count <= 1 {
+        return None;
+    }
+    let mut action = None;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                enabled,
+                egui::Button::new("‹").min_size([22.0, 20.0].into()),
+            )
+            .on_hover_text("上一条兄弟分支")
+            .clicked()
+        {
+            action = Some(ChatUiAction::Prev(id));
+        }
+        ui.label(
+            egui::RichText::new(format!("{}/{}", sibling_index + 1, sibling_count))
+                .size(11.0)
+                .color(theme::text_muted()),
+        );
+        if ui
+            .add_enabled(
+                enabled,
+                egui::Button::new("›").min_size([22.0, 20.0].into()),
+            )
+            .on_hover_text("下一条兄弟分支")
+            .clicked()
+        {
+            action = Some(ChatUiAction::Next(id));
+        }
+    });
+    action
+}
+
+fn show_user_message(
+    ui: &mut egui::Ui,
+    row: &pi_light::message_tree::PathRow,
+    editing: bool,
+    draft: &mut String,
+    enabled: bool,
+) -> Option<ChatUiAction> {
+    let mut action = None;
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
@@ -1802,49 +2083,119 @@ fn show_user_message(ui: &mut egui::Ui, text: &str) {
             .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.72);
-                ui.label(
-                    egui::RichText::new(text)
-                        .color(theme::text_primary())
-                        .size(14.0),
-                );
+                if editing {
+                    ui.add(
+                        egui::TextEdit::multiline(draft)
+                            .desired_width(ui.available_width())
+                            .desired_rows(3),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                enabled && !draft.trim().is_empty(),
+                                egui::Button::new("发送分支"),
+                            )
+                            .clicked()
+                        {
+                            action = Some(ChatUiAction::EditConfirm);
+                        }
+                        if ui.button("取消").clicked() {
+                            action = Some(ChatUiAction::EditCancel);
+                        }
+                    });
+                } else {
+                    ui.label(
+                        egui::RichText::new(&row.text)
+                            .color(theme::text_primary())
+                            .size(14.0),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if let Some(nav) = show_branch_nav(
+                            ui,
+                            row.id,
+                            row.sibling_index,
+                            row.sibling_count,
+                            enabled,
+                        ) {
+                            action = Some(nav);
+                        }
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                egui::Button::new("编辑").min_size([40.0, 20.0].into()),
+                            )
+                            .on_hover_text("改写这条用户消息并分出同会话分支")
+                            .clicked()
+                        {
+                            action = Some(ChatUiAction::EditStart(row.id));
+                        }
+                    });
+                }
             });
     });
+    action
 }
 
-fn show_assistant_message(ui: &mut egui::Ui, text: &str, streaming: bool) -> bool {
-    let mut retry = false;
+fn show_assistant_message(
+    ui: &mut egui::Ui,
+    row: &pi_light::message_tree::PathRow,
+    enabled: bool,
+) -> Option<ChatUiAction> {
+    let mut action = None;
     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(4.0, 6.0))
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.92);
-                let body = if streaming {
-                    format!("{text}▌")
-                } else {
-                    text.to_owned()
-                };
                 ui.label(
-                    egui::RichText::new(body)
+                    egui::RichText::new(&row.text)
                         .size(14.0)
                         .color(egui::Color32::from_rgb(214, 216, 224)),
                 );
-                if !streaming && !text.is_empty() {
+                if !row.text.is_empty() {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
+                        if let Some(nav) = show_branch_nav(
+                            ui,
+                            row.id,
+                            row.sibling_index,
+                            row.sibling_count,
+                            enabled,
+                        ) {
+                            action = Some(nav);
+                        }
                         if theme::icon_button(ui, "⧉", "复制回复").clicked() {
-                            ui.ctx().copy_text(text.to_owned());
+                            ui.ctx().copy_text(row.text.clone());
                         }
                         let _ = theme::icon_button(ui, "▲", "有帮助");
                         let _ = theme::icon_button(ui, "▼", "没帮助");
-                        if theme::icon_button(ui, "↻", "重新生成").clicked() {
-                            retry = true;
+                        if theme::icon_button(ui, "↻", "重新生成").clicked() && enabled {
+                            action = Some(ChatUiAction::Regen(row.id));
                         }
                     });
                 }
             });
     });
-    retry
+    action
+}
+
+fn show_streaming_assistant(ui: &mut egui::Ui, text: &str) {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(4.0, 6.0))
+            .fill(egui::Color32::TRANSPARENT)
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width() * 0.92);
+                ui.label(
+                    egui::RichText::new(format!("{text}▌"))
+                        .size(14.0)
+                        .color(egui::Color32::from_rgb(214, 216, 224)),
+                );
+            });
+    });
 }
 
 // ── Pi status dot helpers ─────────────────────────────────────────────────

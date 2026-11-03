@@ -65,7 +65,8 @@ pi-light/
 │   │   ├── bash_path.rs          # 便携 bash 路径探测 + PATH 注入辅助（M5′+）
 │   │   ├── pi_path.rs            # Pi 三态路径探测
 │   │   ├── pi_rpc.rs             # JSONL RPC 客户端（spawn 时注入 bash PATH）
-│   │   ├── chat.rs               # 聊天状态机（M2′）
+│   │   ├── chat.rs               # 聊天状态机（M2′）+ 同会话消息树
+│   │   ├── message_tree.rs       # 壳侧消息树 / 回放 prompt
 │   │   ├── session_store.rs      # 会话历史落盘与启动恢复
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
 │   │   ├── admin_panel.rs        # 设置抽屉（七 Tab）
@@ -106,8 +107,9 @@ pi-light/
 | `bash_path` | 便携 bash 路径探测（捆绑 MinGit → 系统 PATH）；`bundled_path_dirs()` 供 `pi_rpc` spawn 注入 PATH |
 | `pi_path` | Pi 二进制路径探测三态；`PiProbe` 枚举 |
 | `pi_rpc` | `PiRpcClient`：spawn（可选 cwd，注入 bash PATH）→ JSONL；`validate_cwd` 入口单次校验；`new_session` / `switch_session` |
-| `chat` | 聊天状态机 + `SessionHub`（多会话）；重试上一条 prompt；可导出快照 |
-| `session_store` | 把会话列表、消息、草稿、工作目录写入 `~/.pi-light/sessions.json`，启动时读回 |
+| `chat` | 聊天状态机 + `SessionHub`（多会话）；同会话消息树；重试上一条 prompt；可导出快照 |
+| `message_tree` | 壳侧消息树：兄弟分支、活动路径、回放 prompt；不调用 Pi `fork` |
+| `session_store` | 把会话列表、消息树、草稿、工作目录写入 `~/.pi-light/sessions.json`（v2），启动时读回 v1/v2 |
 | `fonts` | 系统 CJK 字体作为 egui 回退；Windows 优先 `msyh.ttc` |
 | `api_keys` | 设置页写入 Pi `auth.json` 的 API 密钥；保存后掩码，不回显明文；允许自定义 provider id |
 | `provider_catalog` | 内置厂商卡片 + 自定义 API 表单；读写 `models.json` 的 `providers` 对象 |
@@ -260,7 +262,7 @@ CI / Release 仍只构建 debug APK（`testDebugUnitTest` + `assembleDebug`）�
 | 类目 | 限制说明 |
 |------|---------|
 | API Key | 设置抽屉的「模型」页可写入 `auth.json` 的字面 API 密钥。保存后只显示固定掩码，不回显明文，错误信息也不包含密钥。OAuth 不在此覆盖。环境变量与 `/login` 仍可用 |
-| 会话持久化 | `~/.pi-light/sessions.json` 保存壳内会话并在启动时恢复。Pi 会话文件仍在则 `switch_session`，否则 `new_session` 并保留壳内记录。无会话树 / fork |
+| 会话持久化 | `~/.pi-light/sessions.json`（v2）保存壳内会话、活动路径和消息树。Pi 会话文件仍在则 `switch_session`，否则 `new_session` 并保留壳内记录。同会话分支是壳侧树，不是 Pi 会话 fork |
 | Token 用量 | 依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」 |
 
 ## M5′ 诚实限制
@@ -270,7 +272,7 @@ CI / Release 仍只构建 debug APK（`testDebugUnitTest` + `assembleDebug`）�
 | 会话列表 RPC | Pi v1.4.0 无会话列表 RPC；当前会话消息始终可引用，历史会话通过本地文件探测（`~/.pi/sessions/*.json`） |
 | Pi 会话文件格式 | Pi 未公开精确格式；按字段名尽力解析 `title` / `summary` / `sessionId`；解析失败则静默跳过 |
 | 跨会话引用 | 仅支持在同一 Pi 进程会话内直接发送；不支持跨实例或远程会话引用 |
-| 消息分支树 | M5′ 不实现消息分支树 UI；若 Pi 官方支持则后续里程碑跟进 |
+| 消息分支树 | 壳侧同会话树：编辑用户消息 / 重新生成助手会分出兄弟分支，可切换与树导航。Pi v1.4.0 有 `get_tree`/`fork`，但 `fork` 会新开会话文件，RPC 无 `navigate_tree`。切换或改写分支时对 Pi 发 `new_session` 并回放当前路径，不宣称 Pi 原生跳转 |
 | Taskboard 布局 | 不实现 Taskboard；不引入 CDP / 双后端 / dsh |
 
 ## v3 M5 诚实限制

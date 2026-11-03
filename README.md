@@ -47,7 +47,8 @@ pi-light 把官方 Pi（MIT，钉定 **v1.4.0**）以 sidecar 方式嵌进 [egui
 找到 Pi 之后，主界面是侧栏 + 聊天区：
 
 - **流式对话**：官方 JSONL RPC 真连；生成中可停止，空闲时可重发上一条 prompt。
-- **多会话**：侧栏列表新建 / 切换；会话条也可切换。壳发 `new_session` / `switch_session`。列表、消息、草稿和工作目录写入 `~/.pi-light/sessions.json`（`PI_LIGHT_STATE_PATH` 可改路径），下次启动读回；对应 Pi 会话文件仍在则切回。
+- **多会话**：侧栏列表新建 / 切换；会话条也可切换。壳发 `new_session` / `switch_session`。列表、消息树、草稿和工作目录写入 `~/.pi-light/sessions.json`（`PI_LIGHT_STATE_PATH` 可改路径），下次启动读回；对应 Pi 会话文件仍在则切回。
+- **同会话消息树**：编辑用户消息或重新生成助手会在同一会话内分出兄弟分支，可切换兄弟、展开消息树导航。树由壳维护（Pi v1.4.0 无同会话 `navigate_tree`）；改写或切换后对 Pi 回放当前路径。
 - **工具卡片**：名称、状态、耗时、参数预览（`tool_execution_*`）。
 - **`#` 引用**：输入 `#` 引用当前会话消息或本机历史会话文件，chip 拼入 prompt。
 - **工作目录**：会话条菜单查看 / 切换 cwd，校验后重启 sidecar。
@@ -122,7 +123,7 @@ SHA-256 以仓库根目录 [`NOTICE`](./NOTICE) 与 [`docs/preset-packages.md`](
 
 ### 日常使用
 
-1. 在输入框写消息，Enter 或发送按钮提交；生成中点「停止」，空闲时点「重试」。
+1. 在输入框写消息，Enter 或发送按钮提交；生成中点「停止」，空闲时点「重试」。消息上可编辑 / 重新生成，并在同会话内切换分支。
 2. 输入 `#` 挑选本会话或历史消息，chip 会跟 prompt 一起发出。
 3. 侧栏或会话条新建 / 切换会话；会话条「⋯」改工作目录。
 4. 顶栏或输入区切换模型。
@@ -192,6 +193,7 @@ desktop-rust/src/
 ├── bash_path.rs         # 便携 bash 探测与 PATH 注入
 ├── pi_rpc.rs            # JSONL RPC（spawn 可带 cwd）
 ├── chat.rs              # 聊天状态机 + SessionHub
+├── message_tree.rs      # 同会话消息树（壳侧）
 ├── session_store.rs     # 会话历史落盘与启动恢复
 ├── session_insights.rs  # Token / Trace
 ├── admin_panel.rs       # 设置抽屉（七 Tab）

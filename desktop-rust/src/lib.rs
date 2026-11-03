@@ -8,6 +8,7 @@ pub mod bash_path;
 pub mod chat;
 pub mod ext_market;
 pub mod fonts;
+pub mod message_tree;
 pub mod onboarding;
 pub mod pi_path;
 pub mod pi_pkg;

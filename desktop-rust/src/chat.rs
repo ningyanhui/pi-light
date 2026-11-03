@@ -2,12 +2,13 @@
 //
 // Chat state machine for the pi-light chat UI (M2′ + 多会话 / 重试).
 
+use crate::message_tree::{MessageTree, NodeId, PathRow, TreeRow, TreeSnapshot};
 use crate::pi_rpc::PiRpcEvent;
 use crate::session_insights::SessionInsights;
 
 // ── Message types ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatMessage {
     User(String),
     Assistant(String),
@@ -18,7 +19,9 @@ pub enum ChatMessage {
 /// Tracks the full chat history and the current streaming state.
 #[derive(Default)]
 pub struct ChatState {
-    /// Completed conversation messages (user + assistant, interleaved).
+    /// 同会话消息树（含未展示的兄弟分支）。
+    pub tree: MessageTree,
+    /// 当前活动路径上的消息（由树派生，给引用 / 远程快照复用）。
     pub messages: Vec<ChatMessage>,
     /// Text currently in the input field.
     pub input: String,
@@ -34,13 +37,33 @@ pub struct ChatState {
     pub insights: SessionInsights,
     /// Last prompt actually sent to Pi (includes `#` 引用拼合). Used by retry.
     pub last_sent_prompt: Option<String>,
+    /// 活动路径已偏离 Pi 当前线性上下文，下次发送需要 new_session 回放。
+    pub pi_stale: bool,
 }
 
 impl ChatState {
+    fn sync_visible(&mut self) {
+        self.messages = self.tree.active_messages();
+        self.scroll_to_bottom = true;
+    }
+
+    pub fn path_rows(&self) -> Vec<PathRow> {
+        self.tree.active_path_rows()
+    }
+
+    pub fn tree_rows(&self) -> Vec<TreeRow> {
+        self.tree.tree_rows()
+    }
+
     /// Add a finalized user message to the history.
     pub fn push_user(&mut self, text: String) {
-        self.messages.push(ChatMessage::User(text));
-        self.scroll_to_bottom = true;
+        self.tree.push_user(text);
+        self.sync_visible();
+    }
+
+    pub fn push_assistant(&mut self, text: String) {
+        self.tree.push_assistant(text);
+        self.sync_visible();
     }
 
     /// Mark that Pi has started generating (clear the streaming buffer).
@@ -63,10 +86,11 @@ impl ChatState {
         self.is_streaming = false;
         if !self.streaming_buf.is_empty() {
             let text = std::mem::take(&mut self.streaming_buf);
-            self.messages.push(ChatMessage::Assistant(text));
+            self.tree.push_assistant(text);
+            self.sync_visible();
         } else if aborted {
-            self.messages
-                .push(ChatMessage::Assistant("[已中止]".to_owned()));
+            self.tree.push_assistant("[已中止]".to_owned());
+            self.sync_visible();
         }
         self.insights.on_turn_end();
         self.scroll_to_bottom = true;
@@ -87,11 +111,59 @@ impl ChatState {
 
     /// Drop a trailing assistant message so retry can regenerate it.
     pub fn drop_trailing_assistant(&mut self) {
-        if matches!(self.messages.last(), Some(ChatMessage::Assistant(_))) {
-            self.messages.pop();
+        if let Some(id) = self.tree.last_assistant_on_path() {
+            self.tree.prepare_regen(id);
+            self.sync_visible();
         }
         self.streaming_buf.clear();
         self.error = None;
+    }
+
+    /// 从助手消息重新生成：隐藏该分支后续，返回 (祖先前缀, 用户原文)。
+    pub fn prepare_regenerate(&mut self, assistant: NodeId) -> Option<(Vec<ChatMessage>, String)> {
+        let user_id = self.tree.prepare_regen(assistant)?;
+        let user_text = self.tree.text(user_id)?.to_owned();
+        let prefix = self.tree.ancestor_messages(user_id);
+        self.sync_visible();
+        self.streaming_buf.clear();
+        self.error = None;
+        self.pi_stale = true;
+        Some((prefix, user_text))
+    }
+
+    /// 编辑用户消息并分出兄弟分支。返回该用户之前的前缀。
+    pub fn prepare_user_branch(
+        &mut self,
+        user: NodeId,
+        new_text: String,
+    ) -> Option<Vec<ChatMessage>> {
+        let prefix = self.tree.ancestor_messages(user);
+        self.tree.branch_user(user, new_text)?;
+        self.sync_visible();
+        self.streaming_buf.clear();
+        self.error = None;
+        self.pi_stale = true;
+        Some(prefix)
+    }
+
+    pub fn select_sibling(&mut self, id: NodeId, delta: i32) -> bool {
+        if self.tree.select_sibling(id, delta).is_some() {
+            self.sync_visible();
+            self.pi_stale = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn navigate_to(&mut self, id: NodeId) -> bool {
+        if self.tree.activate(id) {
+            self.sync_visible();
+            self.pi_stale = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// Process a single `PiRpcEvent` from the RPC client.
@@ -173,6 +245,8 @@ pub struct ExportedSession {
     pub last_sent_prompt: Option<String>,
     pub input: String,
     pub messages: Vec<ChatMessage>,
+    pub tree: TreeSnapshot,
+    pub pi_stale: bool,
 }
 
 /// Live session list + per-slot chat state.
@@ -279,10 +353,11 @@ impl SessionHub {
             .iter()
             .zip(self.chats.iter())
             .map(|(session, chat)| {
-                let mut messages = chat.messages.clone();
+                let mut tree = chat.tree.clone();
                 if !chat.streaming_buf.is_empty() {
-                    messages.push(ChatMessage::Assistant(chat.streaming_buf.clone()));
+                    tree.push_assistant(chat.streaming_buf.clone());
                 }
+                let messages = tree.active_messages();
                 ExportedSession {
                     id: session.id,
                     title: session.title.clone(),
@@ -291,6 +366,8 @@ impl SessionHub {
                     last_sent_prompt: chat.last_sent_prompt.clone(),
                     input: chat.input.clone(),
                     messages,
+                    tree: tree.to_snapshot(),
+                    pi_stale: chat.pi_stale || chat.tree.has_branches(),
                 }
             })
             .collect();
@@ -321,10 +398,18 @@ impl SessionHub {
                 session_file: session.session_file,
                 session_id: session.session_id,
             });
+            let tree = if session.tree.nodes.is_empty() {
+                MessageTree::from_linear(&session.messages)
+            } else {
+                MessageTree::from_snapshot(session.tree)
+            };
+            let pi_stale = session.pi_stale || tree.has_branches();
             chats.push(ChatState {
-                messages: session.messages,
+                messages: tree.active_messages(),
+                tree,
                 input: session.input,
                 last_sent_prompt: session.last_sent_prompt,
+                pi_stale,
                 ..ChatState::default()
             });
         }
@@ -424,7 +509,7 @@ mod tests {
         let mut chat = ChatState::default();
         chat.push_user("Hi".to_owned());
         chat.last_sent_prompt = Some("Hi".to_owned());
-        chat.messages.push(ChatMessage::Assistant("old".to_owned()));
+        chat.push_assistant("old".to_owned());
         assert!(chat.can_retry());
         chat.drop_trailing_assistant();
         assert_eq!(chat.messages.len(), 1);
@@ -483,5 +568,58 @@ mod tests {
         assert_eq!(hub.list().len(), 1);
         assert!(hub.active_chat().messages.is_empty());
         assert_eq!(hub.active_index(), 0);
+    }
+
+    #[test]
+    fn regenerate_keeps_old_assistant_as_sibling() {
+        let mut chat = ChatState::default();
+        chat.push_user("q".to_owned());
+        chat.push_assistant("old".to_owned());
+        let assistant = chat.tree.last_assistant_on_path().unwrap();
+        let (prefix, user) = chat.prepare_regenerate(assistant).unwrap();
+        assert!(prefix.is_empty());
+        assert_eq!(user, "q");
+        assert_eq!(chat.messages.len(), 1);
+        assert!(chat.pi_stale);
+        chat.push_assistant("new".to_owned());
+        let rows = chat.path_rows();
+        assert_eq!(rows[1].sibling_count, 2);
+        assert_eq!(rows[1].text, "new");
+        chat.select_sibling(rows[1].id, -1);
+        assert_eq!(
+            chat.messages.last().map(|m| match m {
+                ChatMessage::Assistant(t) => t.as_str(),
+                ChatMessage::User(_) => "",
+            }),
+            Some("old")
+        );
+    }
+
+    #[test]
+    fn export_roundtrip_keeps_inactive_branch() {
+        let mut hub = SessionHub::new();
+        hub.active_chat_mut().push_user("u".to_owned());
+        hub.active_chat_mut().push_assistant("a".to_owned());
+        let user = hub.active_chat().tree.last_user_on_path().unwrap();
+        hub.active_chat_mut()
+            .prepare_user_branch(user, "u2".to_owned());
+        hub.active_chat_mut().push_assistant("a2".to_owned());
+        let mut loaded = SessionHub::from_exported(hub.to_exported());
+        assert!(loaded.active_chat().tree.has_branches());
+        assert_eq!(loaded.active_chat().messages.len(), 2);
+        let first = loaded
+            .active_chat()
+            .tree_rows()
+            .into_iter()
+            .find(|r| r.text == "a")
+            .unwrap();
+        loaded.active_chat_mut().navigate_to(first.id);
+        assert_eq!(
+            loaded.active_chat().messages,
+            vec![
+                ChatMessage::User("u".to_owned()),
+                ChatMessage::Assistant("a".to_owned())
+            ]
+        );
     }
 }
