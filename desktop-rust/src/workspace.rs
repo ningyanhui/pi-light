@@ -248,10 +248,7 @@ pub fn show_topbar_cwd(
                 .color(theme::text_primary()),
         )
         .fill(Color32::from_rgba_unmultiplied(28, 24, 48, 220))
-        .stroke(Stroke::new(
-            1.0_f32,
-            Color32::from_rgba_unmultiplied(124, 77, 255, 90),
-        ))
+        .stroke(Stroke::new(1.0_f32, theme::glass_stroke()))
         .rounding(Rounding::same(14.0)),
     );
     if badge_resp.on_hover_text("点击徽章即可切换工作区").clicked() {
@@ -286,10 +283,7 @@ pub fn show_topbar_cwd(
             .frame(
                 egui::Frame::none()
                     .fill(Color32::from_rgba_unmultiplied(16, 14, 28, 245))
-                    .stroke(Stroke::new(
-                        1.0_f32,
-                        Color32::from_rgba_unmultiplied(124, 77, 255, 70),
-                    ))
+                    .stroke(Stroke::new(1.0_f32, theme::glass_stroke_strong()))
                     .rounding(Rounding::same(12.0))
                     .inner_margin(egui::Margin::same(14.0)),
             )
@@ -445,14 +439,7 @@ pub fn show_dock(
                     } else {
                         Color32::from_rgba_unmultiplied(16, 14, 28, 160)
                     })
-                    .stroke(Stroke::new(
-                        1.0_f32,
-                        if selected {
-                            theme::accent_bright()
-                        } else {
-                            Color32::from_rgba_unmultiplied(124, 77, 255, 40)
-                        },
-                    ))
+                    .stroke(Stroke::NONE)
                     .rounding(Rounding::same(10.0))
                     .min_size(egui::vec2(72.0, 36.0)),
             );
@@ -558,6 +545,7 @@ fn show_sessions_panel(
                 let time = session_time_label(session.updated_at);
                 let (resp, menu) =
                     session_row(ui, i, &session.title, &display_workdir(wd), &time, selected);
+                ui.add_space(4.0);
                 if let Some(next) = menu {
                     action = Some(next);
                 } else if resp.clicked() && !locked {
@@ -618,14 +606,9 @@ fn session_row(
     } else {
         Color32::from_rgba_unmultiplied(16, 14, 28, 70)
     };
-    let stroke = if selected {
-        Stroke::new(1.0_f32, theme::accent())
-    } else {
-        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(124, 77, 255, 28))
-    };
     let inner = egui::Frame::none()
         .fill(fill)
-        .stroke(stroke)
+        .stroke(theme::session_row_stroke(selected))
         .rounding(Rounding::same(12.0))
         .inner_margin(egui::Margin::symmetric(12.0, 10.0))
         .show(ui, |ui| {

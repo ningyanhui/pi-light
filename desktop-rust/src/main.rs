@@ -17,6 +17,7 @@ use pi_light::{
     chat::{ChatMessage, ChatState, SessionHub},
     composer_invoke::{self, InvokeAction, InvokeChooser, InvokeKind, PiCommand},
     fonts,
+    markdown_ui::{self, MarkdownView},
     message_tree::{self, NodeId, NodeRole, BRANCH_HONESTY},
     onboarding::{self, FirstRunSurface},
     pi_path::{self, PiProbe},
@@ -1369,7 +1370,7 @@ impl PiLightApp {
         let recent = workspace::recent_workdirs(&self.sessions, &self.workdir);
         egui::TopBottomPanel::top("header")
             .frame(
-                theme::glass_frame()
+                theme::glass_bar()
                     .fill(theme::glass_strong())
                     .inner_margin(egui::Margin::symmetric(14.0, 8.0)),
             )
@@ -1481,7 +1482,7 @@ impl PiLightApp {
 
         egui::TopBottomPanel::bottom("chat_input")
             .frame(
-                theme::glass_frame()
+                theme::glass_bar()
                     .fill(theme::glass_strong())
                     .inner_margin(egui::Margin::symmetric(18.0, 10.0)),
             )
@@ -1510,7 +1511,7 @@ impl PiLightApp {
                     self.ref_chips.remove(idx);
                 }
 
-                theme::glass_frame().show(ui, |ui| {
+                theme::emphasis_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let input = &mut self.sessions.active_chat_mut().input;
                         let can_send = !is_streaming
@@ -1811,7 +1812,7 @@ impl PiLightApp {
 
         egui::TopBottomPanel::top("session_bar")
             .frame(
-                theme::glass_frame()
+                theme::glass_bar()
                     .fill(theme::glass_fill())
                     .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
             )
@@ -1878,7 +1879,7 @@ impl PiLightApp {
                     .color(theme::text_primary()),
             )
             .fill(egui::Color32::from_rgba_unmultiplied(28, 24, 48, 200))
-            .stroke(egui::Stroke::new(1.0_f32, theme::glass_stroke()))
+            .stroke(egui::Stroke::new(1.0_f32, theme::accent_stroke_think()))
             .rounding(egui::Rounding::same(12.0)),
         );
         if !usable {
@@ -2014,7 +2015,7 @@ impl PiLightApp {
         egui::TopBottomPanel::bottom("app_footer")
             .exact_height(32.0)
             .frame(
-                theme::glass_frame()
+                theme::glass_bar()
                     .fill(theme::glass_strong())
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0)),
             )
@@ -2408,20 +2409,18 @@ fn show_model_chip(
 // ── M3′ Trace / Token UI ──────────────────────────────────────────────────
 
 fn show_thinking_block(ui: &mut egui::Ui, chat: &ChatState) {
-    theme::glass_frame()
-        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("✦  思考过程")
-                        .strong()
-                        .size(13.0)
-                        .color(theme::accent_bright()),
-                );
-            });
-            ui.add_space(6.0);
-            show_tool_cards(ui, chat);
+    theme::think_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("✦  思考过程")
+                    .strong()
+                    .size(13.0)
+                    .color(theme::accent_bright()),
+            );
         });
+        ui.add_space(6.0);
+        show_tool_cards(ui, chat);
+    });
 }
 
 fn show_tool_cards(ui: &mut egui::Ui, chat: &ChatState) {
@@ -2621,10 +2620,13 @@ fn show_assistant_message(
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.92);
-                ui.label(
-                    egui::RichText::new(&row.text)
-                        .size(14.0)
-                        .color(egui::Color32::from_rgb(214, 216, 224)),
+                markdown_ui::show_markdown(
+                    ui,
+                    &row.text,
+                    MarkdownView {
+                        streaming: false,
+                        show_role: true,
+                    },
                 );
                 if !row.text.is_empty() {
                     ui.add_space(6.0);
@@ -2660,10 +2662,13 @@ fn show_streaming_assistant(ui: &mut egui::Ui, text: &str) {
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.92);
-                ui.label(
-                    egui::RichText::new(format!("{text}▌"))
-                        .size(14.0)
-                        .color(egui::Color32::from_rgb(214, 216, 224)),
+                markdown_ui::show_markdown(
+                    ui,
+                    text,
+                    MarkdownView {
+                        streaming: true,
+                        show_role: true,
+                    },
                 );
             });
     });

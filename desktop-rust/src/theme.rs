@@ -37,7 +37,7 @@ pub fn card_bg() -> Color32 {
 }
 
 pub fn hairline() -> Color32 {
-    Color32::from_rgb(32, 34, 46)
+    Color32::from_rgba_unmultiplied(255, 255, 255, 20)
 }
 
 pub fn text_primary() -> Color32 {
@@ -76,6 +76,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.selection.stroke.color = accent_soft();
     visuals.window_rounding = Rounding::same(12.0);
     visuals.menu_rounding = Rounding::same(8.0);
+    visuals.window_stroke = Stroke::new(1.0_f32, glass_stroke());
     visuals.widgets.noninteractive.bg_fill = card_bg();
     visuals.widgets.inactive.bg_fill = Color32::from_rgb(18, 19, 26);
     visuals.widgets.hovered.bg_fill = Color32::from_rgb(26, 28, 38);
@@ -90,6 +91,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     ] {
         widgets.rounding = Rounding::same(8.0);
         widgets.fg_stroke.color = Color32::from_rgb(214, 216, 224);
+        widgets.bg_stroke = Stroke::new(1.0_f32, glass_stroke());
     }
     ctx.set_visuals(visuals);
 }
@@ -102,8 +104,27 @@ pub fn glass_strong() -> Color32 {
     Color32::from_rgba_unmultiplied(18, 16, 36, 214)
 }
 
+/// 默认面板边：近白低 alpha，对齐原型 `--border`（约 8–14%）。
+/// 禁止再把 accent-bright 紫边当作全站默认描边。
 pub fn glass_stroke() -> Color32 {
-    Color32::from_rgba_unmultiplied(155, 123, 255, 72)
+    Color32::from_rgba_unmultiplied(255, 255, 255, 26)
+}
+
+pub fn glass_stroke_strong() -> Color32 {
+    Color32::from_rgba_unmultiplied(255, 255, 255, 36)
+}
+
+/// 强调边：仅选中会话 / composer / 思考块。α≈0.35，禁止不透明 accent()。
+pub fn accent_stroke_soft() -> Color32 {
+    Color32::from_rgba_unmultiplied(124, 77, 255, 90)
+}
+
+pub fn accent_stroke_think() -> Color32 {
+    Color32::from_rgba_unmultiplied(124, 77, 255, 56)
+}
+
+pub fn accent_stroke_composer() -> Color32 {
+    Color32::from_rgba_unmultiplied(124, 77, 255, 72)
 }
 
 pub fn glass_shadow() -> egui::Shadow {
@@ -111,32 +132,60 @@ pub fn glass_shadow() -> egui::Shadow {
         offset: egui::vec2(0.0, 0.0),
         blur: 18.0,
         spread: 0.0,
-        color: Color32::from_rgba_unmultiplied(124, 77, 255, 48),
+        color: Color32::from_rgba_unmultiplied(124, 77, 255, 32),
     }
 }
 
+/// 默认玻璃板：一层近白弱边 + 半透明 fill。无紫描边、无环状 glow。
 pub fn glass_frame() -> egui::Frame {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(12.0, 10.0))
         .rounding(Rounding::same(12.0))
         .fill(glass_fill())
         .stroke(Stroke::new(1.0_f32, glass_stroke()))
+}
+
+/// 顶栏 / 底栏 / 会话条：只靠 fill 分层，不再套描边。
+pub fn glass_bar() -> egui::Frame {
+    glass_frame().stroke(Stroke::NONE)
+}
+
+/// composer / 思考块：淡紫强调边 + 轻 glow。
+pub fn emphasis_frame() -> egui::Frame {
+    glass_frame()
+        .stroke(Stroke::new(1.0_f32, accent_stroke_composer()))
         .shadow(glass_shadow())
 }
 
-pub fn card_frame() -> egui::Frame {
+pub fn think_frame() -> egui::Frame {
     glass_frame()
+        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .stroke(Stroke::new(1.0_f32, accent_stroke_think()))
+}
+
+/// 设置卡 / TOOL 行：半透明 fill，无描边，避免卡中卡货架。
+pub fn card_frame() -> egui::Frame {
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+        .rounding(Rounding::same(12.0))
+        .fill(Color32::from_rgba_unmultiplied(18, 16, 32, 168))
+        .stroke(Stroke::NONE)
+}
+
+pub fn session_row_stroke(selected: bool) -> Stroke {
+    if selected {
+        Stroke::new(1.0_f32, accent_stroke_soft())
+    } else {
+        Stroke::NONE
+    }
 }
 
 pub fn soft_card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(22.0, 18.0))
         .rounding(Rounding::same(12.0))
-        .fill(Color32::from_rgba_unmultiplied(22, 24, 34, 236))
-        .stroke(Stroke::new(
-            1.0_f32,
-            Color32::from_rgba_unmultiplied(124, 92, 255, 50),
-        ))
+        .fill(Color32::from_rgba_unmultiplied(22, 24, 34, 220))
+        .stroke(Stroke::NONE)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             add(ui)
@@ -544,5 +593,36 @@ mod tests {
         let uv = cover_uv(egui::vec2(16.0, 9.0), egui::vec2(8.0, 9.0));
         assert!(uv.min.x > 0.0);
         assert!((uv.max.x - uv.min.x - 0.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn default_glass_stroke_is_near_white_not_purple() {
+        let [r, g, b, a] = glass_stroke().to_srgba_unmultiplied();
+        assert_eq!((r, g, b), (255, 255, 255));
+        assert!((20..=36).contains(&a), "alpha={a}");
+        let [r, g, b, a] = glass_stroke_strong().to_srgba_unmultiplied();
+        assert_eq!((r, g, b), (255, 255, 255));
+        assert!((20..=36).contains(&a), "alpha={a}");
+        // 旧默认紫边不得回归
+        assert_ne!(
+            glass_stroke(),
+            Color32::from_rgba_unmultiplied(155, 123, 255, 72)
+        );
+    }
+
+    #[test]
+    fn unselected_session_row_has_no_stroke() {
+        assert_eq!(session_row_stroke(false), Stroke::NONE);
+    }
+
+    #[test]
+    fn selected_session_row_uses_soft_accent_not_solid() {
+        let stroke = session_row_stroke(true);
+        assert_ne!(stroke.color, accent());
+        let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
+        assert!((56..=115).contains(&a), "alpha={a}");
+        assert!((110..=140).contains(&r), "r={r}");
+        assert!((60..=95).contains(&g), "g={g}");
+        assert!(b >= 230, "b={b}");
     }
 }
