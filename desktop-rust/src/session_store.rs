@@ -11,8 +11,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::chat::{ChatMessage, ExportedHub, ExportedSession, SessionHub};
+use crate::message_tree::{MessageTree, NodeId, NodeRole, TreeNode, TreeSnapshot};
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+const VERSION_V1: u32 = 1;
 
 pub struct LoadedSessions {
     pub sessions: SessionHub,
@@ -47,7 +49,9 @@ pub fn default_path() -> Option<PathBuf> {
 pub fn load(path: &Path) -> Option<LoadedSessions> {
     let text = fs::read_to_string(path).ok()?;
     match serde_json::from_str::<FileState>(&text) {
-        Ok(state) if state.version == VERSION => Some(state.into_loaded()),
+        Ok(state) if state.version == VERSION || state.version == VERSION_V1 => {
+            Some(state.into_loaded())
+        }
         _ => {
             let bak = path.with_extension("json.bak");
             let _ = fs::rename(path, bak);
@@ -107,6 +111,39 @@ struct FileSession {
     input: String,
     #[serde(default)]
     messages: Vec<FileMessage>,
+    #[serde(default)]
+    tree: Option<FileTree>,
+    #[serde(default)]
+    pi_stale: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FileTree {
+    #[serde(default)]
+    next_id: u64,
+    #[serde(default)]
+    nodes: Vec<FileTreeNode>,
+    #[serde(default)]
+    roots: Vec<u64>,
+    #[serde(default)]
+    active: Vec<FileActiveEdge>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FileTreeNode {
+    id: u64,
+    #[serde(default)]
+    parent: Option<u64>,
+    role: String,
+    text: String,
+    #[serde(default)]
+    children: Vec<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FileActiveEdge {
+    parent: Option<u64>,
+    child: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -175,11 +212,13 @@ impl FileSession {
                     },
                 })
                 .collect(),
+            tree: Some(FileTree::from_snapshot(&session.tree)),
+            pi_stale: session.pi_stale,
         }
     }
 
     fn into_exported(self) -> ExportedSession {
-        let messages = self
+        let messages: Vec<ChatMessage> = self
             .messages
             .into_iter()
             .filter_map(|msg| match msg.role.as_str() {
@@ -188,6 +227,11 @@ impl FileSession {
                 _ => None,
             })
             .collect();
+        let tree = self
+            .tree
+            .map(FileTree::into_snapshot)
+            .filter(|snap| !snap.nodes.is_empty())
+            .unwrap_or_else(|| MessageTree::from_linear(&messages).to_snapshot());
         ExportedSession {
             id: self.id,
             title: self.title,
@@ -196,6 +240,69 @@ impl FileSession {
             last_sent_prompt: self.last_sent_prompt,
             input: self.input,
             messages,
+            tree,
+            pi_stale: self.pi_stale,
+        }
+    }
+}
+
+impl FileTree {
+    fn from_snapshot(snap: &TreeSnapshot) -> Self {
+        Self {
+            next_id: snap.next_id,
+            nodes: snap
+                .nodes
+                .iter()
+                .map(|n| FileTreeNode {
+                    id: n.id.0,
+                    parent: n.parent.map(|p| p.0),
+                    role: match n.role {
+                        NodeRole::User => "user".to_owned(),
+                        NodeRole::Assistant => "assistant".to_owned(),
+                    },
+                    text: n.text.clone(),
+                    children: n.children.iter().map(|c| c.0).collect(),
+                })
+                .collect(),
+            roots: snap.roots.iter().map(|r| r.0).collect(),
+            active: snap
+                .active
+                .iter()
+                .map(|(parent, child)| FileActiveEdge {
+                    parent: parent.map(|p| p.0),
+                    child: child.0,
+                })
+                .collect(),
+        }
+    }
+
+    fn into_snapshot(self) -> TreeSnapshot {
+        TreeSnapshot {
+            next_id: self.next_id,
+            nodes: self
+                .nodes
+                .into_iter()
+                .filter_map(|n| {
+                    let role = match n.role.as_str() {
+                        "user" => NodeRole::User,
+                        "assistant" => NodeRole::Assistant,
+                        _ => return None,
+                    };
+                    Some(TreeNode {
+                        id: NodeId(n.id),
+                        parent: n.parent.map(NodeId),
+                        role,
+                        text: n.text,
+                        children: n.children.into_iter().map(NodeId).collect(),
+                    })
+                })
+                .collect(),
+            roots: self.roots.into_iter().map(NodeId).collect(),
+            active: self
+                .active
+                .into_iter()
+                .map(|e| (e.parent.map(NodeId), NodeId(e.child)))
+                .collect(),
         }
     }
 }
@@ -213,9 +320,7 @@ mod tests {
 
         let mut hub = SessionHub::new();
         hub.active_chat_mut().push_user("第一条".to_owned());
-        hub.active_chat_mut()
-            .messages
-            .push(ChatMessage::Assistant("回复".to_owned()));
+        hub.active_chat_mut().push_assistant("回复".to_owned());
         hub.set_active_title_from_user("第一条");
         hub.set_active_session_file(Some("sess.jsonl".to_owned()), Some("sid".to_owned()));
         hub.active_chat_mut().input = "草稿".to_owned();
@@ -286,6 +391,42 @@ mod tests {
         .unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.sessions.active_chat().messages.len(), 2);
+    }
+
+    #[test]
+    fn v2_roundtrip_keeps_inactive_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.json");
+        let workdir = dir.path().join("proj");
+        fs::create_dir_all(&workdir).unwrap();
+
+        let mut hub = SessionHub::new();
+        hub.active_chat_mut().push_user("u".to_owned());
+        hub.active_chat_mut().push_assistant("a".to_owned());
+        let user = hub.active_chat().tree.last_user_on_path().unwrap();
+        hub.active_chat_mut()
+            .prepare_user_branch(user, "u2".to_owned());
+        hub.active_chat_mut().push_assistant("a2".to_owned());
+
+        save(&path, &hub, &workdir).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"version\": 2"));
+        let mut loaded = load(&path).unwrap();
+        assert!(loaded.sessions.active_chat().tree.has_branches());
+        assert_eq!(loaded.sessions.active_chat().messages.len(), 2);
+        let first = loaded
+            .sessions
+            .active_chat()
+            .tree_rows()
+            .into_iter()
+            .find(|r| r.text == "a")
+            .unwrap();
+        loaded.sessions.active_chat_mut().navigate_to(first.id);
+        assert_eq!(loaded.sessions.active_chat().messages.len(), 2);
+        match &loaded.sessions.active_chat().messages[1] {
+            ChatMessage::Assistant(t) => assert_eq!(t, "a"),
+            other => panic!("expected inactive assistant, got {other:?}"),
+        }
     }
 
     #[test]
