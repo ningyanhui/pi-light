@@ -11,9 +11,14 @@ import com.pilight.android.data.CompanionStore
 import com.pilight.android.data.PairCodes
 import com.pilight.android.data.PairPayload
 import com.pilight.android.data.SecurityPrefs
+import com.pilight.android.data.StreamEvent
+import com.pilight.android.data.ToolCard
 import com.pilight.android.data.describeChatError
 import com.pilight.android.data.describeClaimError
+import com.pilight.android.data.describeStopError
 import com.pilight.android.data.normalizeRelayUrl
+import com.pilight.android.data.parseToolCard
+import com.pilight.android.data.upsertTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -37,7 +42,10 @@ data class HomeUi(
 data class ChatUi(
     val title: String = "会话",
     val messages: List<ChatLine> = emptyList(),
+    val tools: List<ToolCard> = emptyList(),
     val streaming: Boolean = false,
+    val canStop: Boolean = false,
+    val stopping: Boolean = false,
     val partial: String = "",
     val sending: Boolean = false,
     val error: String? = null,
@@ -198,33 +206,94 @@ class CompanionViewModel(app: Application) : AndroidViewModel(app) {
                 state.copy(
                     sending = true,
                     streaming = true,
+                    canStop = true,
+                    stopping = false,
                     error = null,
                     messages = state.messages + ChatLine(role = "user", text = trimmed),
                     partial = "",
+                    tools = emptyList(),
                 )
             }
-            val resp = withContext(Dispatchers.IO) { api.sendChat(session, trimmed) }
+            val resp =
+                withContext(Dispatchers.IO) {
+                    api.sendChatStream(session, trimmed) { ev -> applyStreamEvent(ev) }
+                }
             if (!resp.ok) {
                 _chat.update {
-                    it.copy(sending = false, streaming = false, error = describeChatError(resp))
+                    it.copy(
+                        sending = false,
+                        streaming = false,
+                        canStop = false,
+                        stopping = false,
+                        error = describeChatError(resp),
+                    )
                 }
                 refreshOnce()
                 return@launch
             }
-            val reply = resp.body.optString("reply")
-            _chat.update { state ->
-                val next = state.messages.toMutableList()
-                if (reply.isNotBlank()) {
-                    next.add(ChatLine(role = "assistant", text = reply))
+            applySettledReply(resp.body.optString("reply"), resp.body.optBoolean("aborted", false))
+            refreshOnce()
+        }
+    }
+
+    fun stop() {
+        val session = _home.value.session ?: return
+        val chat = _chat.value
+        if (!chat.streaming && !chat.sending && !chat.canStop) return
+        if (chat.stopping) return
+        viewModelScope.launch {
+            _chat.update { it.copy(stopping = true, error = null) }
+            val resp = withContext(Dispatchers.IO) { api.stopChat(session) }
+            if (!resp.ok && resp.error != "not_streaming") {
+                _chat.update { it.copy(stopping = false, error = describeStopError(resp)) }
+            }
+        }
+    }
+
+    private fun applyStreamEvent(ev: StreamEvent) {
+        when (ev.event) {
+            "delta" -> {
+                val piece = ev.data.optString("text")
+                if (piece.isNotEmpty()) {
+                    _chat.update { it.copy(partial = it.partial + piece, streaming = true, canStop = true) }
                 }
-                state.copy(
-                    sending = false,
-                    streaming = false,
-                    partial = "",
-                    messages = next,
+            }
+            "tool" -> {
+                val card = parseToolCard(ev.data) ?: return
+                _chat.update { it.copy(tools = upsertTool(it.tools, card), streaming = true, canStop = true) }
+            }
+            "settled" -> {
+                applySettledReply(
+                    ev.data.optString("reply"),
+                    ev.data.optBoolean("aborted", false),
                 )
             }
-            refreshOnce()
+        }
+    }
+
+    private fun applySettledReply(reply: String, aborted: Boolean) {
+        _chat.update { state ->
+            if (!state.sending && !state.streaming) {
+                return@update state
+            }
+            val next = state.messages.toMutableList()
+            val text = reply.ifBlank { state.partial }
+            val already =
+                next.lastOrNull()?.let { it.role == "assistant" && it.text == text } == true
+            if (!already) {
+                when {
+                    text.isNotBlank() -> next.add(ChatLine(role = "assistant", text = text))
+                    aborted -> next.add(ChatLine(role = "assistant", text = "[已中止]"))
+                }
+            }
+            state.copy(
+                sending = false,
+                streaming = false,
+                canStop = false,
+                stopping = false,
+                partial = "",
+                messages = next,
+            )
         }
     }
 
@@ -277,17 +346,38 @@ class CompanionViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (!_chat.value.sending) {
             _chat.update {
+                val messages =
+                    if (snap.messages.size >= it.messages.size) snap.messages else it.messages
+                val tools = if (snap.tools.isNotEmpty()) snap.tools else it.tools
                 it.copy(
                     title = snap.sessionTitle,
-                    messages = snap.messages,
+                    messages = messages,
+                    tools = tools,
                     streaming = snap.streaming,
+                    canStop = snap.canStop || snap.streaming,
                     partial = snap.partial,
                     writable = snap.writable,
                     error = it.error,
                 )
             }
-        } else if (snap.partial.isNotBlank() || snap.streaming) {
-            _chat.update { it.copy(partial = snap.partial, streaming = true) }
+        } else {
+            _chat.update { state ->
+                val tools = if (snap.tools.isNotEmpty()) snap.tools else state.tools
+                val partial =
+                    when {
+                        state.partial.isNotBlank() -> state.partial
+                        snap.partial.isNotBlank() -> snap.partial
+                        else -> state.partial
+                    }
+                state.copy(
+                    title = snap.sessionTitle.ifBlank { state.title },
+                    tools = tools,
+                    streaming = true,
+                    canStop = true,
+                    partial = partial,
+                    writable = snap.writable,
+                )
+            }
         }
     }
 

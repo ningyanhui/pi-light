@@ -5,7 +5,8 @@ Kotlin + Jetpack Compose 的 **debug companion APK**：首页设备卡、扫码�
 对照原型只学信息架构：`mobile-v2/01-home`、`02-desktop-modes`、`03-touch`、`04-fullscreen`、`05-chat`、`06-security`，以及 `acceptance/03-mobile-pair`、`05-mobile-chat`、`06-mobile-desktop`。实现是洁净室自写，不拷贝他仓源码或 README。
 
 - **配对**：扫描桌面二维码（JSON 含 `code` + `relay`），或手输 6 位配对码 **和** 公网中继 URL
-- **聊天**：`Authorization: Bearer <token>` 调用 `{relay}/v1/chat`，写入桌面当前 Pi 会话
+- **聊天**：`Authorization: Bearer <token>` 调用 `{relay}/v1/chat`，写入桌面当前 Pi 会话；支持 SSE 流式、工具卡、停止
+- **语音**：系统 `SpeechRecognizer` 转写后写入当前会话（不上传音频到 Pi）
 - **远程桌面壳**：浏览 / 触控 / 全屏（不要用已废弃命名）。像素流尚未接入协议，预览面显示中继主机状态
 - **不包含**：Pi sidecar、Harness / dsh、双后端切换
 - Release 流水线跑 `testDebugUnitTest` + `assembleDebug`
@@ -16,8 +17,9 @@ Kotlin + Jetpack Compose 的 **debug companion APK**：首页设备卡、扫码�
 |------|------|
 | `INTERNET` / `ACCESS_NETWORK_STATE` | 访问 Cloudflare Tunnel（或其它已填写的中继） |
 | `CAMERA` | 扫描桌面配对二维码；可拒绝，改为手输配对码 |
+| `RECORD_AUDIO` | 系统语音识别；可拒绝，继续打字发送 |
 
-相机不是强制硬件（`android.hardware.camera` required=false）。
+相机和麦克风都不是强制硬件（`required=false`）。
 
 ## 本地构建 debug APK
 

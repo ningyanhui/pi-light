@@ -59,6 +59,39 @@ class CompanionApi(
         return post(join(session.relayUrl, session.chatPath), payload, session.token)
     }
 
+    fun sendChatStream(
+        session: CompanionSession,
+        text: String,
+        onEvent: (StreamEvent) -> Unit,
+    ): ApiResponse {
+        val payload = JSONObject().put("text", text).put("stream", true).toString()
+        val request =
+            Request.Builder()
+                .url(join(session.relayUrl, session.chatPath))
+                .post(payload.toRequestBody(JSON))
+                .addHeader("Accept", "text/event-stream")
+                .addHeader("User-Agent", USER_AGENT)
+                .addHeader("Authorization", "Bearer ${session.token}")
+                .build()
+        return try {
+            client.newCall(request).execute().use { resp ->
+                val contentType = resp.header("Content-Type").orEmpty()
+                if (contentType.contains("text/event-stream")) {
+                    readSse(resp, onEvent)
+                } else {
+                    parseHttpJson(resp)
+                }
+            }
+        } catch (e: IOException) {
+            networkError(e)
+        }
+    }
+
+    fun stopChat(session: CompanionSession): ApiResponse {
+        val url = join(session.relayUrl, "/v1/chat/stop")
+        return post(url, "{}", session.token)
+    }
+
     fun parseSnapshot(body: JSONObject): ChatSnapshot {
         val messages = mutableListOf<ChatLine>()
         val arr: JSONArray = body.optJSONArray("messages") ?: JSONArray()
@@ -71,13 +104,21 @@ class CompanionApi(
                 ),
             )
         }
+        val tools = mutableListOf<ToolCard>()
+        val toolArr: JSONArray = body.optJSONArray("tools") ?: JSONArray()
+        for (i in 0 until toolArr.length()) {
+            val item = toolArr.optJSONObject(i) ?: continue
+            parseToolCard(item)?.let(tools::add)
+        }
         return ChatSnapshot(
             writable = body.optBoolean("writable", true),
             streaming = body.optBoolean("streaming", false),
+            canStop = body.optBoolean("can_stop", body.optBoolean("streaming", false)),
             partial = body.optString("partial"),
             host = body.optString("host").ifBlank { "desktop" },
             sessionTitle = body.optString("session_title").ifBlank { "会话" },
             messages = messages,
+            tools = tools,
             relay = body.optString("relay").ifBlank { null },
         )
     }
@@ -116,30 +157,99 @@ class CompanionApi(
     private fun execute(request: Request): ApiResponse {
         try {
             client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                val obj =
-                    if (text.isBlank()) {
-                        JSONObject()
-                    } else {
-                        runCatching { JSONObject(text) }.getOrElse {
-                            JSONObject().put("raw", text.take(400))
-                        }
-                    }
-                if (!obj.has("ok")) {
-                    obj.put("ok", resp.isSuccessful)
-                }
-                return ApiResponse(resp.code, obj)
+                return parseHttpJson(resp)
             }
         } catch (e: IOException) {
-            return ApiResponse(
-                0,
-                JSONObject()
-                    .put("ok", false)
-                    .put("error", "network")
-                    .put("message", e.message ?: "network error"),
-            )
+            return networkError(e)
         }
     }
+
+    private fun parseHttpJson(resp: okhttp3.Response): ApiResponse {
+        val text = resp.body?.string().orEmpty()
+        val obj =
+            if (text.isBlank()) {
+                JSONObject()
+            } else {
+                runCatching { JSONObject(text) }.getOrElse {
+                    JSONObject().put("raw", text.take(400))
+                }
+            }
+        if (!obj.has("ok")) {
+            obj.put("ok", resp.isSuccessful)
+        }
+        return ApiResponse(resp.code, obj)
+    }
+
+    private fun readSse(
+        resp: okhttp3.Response,
+        onEvent: (StreamEvent) -> Unit,
+    ): ApiResponse {
+        val source = resp.body?.source() ?: return ApiResponse(
+            resp.code,
+            JSONObject().put("ok", false).put("error", "empty_stream"),
+        )
+        var event = "message"
+        val data = StringBuilder()
+        var lastSettled: JSONObject? = null
+        var lastError: JSONObject? = null
+        fun flush() {
+            if (data.isEmpty()) return
+            val obj =
+                runCatching { JSONObject(data.toString()) }.getOrElse {
+                    JSONObject().put("raw", data.toString())
+                }
+            val ev = StreamEvent(event, obj)
+            onEvent(ev)
+            when (event) {
+                "settled" -> lastSettled = obj
+                "error" -> lastError = obj
+            }
+            event = "message"
+            data.clear()
+        }
+        while (!source.exhausted()) {
+            val line = source.readUtf8Line() ?: break
+            when {
+                line.isEmpty() -> flush()
+                line.startsWith("event:") -> event = line.substringAfter("event:").trim()
+                line.startsWith("data:") -> {
+                    if (data.isNotEmpty()) data.append('\n')
+                    data.append(line.substringAfter("data:").trim())
+                }
+            }
+        }
+        flush()
+        lastError?.let { err ->
+            if (!err.has("ok")) err.put("ok", false)
+            return ApiResponse(if (resp.code in 200..299) statusForChatError(err.optString("error")) else resp.code, err)
+        }
+        lastSettled?.let { settled ->
+            if (!settled.has("ok")) settled.put("ok", true)
+            return ApiResponse(200, settled)
+        }
+        return ApiResponse(
+            if (resp.isSuccessful) 502 else resp.code,
+            JSONObject().put("ok", false).put("error", "incomplete_stream"),
+        )
+    }
+
+    private fun networkError(e: IOException): ApiResponse =
+        ApiResponse(
+            0,
+            JSONObject()
+                .put("ok", false)
+                .put("error", "network")
+                .put("message", e.message ?: "network error"),
+        )
+
+    private fun statusForChatError(error: String): Int =
+        when (error) {
+            "busy" -> 409
+            "pi_unavailable" -> 503
+            "unauthorized" -> 401
+            "timeout" -> 504
+            else -> 502
+        }
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
@@ -179,6 +289,15 @@ fun describeChatError(resp: ApiResponse): String =
         "busy" -> "桌面正在生成回复，请稍后再发"
         "pi_unavailable" -> "桌面尚未连上 Pi sidecar"
         "timeout" -> "这一轮等待超时。中继或模型可能较慢，请重试。"
+        "not_streaming" -> "当前没有正在生成的回复"
         "network" -> "中继网络失败（${resp.message}）"
         else -> "发送失败（HTTP ${resp.status} ${resp.error}）"
+    }
+
+fun describeStopError(resp: ApiResponse): String =
+    when (resp.error) {
+        "not_streaming" -> "当前没有正在生成的回复"
+        "unauthorized" -> "授权已失效。桌面可能撤销了这台设备，请重新配对。"
+        "network" -> "中继网络失败（${resp.message}）"
+        else -> "停止失败（HTTP ${resp.status} ${resp.error}）"
     }

@@ -20,7 +20,7 @@ use pi_light::{
     pi_rpc::{self, PiRpcClient, PiRpcEvent},
     provider_catalog,
     remote_access::RemoteAccessState,
-    remote_gateway::CompanionChatEvent,
+    remote_gateway::{CompanionChatEvent, SnapshotTool},
     session_insights::StatsFetchState,
     session_ref::{self, RefCandidate, RefChip, RefChooserState},
     session_store::{self, RpcAttach},
@@ -446,6 +446,36 @@ impl PiLightApp {
                 let is_exit = matches!(&event, PiRpcEvent::ProcessExited { .. });
                 let request_stats = matches!(&event, PiRpcEvent::AgentSettled { aborted: false });
                 let companion_note = match &event {
+                    PiRpcEvent::TextDelta(delta) => Some(CompanionChatEvent::Delta {
+                        text: delta.clone(),
+                    }),
+                    PiRpcEvent::ToolTraceStart {
+                        tool_call_id,
+                        tool_name,
+                        args_preview,
+                    } => Some(CompanionChatEvent::Tool(SnapshotTool {
+                        id: tool_call_id.clone(),
+                        name: tool_name.clone(),
+                        status: "running".into(),
+                        args: args_preview.clone(),
+                        duration_ms: None,
+                    })),
+                    PiRpcEvent::ToolTraceEnd {
+                        tool_call_id,
+                        tool_name,
+                        is_error,
+                        duration_ms,
+                    } => Some(CompanionChatEvent::Tool(SnapshotTool {
+                        id: tool_call_id.clone(),
+                        name: tool_name.clone(),
+                        status: if *is_error {
+                            "error".into()
+                        } else {
+                            "done".into()
+                        },
+                        args: None,
+                        duration_ms: *duration_ms,
+                    })),
                     PiRpcEvent::AgentSettled { aborted } => Some(CompanionChatEvent::Settled {
                         text: String::new(),
                         aborted: *aborted,
@@ -454,10 +484,22 @@ impl PiLightApp {
                         code: "pi_exited".into(),
                         message: "Pi 进程已退出".into(),
                     }),
-                    PiRpcEvent::CommandError { error, .. } => Some(CompanionChatEvent::Error {
-                        code: "command_error".into(),
-                        message: error.clone(),
-                    }),
+                    PiRpcEvent::CommandError { command, error } => {
+                        if matches!(
+                            command.as_str(),
+                            "set_model"
+                                | "get_available_models"
+                                | "get_state"
+                                | "get_session_stats"
+                        ) {
+                            None
+                        } else {
+                            Some(CompanionChatEvent::Error {
+                                code: "command_error".into(),
+                                message: error.clone(),
+                            })
+                        }
+                    }
                     _ => None,
                 };
 
@@ -500,7 +542,14 @@ impl PiLightApp {
 
                 self.sessions.active_chat_mut().handle_rpc_event(event);
                 if let Some(note) = companion_note {
-                    self.finish_companion_turn(note);
+                    match &note {
+                        CompanionChatEvent::Settled { .. } | CompanionChatEvent::Error { .. } => {
+                            self.finish_companion_turn(note);
+                        }
+                        CompanionChatEvent::Delta { .. } | CompanionChatEvent::Tool(_) => {
+                            self.forward_companion_event(note);
+                        }
+                    }
                 }
                 if request_stats {
                     self.request_session_stats();
@@ -513,6 +562,15 @@ impl PiLightApp {
             if had_events {
                 self.touch_sessions();
             }
+        }
+    }
+
+    fn forward_companion_event(&mut self, note: CompanionChatEvent) {
+        let Some(tx) = self.companion_reply.as_ref() else {
+            return;
+        };
+        if tx.send(note).is_err() {
+            self.companion_reply = None;
         }
     }
 
@@ -578,6 +636,15 @@ impl PiLightApp {
         }
         self.companion_reply = Some(pending.reply);
         self.persist_sessions(true);
+    }
+
+    fn drain_companion_stop(&mut self) {
+        if !self.remote.take_pending_stop() {
+            return;
+        }
+        if self.sessions.active_is_streaming() || self.companion_reply.is_some() {
+            self.do_abort();
+        }
     }
 
     fn touch_sessions(&mut self) {
@@ -694,6 +761,7 @@ impl eframe::App for PiLightApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_rpc_events();
         self.drain_companion_inbox();
+        self.drain_companion_stop();
         self.update_ref_chooser();
         if self.remote.poll() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));

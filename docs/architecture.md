@@ -121,7 +121,7 @@ pi-light/
 | `onboarding` | 首次打开主路径：Pi 就绪时只引导配置模型与密钥；未就绪时安装说明保持折叠 |
 | `session_ref` | M5′ `#` 会话引用：`RefCandidate` / `RefChooserState` / `RefChip`；候选构建；prompt 拼合 |
 | `remote_access` | 远程访问页：允许手机远程、配对码/QR（TTL 10 分钟）、设备列表撤销、中继选项 |
-| `remote_gateway` | 本机 `127.0.0.1` HTTP：`/health`、`/v1/pair/info`、`POST /v1/pair/claim`、已授权 `GET/POST /v1/chat` |
+| `remote_gateway` | 本机 `127.0.0.1` HTTP：`/health`、`/v1/pair/info`、`POST /v1/pair/claim`、已授权 `GET/POST /v1/chat`（快照含 tools；可选 SSE）、`POST /v1/chat/stop` |
 | `relay_mgr` | cloudflared 探测顺序、SHA 校验下载、trycloudflare / 命名隧道启停与状态 |
 | `main` | `PiLightApp`：组合以上模块；egui 渲染；事件 drain |
 
@@ -248,7 +248,7 @@ v3 **M5** 已在桌面提供本机 loopback 网关、配对码 / 二维码 / `PO
 
 - 首页设备卡（已连接 / via 中继 / latency）
 - 扫码或手输配对码 + 中继 URL（不要求同一局域网）
-- `GET/POST /v1/chat` 带 Bearer token，写入桌面当前 Pi 会话（默认可写）
+- `GET/POST /v1/chat` 带 Bearer token，写入桌面当前 Pi 会话（默认可写）；可选 SSE 流式与 `POST /v1/chat/stop`
 - 「远程桌面」入口进入浏览 / 触控 / 全屏三档壳；像素流仍属后续协议，不假装已直播
 
 CI / Release 仍只构建 debug APK（`testDebugUnitTest` + `assembleDebug`）。不内嵌 Pi。Pi sidecar 仍是 Windows x64 的 `pi-windows-x64.zip`，`pi_rpc` 仍只托管本机 `pi --mode rpc`。

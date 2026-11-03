@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::chat::{ChatMessage, ChatState};
 use crate::relay_mgr::{self, CloudflaredProbe, RelayManager, TunnelStatus};
 use crate::remote_gateway::{
-    AuthorizedDevice, ChatSnapshot, GatewayHandle, PairOffer, PendingChat, SnapshotMsg, CHAT_PATH,
-    CLAIM_PATH, PROTOCOL,
+    AuthorizedDevice, ChatSnapshot, GatewayHandle, PairOffer, PendingChat, SnapshotMsg,
+    SnapshotTool, CHAT_PATH, CLAIM_PATH, PROTOCOL,
 };
 
 pub const PAIR_TTL_SECS: u64 = 600;
@@ -321,6 +321,13 @@ impl RemoteAccessState {
             .and_then(GatewayHandle::take_pending_chat)
     }
 
+    pub fn take_pending_stop(&self) -> bool {
+        self.gateway
+            .as_ref()
+            .map(GatewayHandle::take_pending_stop)
+            .unwrap_or(false)
+    }
+
     pub fn publish_chat(&self, title: &str, chat: &ChatState) {
         let Some(gw) = &self.gateway else {
             return;
@@ -343,6 +350,27 @@ impl RemoteAccessState {
         if messages.len() > MAX {
             messages = messages.split_off(messages.len() - MAX);
         }
+        let tools: Vec<SnapshotTool> = chat
+            .insights
+            .trace_steps
+            .iter()
+            .rev()
+            .take(12)
+            .rev()
+            .map(|step| SnapshotTool {
+                id: step.tool_call_id.clone(),
+                name: step.tool_name.clone(),
+                status: if step.running {
+                    "running".into()
+                } else if step.is_error {
+                    "error".into()
+                } else {
+                    "done".into()
+                },
+                args: step.args_preview.clone(),
+                duration_ms: step.duration_ms,
+            })
+            .collect();
         gw.set_chat_snapshot(ChatSnapshot {
             host: crate::remote_gateway::local_host_label(),
             session_title: if title.trim().is_empty() {
@@ -352,8 +380,10 @@ impl RemoteAccessState {
             },
             writable: true,
             streaming: chat.is_streaming,
+            can_stop: chat.is_streaming,
             partial: chat.streaming_buf.clone(),
             messages,
+            tools,
         });
     }
 

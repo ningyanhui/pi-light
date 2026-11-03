@@ -3,6 +3,7 @@
 // 本机 loopback 控制面。Cloudflare Tunnel 把这里暴露到公网。
 // M5：health / pair info / pair claim。
 // M6-lite：已授权设备可 POST/GET /v1/chat，写入桌面当前 Pi 会话。
+// 增量：GET 快照含 tools/can_stop；POST 可 SSE 流式；POST /v1/chat/stop 中止本轮。
 
 use std::{
     io::{self, Read, Write},
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_PORT: u16 = 17831;
 pub const CLAIM_PATH: &str = "/v1/pair/claim";
 pub const CHAT_PATH: &str = "/v1/chat";
+pub const STOP_PATH: &str = "/v1/chat/stop";
 pub const PROTOCOL: &str = "pi-light-companion/1";
 const CHAT_WAIT_SECS: u64 = 120;
 
@@ -50,13 +52,26 @@ pub struct SnapshotMsg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotTool {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatSnapshot {
     pub host: String,
     pub session_title: String,
     pub writable: bool,
     pub streaming: bool,
+    pub can_stop: bool,
     pub partial: String,
     pub messages: Vec<SnapshotMsg>,
+    pub tools: Vec<SnapshotTool>,
 }
 
 impl Default for ChatSnapshot {
@@ -66,15 +81,19 @@ impl Default for ChatSnapshot {
             session_title: "会话".into(),
             writable: true,
             streaming: false,
+            can_stop: false,
             partial: String::new(),
             messages: Vec::new(),
+            tools: Vec::new(),
         }
     }
 }
 
-/// UI 线程完成一轮 companion 提示后发回网关 HTTP 线程。
+/// UI 线程把本轮事件发回网关 HTTP 线程。
 #[derive(Debug, Clone)]
 pub enum CompanionChatEvent {
+    Delta { text: String },
+    Tool(SnapshotTool),
     Settled { text: String, aborted: bool },
     Error { code: String, message: String },
 }
@@ -106,6 +125,8 @@ struct ChatRequest {
     message: String,
     #[serde(default)]
     prompt: String,
+    #[serde(default)]
+    stream: bool,
 }
 
 struct GatewayShared {
@@ -114,6 +135,7 @@ struct GatewayShared {
     new_devices: Vec<ClaimedDevice>,
     devices: Vec<AuthorizedDevice>,
     pending: Option<PendingChat>,
+    pending_stop: bool,
     snapshot: ChatSnapshot,
     /// 仅测试：跳过 UI 等待，立即回这条文本。
     auto_reply: Option<String>,
@@ -160,6 +182,7 @@ impl GatewayHandle {
             new_devices: Vec::new(),
             devices: Vec::new(),
             pending: None,
+            pending_stop: false,
             snapshot: ChatSnapshot::default(),
             auto_reply: None,
         }));
@@ -176,10 +199,15 @@ impl GatewayHandle {
                         if flag.load(Ordering::Relaxed) {
                             break;
                         }
-                        let _ = stream.set_nonblocking(false);
-                        let _ = stream.set_read_timeout(Some(Duration::from_secs(8)));
-                        let _ = stream.set_write_timeout(Some(Duration::from_secs(8)));
-                        handle_conn(stream, &state);
+                        let conn_state = state.clone();
+                        let _ = thread::Builder::new()
+                            .name("pi-light-gw-conn".into())
+                            .spawn(move || {
+                                let _ = stream.set_nonblocking(false);
+                                let _ = stream.set_read_timeout(Some(Duration::from_secs(8)));
+                                let _ = stream.set_write_timeout(Some(Duration::from_secs(8)));
+                                handle_conn(stream, &conn_state);
+                            });
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(40));
@@ -238,6 +266,17 @@ impl GatewayHandle {
             .unwrap_or(false)
     }
 
+    pub fn take_pending_stop(&self) -> bool {
+        self.shared
+            .lock()
+            .map(|mut g| {
+                let flagged = g.pending_stop;
+                g.pending_stop = false;
+                flagged
+            })
+            .unwrap_or(false)
+    }
+
     pub fn local_base(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
@@ -271,6 +310,7 @@ pub fn local_host_label() -> String {
 enum DispatchOut {
     Ready(u16, String),
     ChatWait(mpsc::Receiver<CompanionChatEvent>),
+    ChatStream(mpsc::Receiver<CompanionChatEvent>),
 }
 
 fn handle_conn(mut stream: TcpStream, shared: &Mutex<GatewayShared>) {
@@ -291,49 +331,123 @@ fn handle_conn(mut stream: TcpStream, shared: &Mutex<GatewayShared>) {
             let (status, body) = wait_chat_reply(rx);
             let _ = write_json(&mut stream, status, &body);
         }
+        DispatchOut::ChatStream(rx) => {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(CHAT_WAIT_SECS + 5)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(CHAT_WAIT_SECS + 5)));
+            wait_chat_stream(&mut stream, rx);
+        }
     }
 }
 
 fn wait_chat_reply(rx: mpsc::Receiver<CompanionChatEvent>) -> (u16, String) {
-    match rx.recv_timeout(Duration::from_secs(CHAT_WAIT_SECS)) {
-        Ok(CompanionChatEvent::Settled { text, aborted }) => (
-            200,
-            serde_json::json!({
-                "ok": true,
-                "reply": text,
-                "aborted": aborted,
-                "writable": true,
-                "protocol": PROTOCOL,
-            })
-            .to_string(),
-        ),
-        Ok(CompanionChatEvent::Error { code, message }) => {
-            let status = match code.as_str() {
-                "busy" => 409,
-                "pi_unavailable" => 503,
-                "unauthorized" => 401,
-                _ => 502,
-            };
-            (
-                status,
-                serde_json::json!({
-                    "ok": false,
-                    "error": code,
-                    "message": message,
-                })
-                .to_string(),
-            )
+    let deadline = std::time::Instant::now() + Duration::from_secs(CHAT_WAIT_SECS);
+    loop {
+        let remain = deadline.saturating_duration_since(std::time::Instant::now());
+        if remain.is_zero() {
+            return timeout_body();
         }
-        Err(_) => (
-            504,
-            serde_json::json!({
-                "ok": false,
-                "error": "timeout",
-                "message": "desktop did not finish this turn in time",
-            })
-            .to_string(),
-        ),
+        match rx.recv_timeout(remain) {
+            Ok(CompanionChatEvent::Settled { text, aborted }) => {
+                return (
+                    200,
+                    serde_json::json!({
+                        "ok": true,
+                        "reply": text,
+                        "aborted": aborted,
+                        "writable": true,
+                        "protocol": PROTOCOL,
+                    })
+                    .to_string(),
+                );
+            }
+            Ok(CompanionChatEvent::Error { code, message }) => {
+                return error_body(&code, &message);
+            }
+            Ok(CompanionChatEvent::Delta { .. } | CompanionChatEvent::Tool(_)) => {}
+            Err(_) => return timeout_body(),
+        }
     }
+}
+
+fn wait_chat_stream(stream: &mut TcpStream, rx: mpsc::Receiver<CompanionChatEvent>) {
+    if write_sse_headers(stream).is_err() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(CHAT_WAIT_SECS);
+    loop {
+        let remain = deadline.saturating_duration_since(std::time::Instant::now());
+        if remain.is_zero() {
+            let (_, body) = timeout_body();
+            let _ = write_sse_event(stream, "error", &body);
+            return;
+        }
+        match rx.recv_timeout(remain) {
+            Ok(CompanionChatEvent::Delta { text }) => {
+                let data = serde_json::json!({"text": text}).to_string();
+                if write_sse_event(stream, "delta", &data).is_err() {
+                    return;
+                }
+            }
+            Ok(CompanionChatEvent::Tool(tool)) => {
+                let data = serde_json::to_string(&tool).unwrap_or_else(|_| "{}".into());
+                if write_sse_event(stream, "tool", &data).is_err() {
+                    return;
+                }
+            }
+            Ok(CompanionChatEvent::Settled { text, aborted }) => {
+                let data = serde_json::json!({
+                    "ok": true,
+                    "reply": text,
+                    "aborted": aborted,
+                    "writable": true,
+                    "protocol": PROTOCOL,
+                })
+                .to_string();
+                let _ = write_sse_event(stream, "settled", &data);
+                return;
+            }
+            Ok(CompanionChatEvent::Error { code, message }) => {
+                let (_, body) = error_body(&code, &message);
+                let _ = write_sse_event(stream, "error", &body);
+                return;
+            }
+            Err(_) => {
+                let (_, body) = timeout_body();
+                let _ = write_sse_event(stream, "error", &body);
+                return;
+            }
+        }
+    }
+}
+
+fn timeout_body() -> (u16, String) {
+    (
+        504,
+        serde_json::json!({
+            "ok": false,
+            "error": "timeout",
+            "message": "desktop did not finish this turn in time",
+        })
+        .to_string(),
+    )
+}
+
+fn error_body(code: &str, message: &str) -> (u16, String) {
+    let status = match code {
+        "busy" => 409,
+        "pi_unavailable" => 503,
+        "unauthorized" => 401,
+        _ => 502,
+    };
+    (
+        status,
+        serde_json::json!({
+            "ok": false,
+            "error": code,
+            "message": message,
+        })
+        .to_string(),
+    )
 }
 
 struct HttpReq {
@@ -341,6 +455,7 @@ struct HttpReq {
     path: String,
     body: Vec<u8>,
     authorization: Option<String>,
+    accept: Option<String>,
 }
 
 fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
@@ -355,6 +470,9 @@ fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
                 "protocol": PROTOCOL,
                 "chat": true,
                 "writable": true,
+                "stream": true,
+                "stop": true,
+                "stop_path": STOP_PATH,
             })
             .to_string(),
         ),
@@ -368,6 +486,7 @@ fn dispatch(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
         }
         ("GET", CHAT_PATH) => chat_get(req, shared),
         ("POST", CHAT_PATH) => chat_post(req, shared),
+        ("POST", STOP_PATH) => chat_stop(req, shared),
         _ => DispatchOut::Ready(
             404,
             serde_json::json!({"ok":false,"error":"not_found"}).to_string(),
@@ -394,6 +513,7 @@ fn pair_info(shared: &Mutex<GatewayShared>) -> (u16, String) {
             "v": 1,
             "claim": CLAIM_PATH,
             "chat": CHAT_PATH,
+            "stop": STOP_PATH,
             "has_offer": has,
             "exp": exp,
             "relay": g.public_url,
@@ -482,6 +602,7 @@ fn claim(shared: &Mutex<GatewayShared>, body: &[u8]) -> (u16, String) {
             "token": token,
             "relay_url": g.public_url,
             "chat_path": CHAT_PATH,
+            "stop_path": STOP_PATH,
             "protocol": PROTOCOL,
             "writable": true,
             "host": g.snapshot.host,
@@ -546,16 +667,19 @@ fn chat_get(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
         return DispatchOut::Ready(st, body);
     }
     let snap = &g.snapshot;
+    let can_stop = snap.can_stop || snap.streaming || g.pending.is_some();
     DispatchOut::Ready(
         200,
         serde_json::json!({
             "ok": true,
             "writable": snap.writable,
             "streaming": snap.streaming,
+            "can_stop": can_stop,
             "partial": snap.partial,
             "host": snap.host,
             "session_title": snap.session_title,
             "messages": snap.messages,
+            "tools": snap.tools,
             "protocol": PROTOCOL,
             "relay": g.public_url,
         })
@@ -616,13 +740,59 @@ fn chat_post(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
             .to_string(),
         );
     }
+    let wants_stream = parsed.stream || wants_event_stream(req.accept.as_deref());
     let (tx, rx) = mpsc::channel();
     g.pending = Some(PendingChat {
         text,
         device_id,
         reply: tx,
     });
-    DispatchOut::ChatWait(rx)
+    if wants_stream {
+        DispatchOut::ChatStream(rx)
+    } else {
+        DispatchOut::ChatWait(rx)
+    }
+}
+
+fn chat_stop(req: &HttpReq, shared: &Mutex<GatewayShared>) -> DispatchOut {
+    let Ok(mut g) = shared.lock() else {
+        return DispatchOut::Ready(
+            500,
+            serde_json::json!({"ok":false,"error":"busy"}).to_string(),
+        );
+    };
+    if let Err((st, body)) = authorize(&g, req.authorization.as_deref()) {
+        return DispatchOut::Ready(st, body);
+    }
+    if g.pending.is_none() && !g.snapshot.streaming && !g.snapshot.can_stop {
+        return DispatchOut::Ready(
+            409,
+            serde_json::json!({
+                "ok": false,
+                "error": "not_streaming",
+                "message": "desktop is not generating",
+            })
+            .to_string(),
+        );
+    }
+    g.pending_stop = true;
+    DispatchOut::Ready(
+        200,
+        serde_json::json!({
+            "ok": true,
+            "accepted": true,
+            "protocol": PROTOCOL,
+        })
+        .to_string(),
+    )
+}
+
+fn wants_event_stream(accept: Option<&str>) -> bool {
+    accept.unwrap_or("").split(',').any(|part| {
+        part.trim()
+            .to_ascii_lowercase()
+            .starts_with("text/event-stream")
+    })
 }
 
 fn first_nonempty(parts: &[&str]) -> String {
@@ -683,6 +853,7 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
     let path = parts.next().unwrap_or("/").to_owned();
     let mut content_len = 0usize;
     let mut authorization = None;
+    let mut accept = None;
     for line in lines {
         let lower = line.to_ascii_lowercase();
         if let Some(v) = lower.strip_prefix("content-length:") {
@@ -690,6 +861,10 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
         } else if lower.starts_with("authorization:") {
             if let Some((_, v)) = line.split_once(':') {
                 authorization = Some(v.trim().to_owned());
+            }
+        } else if lower.starts_with("accept:") {
+            if let Some((_, v)) = line.split_once(':') {
+                accept = Some(v.trim().to_owned());
             }
         }
     }
@@ -713,6 +888,7 @@ fn read_request(stream: &mut TcpStream) -> io::Result<HttpReq> {
         path,
         body,
         authorization,
+        accept,
     })
 }
 
@@ -738,6 +914,37 @@ fn write_json(stream: &mut TcpStream, status: u16, body: &str) -> io::Result<()>
     );
     stream.write_all(head.as_bytes())?;
     stream.write_all(bytes)?;
+    stream.flush()
+}
+
+fn write_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
+    stream.write_all(
+        b"HTTP/1.1 200 OK\r\n\
+Content-Type: text/event-stream; charset=utf-8\r\n\
+Cache-Control: no-cache, no-transform\r\n\
+Connection: close\r\n\
+X-Accel-Buffering: no\r\n\r\n",
+    )?;
+    stream.flush()
+}
+
+pub fn format_sse_event(event: &str, data: &str) -> String {
+    let mut out = format!("event: {event}\n");
+    if data.is_empty() {
+        out.push_str("data: \n");
+    } else {
+        for line in data.split('\n') {
+            out.push_str("data: ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+    out
+}
+
+fn write_sse_event(stream: &mut TcpStream, event: &str, data: &str) -> io::Result<()> {
+    stream.write_all(format_sse_event(event, data).as_bytes())?;
     stream.flush()
 }
 
@@ -768,15 +975,24 @@ pub(crate) fn dispatch_for_test_ex(
         new_devices: Vec::new(),
         devices,
         pending: None,
+        pending_stop: false,
         snapshot: ChatSnapshot {
             host: "demo-host".into(),
             session_title: "日常咨询".into(),
             writable: true,
             streaming: false,
+            can_stop: false,
             partial: String::new(),
             messages: vec![SnapshotMsg {
                 role: "user".into(),
                 text: "hi".into(),
+            }],
+            tools: vec![SnapshotTool {
+                id: "call-1".into(),
+                name: "bash".into(),
+                status: "done".into(),
+                args: Some("{\"command\":\"echo hi\"}".into()),
+                duration_ms: Some(12),
             }],
         },
         auto_reply,
@@ -786,10 +1002,11 @@ pub(crate) fn dispatch_for_test_ex(
         path: path.to_owned(),
         body: body.to_vec(),
         authorization: authorization.map(str::to_owned),
+        accept: None,
     };
     let (status, text) = match dispatch(&req, &shared) {
         DispatchOut::Ready(s, b) => (s, b),
-        DispatchOut::ChatWait(_) => (
+        DispatchOut::ChatWait(_) | DispatchOut::ChatStream(_) => (
             503,
             serde_json::json!({"ok":false,"error":"desktop_offline"}).to_string(),
         ),
@@ -893,6 +1110,39 @@ mod tests {
         assert_eq!(v["host"], "demo-host");
         assert_eq!(v["session_title"], "日常咨询");
         assert_eq!(v["messages"][0]["text"], "hi");
+        assert_eq!(v["can_stop"], false);
+        assert_eq!(v["tools"][0]["name"], "bash");
+        assert_eq!(v["tools"][0]["status"], "done");
+    }
+
+    #[test]
+    fn stop_requires_bearer_and_active_turn() {
+        let (st, v) = dispatch_for_test("POST", STOP_PATH, b"{}", None);
+        assert_eq!(st, 401);
+        assert_eq!(v["error"], "unauthorized");
+
+        let token = "stop-token";
+        let (st, v) = dispatch_for_test_ex(
+            "POST",
+            STOP_PATH,
+            b"{}",
+            None,
+            Some(&format!("Bearer {token}")),
+            vec![device_with_token(token)],
+            None,
+        );
+        assert_eq!(st, 409);
+        assert_eq!(v["error"], "not_streaming");
+    }
+
+    #[test]
+    fn sse_event_format_is_incremental() {
+        let frame = format_sse_event("delta", r#"{"text":"hi"}"#);
+        assert_eq!(frame, "event: delta\ndata: {\"text\":\"hi\"}\n\n");
+        let multi = format_sse_event("tool", "{\n\"name\":\"bash\"\n}");
+        assert!(multi.contains("event: tool\n"));
+        assert!(multi.contains("data: {"));
+        assert!(multi.contains("data: \"name\":\"bash\""));
     }
 
     #[test]
@@ -1030,6 +1280,117 @@ mod tests {
         let err = revoked.expect_err("revoked token must fail");
         let resp = err.into_response().expect("http error");
         assert_eq!(resp.status(), 401);
+    }
+
+    #[test]
+    fn live_gateway_stream_and_stop() {
+        let gw = GatewayHandle::start().unwrap();
+        gw.set_offer(Some(offer("SS22TT", 600)));
+        gw.set_public_url(Some("https://demo.trycloudflare.com".into()));
+        let base = gw.local_base();
+        let claimed_text = ureq::post(&format!("{base}{CLAIM_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .send_string(r#"{"code":"SS22TT","device_name":"Pixel","platform":"Android"}"#)
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let claimed: serde_json::Value = serde_json::from_str(&claimed_text).unwrap();
+        let token = claimed["token"].as_str().unwrap().to_owned();
+        let new = gw.take_new_devices();
+        gw.set_authorized_devices(vec![new[0].device.clone()]);
+
+        gw.set_chat_snapshot(ChatSnapshot {
+            streaming: true,
+            can_stop: true,
+            tools: vec![SnapshotTool {
+                id: "t1".into(),
+                name: "bash".into(),
+                status: "running".into(),
+                args: Some("ls".into()),
+                duration_ms: None,
+            }],
+            ..ChatSnapshot {
+                host: "demo-host".into(),
+                ..ChatSnapshot::default()
+            }
+        });
+        let snap_text = ureq::get(&format!("{base}{CHAT_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Authorization", &format!("Bearer {token}"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let snap: serde_json::Value = serde_json::from_str(&snap_text).unwrap();
+        assert_eq!(snap["can_stop"], true);
+        assert_eq!(snap["tools"][0]["status"], "running");
+
+        let stop_text = ureq::post(&format!("{base}{STOP_PATH}"))
+            .timeout(Duration::from_secs(3))
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("Content-Type", "application/json")
+            .send_string("{}")
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let stop: serde_json::Value = serde_json::from_str(&stop_text).unwrap();
+        assert_eq!(stop["ok"], true);
+        assert_eq!(stop["accepted"], true);
+        assert!(gw.take_pending_stop());
+
+        gw.set_chat_snapshot(ChatSnapshot {
+            host: "demo-host".into(),
+            ..ChatSnapshot::default()
+        });
+
+        let waiter_base = base.clone();
+        let waiter_token = token.clone();
+        let handle = thread::spawn(move || {
+            ureq::post(&format!("{waiter_base}{CHAT_PATH}"))
+                .timeout(Duration::from_secs(5))
+                .set("Content-Type", "application/json")
+                .set("Accept", "text/event-stream")
+                .set("Authorization", &format!("Bearer {waiter_token}"))
+                .send_string(r#"{"text":"stream please","stream":true}"#)
+                .unwrap()
+                .into_string()
+                .unwrap()
+        });
+
+        let pending = (0..50)
+            .find_map(|_| {
+                thread::sleep(Duration::from_millis(20));
+                gw.take_pending_chat()
+            })
+            .expect("pending streamed chat");
+        pending
+            .reply
+            .send(CompanionChatEvent::Delta { text: "Hel".into() })
+            .unwrap();
+        pending
+            .reply
+            .send(CompanionChatEvent::Tool(SnapshotTool {
+                id: "c1".into(),
+                name: "bash".into(),
+                status: "running".into(),
+                args: Some("echo".into()),
+                duration_ms: None,
+            }))
+            .unwrap();
+        pending
+            .reply
+            .send(CompanionChatEvent::Settled {
+                text: "Hello".into(),
+                aborted: false,
+            })
+            .unwrap();
+
+        let body = handle.join().unwrap();
+        assert!(body.contains("event: delta"), "{body}");
+        assert!(body.contains("event: tool"), "{body}");
+        assert!(body.contains("event: settled"), "{body}");
+        assert!(body.contains("Hello"), "{body}");
     }
 
     #[test]

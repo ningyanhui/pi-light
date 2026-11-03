@@ -56,21 +56,33 @@
 
 ### `GET {relay}/v1/chat`
 
-返回桌面**当前活动会话**快照（最多约 50 条）：
+返回桌面**当前活动会话**快照（最多约 50 条）。`tools` 是当前会话最近的工具调用（最多 12 条），供手机画工具卡；旧客户端可忽略新字段。
 
 ```json
 {
   "ok": true,
   "writable": true,
   "streaming": false,
+  "can_stop": false,
   "partial": "",
   "host": "desktop-name",
   "session_title": "日常咨询",
   "messages": [{"role":"user","text":"…"},{"role":"assistant","text":"…"}],
+  "tools": [
+    {
+      "id": "call-1",
+      "name": "bash",
+      "status": "running",
+      "args": "{\"command\":\"ls\"}",
+      "duration_ms": 99
+    }
+  ],
   "protocol": "pi-light-companion/1",
   "relay": "https://…"
 }
 ```
+
+`tools[].status`：`running` / `done` / `error`。`can_stop` 为 true 时手机可 `POST /v1/chat/stop`（含桌面本机正在生成的一轮）。
 
 ### `POST {relay}/v1/chat`
 
@@ -78,7 +90,7 @@
 {"text":"帮我看一下桌面"}
 ```
 
-也接受 `message` / `prompt` 字段。成功 `200`：
+也接受 `message` / `prompt` 字段。默认仍是整轮 JSON（兼容旧客户端）：成功 `200`：
 
 ```json
 {
@@ -90,9 +102,32 @@
 }
 ```
 
-桌面把这条用户消息写入**当前 Pi 会话**并 `prompt` 给 sidecar，手机一直等到本轮 `agent_settled`（最长约 120 秒）。桌面聊天区会看到同一条来回。
+桌面把这条用户消息写入**当前 Pi 会话**并 `prompt` 给 sidecar。非流式请求等到本轮 `agent_settled`（最长约 120 秒）。桌面聊天区会看到同一条来回。
 
-失败：
+#### 流式（增量，可选）
+
+请求带 `"stream": true`，或 `Accept: text/event-stream`。响应 `Content-Type: text/event-stream`，每条事件一块 JSON：
+
+| event | data | 含义 |
+|-------|------|------|
+| `delta` | `{"text":"…"}` | 助手增量文本 |
+| `tool` | 与快照 `tools[]` 同形 | 工具开始/结束 |
+| `settled` | 与整轮 JSON 成功体同形 | 本轮结束 |
+| `error` | `{"ok":false,"error":"…","message":"…"}` | 失败后关闭连接 |
+
+旧客户端不带 `stream`、不声明 SSE 时，行为与原来一致。
+
+### `POST {relay}/v1/chat/stop`
+
+`Authorization: Bearer <token>`。桌面若正在生成（companion 这一轮或桌面本机一轮），排队发送 Pi `abort`。
+
+成功 `200`：`{"ok":true,"accepted":true,"protocol":"pi-light-companion/1"}`。
+
+失败：`401` unauthorized；`409` `not_streaming`（当前没有可停的一轮）。
+
+`GET /health` 的 `chat` / `stream` / `stop` 为 `true`，并带 `stop_path`。不要把局域网发现当成已完成的公网能力。
+
+失败（`POST /v1/chat`）：
 
 | HTTP | error | 含义 |
 |------|--------|------|
@@ -101,8 +136,6 @@
 | 409 | busy | 桌面正在生成，或已有一轮 companion 请求 |
 | 503 | pi_unavailable | 桌面没有跑着 Pi sidecar |
 | 504 | timeout | 本轮未在时限内结束 |
-
-`GET /health` 的 `chat` 为 `true`。不要把局域网发现当成已完成的公网能力。
 
 ## 本机绑定
 
