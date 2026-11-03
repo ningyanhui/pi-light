@@ -165,7 +165,7 @@ fun ChatScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Outlined.Menu, contentDescription = null, tint = PurplePrimary)
+            BrandMark(size = 32.dp)
             Spacer(Modifier.size(8.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -207,59 +207,44 @@ fun ChatScreen(
             }
         }
 
-        Column(
-            modifier =
-                Modifier
-                    .padding(horizontal = 16.dp)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(SurfaceCard)
-                    .padding(12.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Outlined.Folder, contentDescription = null, tint = PurplePrimary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.size(6.dp))
-                Text("会话列表", fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-                TextButton(
-                    onClick = { notice = "新会话由桌面创建。companion 写入当前 Pi 会话，不会另起一套会话树。" },
-                ) {
-                    Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.size(4.dp))
-                    Text("新建会话")
-                }
-            }
-            SessionRow(
-                title = chat.title.ifBlank { "当前桌面会话" },
-                preview = chat.messages.lastOrNull()?.text?.ifBlank { null }
-                    ?: if (chat.streaming) "思考中…" else "写入桌面当前 Pi 会话",
-                selected = true,
-                connected = home.connected,
-            )
-            TextButton(
-                onClick = { notice = "companion 只镜像桌面当前会话，没有独立的会话树。" },
-                modifier = Modifier.align(Alignment.End),
-            ) {
-                Text("查看所有会话")
-            }
-        }
-
         Row(
             modifier =
                 Modifier
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(SurfaceElevated)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceCard)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("✦", color = PurplePrimary)
-            Spacer(Modifier.size(8.dp))
-            Text("模型", color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.size(10.dp))
-            Text("桌面当前会话", fontWeight = FontWeight.Medium)
-            Spacer(Modifier.weight(1f))
-            Text("▾", color = MaterialTheme.colorScheme.secondary)
+            Column(modifier = Modifier.weight(1f)) {
+                Text("当前桌面会话", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                Text(
+                    chat.title.ifBlank { "当前 Pi 会话" },
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier.size(7.dp).clip(CircleShape)
+                            .background(if (home.connected) Connected else MaterialTheme.colorScheme.secondary),
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        if (home.connected) "在线" else "连接中",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (home.connected) Connected else MaterialTheme.colorScheme.secondary,
+                    )
+                }
+                Text(
+                    home.latencyMs?.let { "${it} ms" } ?: "延迟 —",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
         }
 
         LazyColumn(
@@ -307,14 +292,11 @@ fun ChatScreen(
                 Modifier
                     .padding(horizontal = 12.dp)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(28.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(SurfaceCard)
                     .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { notice = "附件通道尚未对 companion 开放，消息仍走 /v1/chat 文本。" }) {
-                Icon(Icons.Outlined.AttachFile, contentDescription = "附件", tint = PurplePrimary)
-            }
             IconButton(
                 onClick = {
                     if (listening) {
@@ -419,7 +401,7 @@ private fun SessionRow(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(10.dp))
                 .background(if (selected) PurpleDeep else Color.Transparent)
                 .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
