@@ -34,9 +34,16 @@ ureq = "2.12"
 qrcode = { version = "0.14", default-features = false }
 sha2 = "0.10"
 getrandom = "0.2"
+jpeg-encoder = "0.6"
 
 # Windows: don't spawn a console window when running the GUI binary
 [target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

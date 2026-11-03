@@ -8,6 +8,7 @@ import com.pilight.android.data.ChatLine
 import com.pilight.android.data.CompanionApi
 import com.pilight.android.data.CompanionSession
 import com.pilight.android.data.CompanionStore
+import com.pilight.android.data.DesktopMode
 import com.pilight.android.data.PairCodes
 import com.pilight.android.data.PairPayload
 import com.pilight.android.data.SecurityPrefs
@@ -15,10 +16,12 @@ import com.pilight.android.data.StreamEvent
 import com.pilight.android.data.ToolCard
 import com.pilight.android.data.describeChatError
 import com.pilight.android.data.describeClaimError
+import com.pilight.android.data.describeDesktopError
 import com.pilight.android.data.describeStopError
 import com.pilight.android.data.normalizeRelayUrl
 import com.pilight.android.data.parseToolCard
 import com.pilight.android.data.upsertTool
+import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -37,6 +40,20 @@ data class HomeUi(
     val error: String? = null,
     val pairing: Boolean = false,
     val lastCode: String? = null,
+)
+
+data class DesktopUi(
+    val active: Boolean = false,
+    val mode: DesktopMode = DesktopMode.BROWSE,
+    val jpeg: ByteArray? = null,
+    val width: Int = 0,
+    val height: Int = 0,
+    val seq: Long = 0,
+    val fps: Double = 0.0,
+    val capture: String = "unknown",
+    val input: String = "unknown",
+    val captureMessage: String = "",
+    val error: String? = null,
 )
 
 data class ChatUi(
@@ -65,8 +82,13 @@ class CompanionViewModel(app: Application) : AndroidViewModel(app) {
     private val _security = MutableStateFlow(store.loadSecurity())
     val security: StateFlow<SecurityPrefs> = _security
 
+    private val _desktop = MutableStateFlow(DesktopUi())
+    val desktop: StateFlow<DesktopUi> = _desktop
+
     private var pollJob: Job? = null
+    private var desktopJob: Job? = null
     private var lastDesktopActivityMs: Long = 0L
+    private var lastFrameAtNs: Long = 0L
 
     init {
         if (_home.value.session != null) {
@@ -169,11 +191,179 @@ class CompanionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun unpair() {
+        leaveDesktop()
         pollJob?.cancel()
         pollJob = null
         store.clear()
         _home.value = HomeUi()
         _chat.value = ChatUi()
+        _desktop.value = DesktopUi()
+    }
+
+    fun enterDesktop(mode: DesktopMode) {
+        val session = _home.value.session ?: return
+        lastDesktopActivityMs = System.currentTimeMillis()
+        viewModelScope.launch {
+            val resp =
+                withContext(Dispatchers.IO) {
+                    api.desktopSession(session, "start", mode.wireName)
+                }
+            if (!resp.ok) {
+                _desktop.update { it.copy(error = describeDesktopError(resp), active = false) }
+                return@launch
+            }
+            val info = api.parseDesktopSession(resp.body)
+            _desktop.update {
+                it.copy(
+                    active = true,
+                    mode = DesktopMode.parse(info.mode),
+                    width = info.width,
+                    height = info.height,
+                    seq = info.seq,
+                    capture = info.capture,
+                    input = info.input,
+                    captureMessage = info.captureMessage,
+                    error = null,
+                )
+            }
+            startDesktopLoop()
+        }
+    }
+
+    fun setDesktopMode(mode: DesktopMode) {
+        val session = _home.value.session ?: return
+        lastDesktopActivityMs = System.currentTimeMillis()
+        _desktop.update { it.copy(mode = mode) }
+        viewModelScope.launch {
+            val resp =
+                withContext(Dispatchers.IO) {
+                    api.desktopSession(session, "mode", mode.wireName)
+                }
+            if (!resp.ok) {
+                _desktop.update { it.copy(error = describeDesktopError(resp)) }
+            }
+        }
+    }
+
+    fun leaveDesktop() {
+        desktopJob?.cancel()
+        desktopJob = null
+        val session = _home.value.session
+        val wasActive = _desktop.value.active
+        _desktop.update { it.copy(active = false) }
+        if (session != null && wasActive) {
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) {
+                    runCatching { api.desktopSession(session, "stop", DesktopMode.BROWSE.wireName) }
+                }
+            }
+        }
+    }
+
+    fun sendPointer(
+        x: Float,
+        y: Float,
+        action: String,
+        button: String = "left",
+    ) {
+        sendDesktopJson(
+            JSONObject()
+                .put("type", "pointer")
+                .put("x", x.toDouble())
+                .put("y", y.toDouble())
+                .put("action", action)
+                .put("button", button),
+        )
+    }
+
+    fun sendScroll(
+        x: Float,
+        y: Float,
+        dy: Float,
+    ) {
+        sendDesktopJson(
+            JSONObject()
+                .put("type", "scroll")
+                .put("x", x.toDouble())
+                .put("y", y.toDouble())
+                .put("dy", dy.toDouble()),
+        )
+    }
+
+    fun sendDesktopText(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        sendDesktopJson(JSONObject().put("type", "text").put("text", trimmed.take(1024)))
+    }
+
+    fun sendDesktopKey(key: String) {
+        sendDesktopJson(JSONObject().put("type", "key").put("key", key).put("action", "click"))
+    }
+
+    private fun sendDesktopJson(payload: JSONObject) {
+        val session = _home.value.session ?: return
+        if (!_desktop.value.mode.injectsInput) return
+        lastDesktopActivityMs = System.currentTimeMillis()
+        viewModelScope.launch {
+            val resp = withContext(Dispatchers.IO) { api.sendDesktopInput(session, payload) }
+            if (!resp.ok && resp.error != "view_only") {
+                _desktop.update { it.copy(error = describeDesktopError(resp)) }
+            }
+        }
+    }
+
+    private fun startDesktopLoop() {
+        desktopJob?.cancel()
+        desktopJob =
+            viewModelScope.launch {
+                while (isActive) {
+                    pullDesktopFrame()
+                    delay(120)
+                }
+            }
+    }
+
+    private suspend fun pullDesktopFrame() {
+        val session = _home.value.session ?: return
+        val prev = _desktop.value
+        val frame =
+            withContext(Dispatchers.IO) {
+                api.desktopFrame(session, prev.seq)
+            }
+        if (frame.notModified) return
+        if (!frame.ok) {
+            if (frame.status == 401) {
+                _desktop.update { it.copy(error = "授权已失效，请重新配对") }
+            } else if (frame.status != 204 && frame.error != null) {
+                _desktop.update { it.copy(error = frame.error) }
+            }
+            return
+        }
+        val now = System.nanoTime()
+        val fps =
+            if (lastFrameAtNs > 0) {
+                val dt = (now - lastFrameAtNs) / 1_000_000_000.0
+                if (dt > 0) {
+                    val inst = 1.0 / dt
+                    if (prev.fps <= 0) inst else prev.fps * 0.7 + inst * 0.3
+                } else {
+                    prev.fps
+                }
+            } else {
+                prev.fps
+            }
+        lastFrameAtNs = now
+        _desktop.update {
+            it.copy(
+                jpeg = frame.jpeg,
+                width = frame.width,
+                height = frame.height,
+                seq = frame.seq,
+                fps = fps,
+                capture = frame.capture.ifBlank { it.capture },
+                error = null,
+            )
+        }
     }
 
     fun updateSecurity(transform: (SecurityPrefs) -> SecurityPrefs) {

@@ -127,7 +127,29 @@ Repository:   https://github.com/square/okhttp
 Version:      4.12.0 (pinned in android/app/build.gradle.kts)
 License:      Apache-2.0
 
-Used by the Android companion to call the desktop relay (claim + /v1/chat).
+Used by the Android companion to call the desktop relay (claim + /v1/chat + /v1/desktop).
+
+------------------------------------------------------------------------
+Component: jpeg-encoder
+------------------------------------------------------------------------
+Repository:   https://github.com/vstroebel/jpeg-encoder
+Version:      0.6 (pinned in desktop-rust/Cargo.toml)
+License:      MIT OR Apache-2.0
+
+Encodes remote-desktop frames as JPEG on the Host.
+
+This product uses the Apache-2.0 terms.
+
+------------------------------------------------------------------------
+Component: windows
+------------------------------------------------------------------------
+Repository:   https://github.com/microsoft/windows-rs
+Version:      0.58 (pinned in desktop-rust/Cargo.toml, Windows-only)
+License:      MIT OR Apache-2.0
+
+Used for primary-display GDI capture and SendInput injection.
+
+This product uses the Apache-2.0 terms.
 
 ------------------------------------------------------------------------
 Component: ZXing core
