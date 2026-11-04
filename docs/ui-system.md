@@ -5,7 +5,7 @@ This document records the shared visual rules for the native desktop shell and A
 ## Design intent
 
 - **Work-first, not decoration-first.** The interface should feel like a focused coding workspace. Content, tool activity, connection state and next actions take priority over ornament.
-- **Graphite surfaces.** Use opaque, layered surfaces rather than translucent glass cards stacked over a decorative wallpaper.
+- **Layered near-black surfaces.** Use opaque, layered surfaces rather than translucent glass cards stacked over a decorative wallpaper.
 - **Cobalt as the single primary accent.** Reserve accent blue for selected navigation, primary actions, focus and links. Do not use it as a large background fill everywhere.
 - **Semantic status colors.** Green means ready/success, amber means attention/waiting, red means failure/destructive. Provider and package identity colors may remain distinct.
 - **Consistent density.** Keep control heights, spacing, corner radii and text hierarchy predictable across desktop and mobile.
@@ -14,25 +14,29 @@ This document records the shared visual rules for the native desktop shell and A
 
 | Token | Desktop RGB | Purpose |
 |---|---:|---|
-| App background | `#0F131A` | Main window / chat canvas |
-| Sidebar | `#12171F` | Dock, settings drawer chrome |
-| Card | `#1B222D` | Panels, message support surfaces |
-| Border | `#2B3544` | Quiet separators and outlines |
-| Text primary | `#E7ECF4` | Main content |
-| Text secondary | `#9DA8B7` | Metadata and supporting copy |
-| Text tertiary | `#707D8F` | Hints and low-priority labels |
-| Accent | `#5B89FF` | Primary action / selected state |
-| Accent bright | `#7EA4FF` | Hover, link, provider status |
-| Success | `#3EB98B` | Connected / enabled |
-| Warning | `#DCA953` | Waiting / degraded |
-| Danger | `#E16969` | Error / destructive |
+| App background | `#0A0C10` | Main window / chat canvas |
+| Rail | `#0D1015` | Frameless title bar, icon rail |
+| Sidebar / panel | `#11151B` | Dock, dropdowns, settings chrome |
+| Card | `#161B23` | Panels, message support surfaces |
+| Card raised | `#1B212B` | Hover rows, keycaps |
+| Border | `#232A35` | Quiet separators and outlines |
+| Border strong | `#2E3746` | Floating surfaces, window edge |
+| Text primary | `#E8EDF5` | Main content |
+| Text secondary | `#A3ADBD` | Metadata and supporting copy |
+| Text tertiary | `#6B7688` | Hints and low-priority labels |
+| Accent | `#7C8CFF` | Primary action / selected state |
+| Accent bright | `#9AA6FF` | Hover, link, icon emphasis |
+| Accent cyan | `#22D3EE` | Secondary accent, live indicators |
+| Success | `#34D399` | Connected / enabled |
+| Warning | `#FBBF24` | Waiting / degraded |
+| Danger | `#F87171` | Error / destructive |
 
 Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol names such as `PurplePrimary` are retained for source compatibility; their values now represent the cobalt palette.
 
 ## Desktop composition
 
-1. **Workspace dock:** persistent left navigation for Sessions, Files and Git. The selected state uses a muted cobalt-tinted surface and a fine accent outline, not a full-bright neon block.
-2. **Top bar:** brand mark, current working directory and actual runtime state. Keep the path switch discoverable without competing with the conversation; model and thinking level live in the composer, not here.
+1. **Title bar (frameless):** the window has no OS decorations (`with_decorations(false)`); `show_title_bar` paints brand, the workspace switcher, 打开文件夹, remote / reconnect / settings icons and custom minimize / maximize / close. Empty bar space drags the window, double-click toggles maximize, and `handle_window_frame` provides 5px resize edges plus a 1px window border.
+2. **Workspace switching:** never ask for a typed path. The switcher dropdown offers the native folder picker (`rfd`), recent folders, and a drag-and-drop hint; Ctrl+O and dropping a folder onto the window do the same. All routes end in `apply_workdir_path`.
 3. **Session strip:** current session identity only (title, id, message count). Creating sessions lives in the dock so there is one entry point.
 4. **Conversation canvas:** assistant content is capped at a readable measure; user messages remain right-aligned and narrower. Streaming and completed messages share the same typographic rhythm.
 5. **Composer:** the strongest interactive surface: input + send on the first row, model / thinking / settings chips and stop / retry on the second. Context-reference affordances must describe what they really do.
@@ -41,7 +45,7 @@ Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol n
 ## Rendering rules (desktop)
 
 - The theme forces egui dark visuals for both OS themes (`theme::apply_theme`); never rely on `ctx.set_visuals` alone, or light-mode Windows renders white widgets on graphite panels.
-- Only use glyphs that the bundled egui fonts, the system CJK font or the symbol fallback (`fonts.rs`) cover. Prefer short text labels or painter-drawn marks (`theme::pi_avatar`, `theme::send_button`) over decorative symbols.
+- Only use glyphs that the bundled egui fonts, the system CJK font or the symbol fallback (`fonts.rs`) cover. For icons use the painter-drawn line set in `icons.rs` (`icons::paint`, `icons::icon_button`) instead of symbols.
 - Secondary per-message actions (copy, regenerate, edit) are quiet text buttons; reserve filled buttons for primary actions.
 
 ## Android companion composition

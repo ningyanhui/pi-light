@@ -11,6 +11,7 @@ pub mod composer_invoke;
 pub mod desktop_stream;
 pub mod ext_market;
 pub mod fonts;
+pub mod icons;
 pub mod markdown_ui;
 pub mod message_tree;
 pub mod onboarding;

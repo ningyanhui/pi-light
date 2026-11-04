@@ -1,82 +1,110 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// pi-light UI system: matte graphite surfaces, restrained cobalt accent.
+// pi-light UI system: near-black layered surfaces, indigo→cyan accent.
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
 
 pub fn amber() -> Color32 {
-    Color32::from_rgb(226, 174, 92)
+    Color32::from_rgb(251, 191, 36)
 }
 
 pub fn accent() -> Color32 {
-    Color32::from_rgb(91, 137, 255)
+    Color32::from_rgb(124, 140, 255)
 }
 
 pub fn accent_bright() -> Color32 {
-    Color32::from_rgb(126, 164, 255)
+    Color32::from_rgb(154, 166, 255)
 }
 
 pub fn accent_soft() -> Color32 {
-    Color32::from_rgb(184, 204, 255)
+    Color32::from_rgb(199, 206, 255)
 }
 
 pub fn ink() -> Color32 {
-    Color32::from_rgb(11, 15, 21)
+    Color32::from_rgb(10, 12, 16)
 }
 
 pub fn chrome_bg() -> Color32 {
-    Color32::from_rgb(15, 19, 26)
+    Color32::from_rgb(10, 12, 16)
 }
 
 pub fn sidebar_bg() -> Color32 {
-    Color32::from_rgb(18, 23, 31)
+    Color32::from_rgb(17, 21, 27)
 }
 
 pub fn card_bg() -> Color32 {
-    Color32::from_rgb(27, 34, 45)
+    Color32::from_rgb(22, 27, 35)
 }
 
 pub fn hairline() -> Color32 {
-    Color32::from_rgb(43, 53, 68)
+    Color32::from_rgb(35, 42, 53)
 }
 
 pub fn text_primary() -> Color32 {
-    Color32::from_rgb(231, 236, 244)
+    Color32::from_rgb(232, 237, 245)
 }
 
 pub fn text_muted() -> Color32 {
-    Color32::from_rgb(157, 168, 183)
+    Color32::from_rgb(163, 173, 189)
 }
 
 pub fn text_dim() -> Color32 {
-    Color32::from_rgb(112, 125, 143)
+    Color32::from_rgb(107, 118, 136)
 }
 
 pub fn ok() -> Color32 {
-    Color32::from_rgb(62, 185, 139)
+    Color32::from_rgb(52, 211, 153)
 }
 
 pub fn warn() -> Color32 {
-    Color32::from_rgb(220, 169, 83)
+    Color32::from_rgb(251, 191, 36)
 }
 
 pub fn danger() -> Color32 {
-    Color32::from_rgb(225, 105, 105)
+    Color32::from_rgb(248, 113, 113)
 }
 
 /// Fill for text inputs and wells: one step darker than the canvas.
 pub fn input_bg() -> Color32 {
-    Color32::from_rgb(12, 16, 22)
+    Color32::from_rgb(13, 16, 21)
 }
 
 /// Selected / tinted row fill (muted cobalt over graphite).
 pub fn selected_fill() -> Color32 {
-    Color32::from_rgb(30, 42, 62)
+    Color32::from_rgb(32, 38, 62)
 }
 
 /// Neutral hover fill for list rows and ghost controls.
 pub fn hover_fill() -> Color32 {
-    Color32::from_rgb(28, 35, 46)
+    Color32::from_rgb(27, 33, 43)
+}
+
+/// Title bar / icon rail: the darkest chrome layer.
+pub fn rail_bg() -> Color32 {
+    Color32::from_rgb(13, 16, 21)
+}
+
+/// Raised card one step above `card_bg` (hovered cards, keycaps).
+pub fn card_raised() -> Color32 {
+    Color32::from_rgb(27, 33, 43)
+}
+
+/// Stronger divider for focused or floating surfaces.
+pub fn hairline_strong() -> Color32 {
+    Color32::from_rgb(46, 55, 70)
+}
+
+/// Secondary accent (cyan) used for gradients and live indicators.
+pub fn accent_cyan() -> Color32 {
+    Color32::from_rgb(34, 211, 238)
+}
+
+/// Corner radii shared by every surface.
+pub mod radius {
+    pub const SM: f32 = 6.0;
+    pub const MD: f32 = 8.0;
+    pub const LG: f32 = 12.0;
+    pub const XL: f32 = 16.0;
 }
 
 pub fn dark_visuals() -> egui::Visuals {
@@ -210,15 +238,15 @@ pub fn glass_stroke_strong() -> Color32 {
 }
 
 pub fn accent_stroke_soft() -> Color32 {
-    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+    Color32::from_rgba_unmultiplied(124, 140, 255, 92)
 }
 
 pub fn accent_stroke_think() -> Color32 {
-    Color32::from_rgba_unmultiplied(91, 137, 255, 58)
+    Color32::from_rgba_unmultiplied(124, 140, 255, 58)
 }
 
 pub fn accent_stroke_composer() -> Color32 {
-    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+    Color32::from_rgba_unmultiplied(124, 140, 255, 92)
 }
 
 pub fn glass_shadow() -> egui::Shadow {
@@ -550,7 +578,7 @@ pub fn package_glyph_color(name: &str) -> Color32 {
                 .bytes()
                 .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
             let palette = [
-                Color32::from_rgb(91, 137, 255),
+                Color32::from_rgb(124, 140, 255),
                 Color32::from_rgb(80, 160, 230),
                 Color32::from_rgb(90, 180, 140),
                 Color32::from_rgb(210, 150, 80),
@@ -695,6 +723,145 @@ pub fn cover_uv(tex: egui::Vec2, dest: egui::Vec2) -> egui::Rect {
     }
 }
 
+/// Dropdown / command row: icon, title, optional dim detail line and a
+/// right-aligned shortcut hint.
+pub fn menu_row(
+    ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
+    title: &str,
+    detail: Option<&str>,
+    hint: Option<&str>,
+    emphasis: bool,
+) -> egui::Response {
+    let h = if detail.is_some() { 44.0 } else { 34.0 };
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, radius::MD, hover_fill());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let painter = ui.painter_at(rect.shrink(2.0));
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 18.0, rect.center().y),
+        egui::vec2(16.0, 16.0),
+    );
+    let icon_color = if emphasis {
+        accent_bright()
+    } else {
+        text_muted()
+    };
+    crate::icons::paint(&painter, icon_rect, icon, icon_color);
+    let hint_w = if let Some(hint) = hint {
+        let g = painter.text(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            hint,
+            egui::FontId::proportional(11.0),
+            text_dim(),
+        );
+        g.width() + 16.0
+    } else {
+        0.0
+    };
+    let x = rect.left() + 36.0;
+    let text_clip = egui::Rect::from_min_max(
+        egui::pos2(x, rect.top()),
+        egui::pos2(rect.right() - 8.0 - hint_w, rect.bottom()),
+    );
+    let text_painter = ui.painter_at(text_clip);
+    let title_color = if emphasis {
+        text_primary()
+    } else {
+        text_primary().gamma_multiply(0.92)
+    };
+    if let Some(detail) = detail {
+        text_painter.text(
+            egui::pos2(x, rect.top() + 7.0),
+            egui::Align2::LEFT_TOP,
+            title,
+            egui::FontId::proportional(13.0),
+            title_color,
+        );
+        text_painter.text(
+            egui::pos2(x, rect.bottom() - 7.0),
+            egui::Align2::LEFT_BOTTOM,
+            detail,
+            egui::FontId::proportional(11.0),
+            text_dim(),
+        );
+    } else {
+        text_painter.text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            title,
+            egui::FontId::proportional(13.0),
+            title_color,
+        );
+    }
+    resp
+}
+
+/// Ghost toolbar button: line icon + label, 28px tall.
+pub fn toolbar_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui::Response {
+    let font = egui::FontId::proportional(12.5);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, text_muted());
+    let size = egui::vec2(10.0 + 15.0 + 6.0 + galley.size().x + 10.0, 28.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        ui.painter().rect_filled(rect, radius::MD, card_bg());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let color = if hovered {
+        text_primary()
+    } else {
+        text_muted()
+    };
+    let icon_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 10.0, rect.center().y - 7.5),
+        egui::vec2(15.0, 15.0),
+    );
+    crate::icons::paint(ui.painter(), icon_rect, icon, color);
+    ui.painter().galley(
+        egui::pos2(
+            icon_rect.right() + 6.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        color,
+    );
+    resp
+}
+
+/// Caption button for the frameless title bar (minimize / maximize / close).
+pub fn window_button(ui: &mut egui::Ui, icon: crate::icons::Icon, close: bool) -> egui::Response {
+    let h = ui.available_height();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(44.0, h), egui::Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        let fill = if close {
+            Color32::from_rgb(196, 43, 28)
+        } else {
+            hover_fill()
+        };
+        ui.painter().rect_filled(rect, 0.0, fill);
+    }
+    let color = if hovered {
+        text_primary()
+    } else {
+        text_muted()
+    };
+    crate::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0)),
+        icon,
+        color,
+    );
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,9 +880,9 @@ mod tests {
     }
 
     #[test]
-    fn accent_uses_cobalt_palette() {
-        assert_eq!(accent(), Color32::from_rgb(91, 137, 255));
-        assert_eq!(accent_bright(), Color32::from_rgb(126, 164, 255));
+    fn accent_uses_indigo_palette() {
+        assert_eq!(accent(), Color32::from_rgb(124, 140, 255));
+        assert_eq!(accent_bright(), Color32::from_rgb(154, 166, 255));
     }
 
     #[test]
@@ -726,11 +893,11 @@ mod tests {
     }
 
     #[test]
-    fn default_glass_stroke_is_neutral_and_composer_uses_cobalt() {
-        assert_eq!(glass_stroke(), Color32::from_rgb(43, 53, 68));
+    fn default_glass_stroke_is_neutral_and_composer_uses_accent() {
+        assert_eq!(glass_stroke(), Color32::from_rgb(35, 42, 53));
         assert_eq!(
             accent_stroke_composer(),
-            Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+            Color32::from_rgba_unmultiplied(124, 140, 255, 92)
         );
     }
 
@@ -745,8 +912,8 @@ mod tests {
         assert_ne!(stroke.color, accent());
         let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
         assert!((80..=110).contains(&a), "alpha={a}");
-        assert!((80..=105).contains(&r), "r={r}");
-        assert!((120..=150).contains(&g), "g={g}");
+        assert!((110..=135).contains(&r), "r={r}");
+        assert!((125..=155).contains(&g), "g={g}");
         assert!(b >= 240, "b={b}");
     }
 }

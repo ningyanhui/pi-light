@@ -12,6 +12,7 @@ use eframe::egui::{self, Color32, Rounding, Stroke};
 
 use crate::assets::ShellTextures;
 use crate::chat::SessionHub;
+use crate::icons::{self, Icon};
 use crate::theme;
 use crate::workspace_git::{self, GitKind, GitState};
 use crate::workspace_tree::{EntryKind, FileTree, TreeStatus};
@@ -53,6 +54,8 @@ pub enum DockAction {
     OpenRemote,
     InsertPath(String),
     RequestWorkdir(String),
+    /// Open the native folder picker and switch to the chosen folder.
+    PickFolder,
     OpenCwdPopover,
     CloseCwdPopover,
     GitStage,
@@ -217,41 +220,52 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-pub fn show_topbar_cwd(
+/// Title-bar workspace selector: current folder chip plus a dropdown with
+/// the native "open folder" action and recently used folders.
+pub fn show_workspace_switcher(
     ui: &mut egui::Ui,
     workdir: &Path,
-    draft: &mut String,
     switching: bool,
     popover: bool,
     recent: &[PathBuf],
     error: Option<&str>,
 ) -> Option<DockAction> {
     let mut action = None;
-    theme::pi_avatar(ui, 22.0);
-    ui.label(
-        egui::RichText::new("pi-light")
-            .strong()
-            .size(14.0)
-            .color(theme::text_primary()),
-    );
-    ui.add_space(14.0);
-    let badge = display_workdir(workdir);
-    let badge_resp = ui.add(
-        egui::Button::new(
-            egui::RichText::new(badge)
-                .size(12.5)
-                .color(theme::text_muted()),
-        )
+    let name = workdir_name(workdir);
+    let chip = egui::Frame::none()
         .fill(if popover {
-            theme::hover_fill()
+            theme::card_bg()
         } else {
-            Color32::TRANSPARENT
+            theme::sidebar_bg()
         })
         .stroke(Stroke::new(1.0_f32, theme::hairline()))
-        .rounding(Rounding::same(8.0))
-        .min_size(egui::vec2(0.0, 28.0)),
-    );
-    if badge_resp.on_hover_text("切换工作区").clicked() {
+        .rounding(Rounding::same(theme::radius::MD))
+        .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 7.0;
+            ui.horizontal(|ui| {
+                icons::icon(ui, Icon::Folder, 15.0, theme::accent_bright());
+                ui.label(
+                    egui::RichText::new(name)
+                        .size(13.0)
+                        .color(theme::text_primary()),
+                );
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+                let live = if switching {
+                    theme::warn()
+                } else {
+                    theme::ok()
+                };
+                ui.painter().circle_filled(dot.center(), 3.0, live);
+                icons::icon(ui, Icon::ChevronDown, 13.0, theme::text_dim());
+            });
+        });
+    let chip_rect = chip.response.rect;
+    let resp = ui.interact(chip_rect, ui.id().with("ws_switcher"), egui::Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if resp.on_hover_text(display_workdir(workdir)).clicked() {
         action = Some(if popover {
             DockAction::CloseCwdPopover
         } else {
@@ -259,88 +273,110 @@ pub fn show_topbar_cwd(
         });
     }
     if switching {
-        ui.add_space(8.0);
         ui.label(
-            egui::RichText::new(format!("◌  {SWITCHING_COPY}"))
+            egui::RichText::new(SWITCHING_COPY)
                 .size(12.0)
                 .color(theme::accent_soft()),
         );
     }
+    if !popover {
+        return action;
+    }
 
-    if popover {
-        let mut picked: Option<String> = None;
-        egui::Window::new("切换工作区")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_TOP, [0.0, 64.0])
-            .frame(
-                egui::Frame::none()
-                    .fill(theme::sidebar_bg())
-                    .stroke(Stroke::new(1.0_f32, theme::glass_stroke_strong()))
-                    .rounding(Rounding::same(12.0))
-                    .inner_margin(egui::Margin::same(14.0)),
-            )
-            .show(ui.ctx(), |ui| {
-                ui.set_min_width(420.0);
-                ui.label(
-                    egui::RichText::new("工作区路径")
-                        .strong()
-                        .size(13.0)
-                        .color(theme::text_primary()),
-                );
-                ui.label(
-                    egui::RichText::new("切换时会短暂同步环境。树与 Git 会跟随新路径。")
-                        .size(11.0)
-                        .color(theme::text_muted()),
-                );
-                ui.add_space(8.0);
-                ui.add(
-                    egui::TextEdit::singleline(draft)
-                        .desired_width(380.0)
-                        .hint_text("绝对路径"),
-                );
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "切换").clicked() {
-                        picked = Some(draft.clone());
+    let area = egui::Area::new(ui.id().with("ws_popover"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(chip_rect.left_bottom() + egui::vec2(0.0, 8.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::none()
+                .fill(theme::sidebar_bg())
+                .stroke(Stroke::new(1.0_f32, theme::hairline_strong()))
+                .rounding(Rounding::same(theme::radius::LG))
+                .shadow(theme::glass_shadow())
+                .inner_margin(egui::Margin::same(8.0))
+                .show(ui, |ui| {
+                    ui.set_width(380.0);
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    if theme::menu_row(
+                        ui,
+                        Icon::FolderOpen,
+                        "打开文件夹…",
+                        None,
+                        Some("Ctrl+O"),
+                        true,
+                    )
+                    .clicked()
+                    {
+                        action = Some(DockAction::PickFolder);
                     }
-                    if theme::ghost_button(ui, "取消").clicked() {
-                        action = Some(DockAction::CloseCwdPopover);
-                    }
-                });
-                if !recent.is_empty() {
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new("最近使用")
-                            .size(11.0)
-                            .color(theme::text_muted()),
-                    );
-                    for path in recent {
-                        let label = display_workdir(path);
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(label)
-                                        .size(12.0)
-                                        .color(theme::text_primary()),
-                                )
-                                .fill(theme::card_bg())
-                                .min_size(egui::vec2(ui.available_width(), 26.0)),
+                    let others: Vec<&PathBuf> = recent
+                        .iter()
+                        .filter(|p| !same_cwd(p, workdir))
+                        .take(8)
+                        .collect();
+                    if !others.is_empty() {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(10.0);
+                            ui.label(
+                                egui::RichText::new("最近打开")
+                                    .size(11.0)
+                                    .color(theme::text_dim()),
+                            );
+                        });
+                        for path in others {
+                            let detail = display_workdir(path);
+                            if theme::menu_row(
+                                ui,
+                                Icon::Folder,
+                                &workdir_name(path),
+                                Some(&detail),
+                                None,
+                                false,
                             )
                             .clicked()
-                        {
-                            picked = Some(path.to_string_lossy().into_owned());
+                            {
+                                action = Some(DockAction::RequestWorkdir(
+                                    path.to_string_lossy().into_owned(),
+                                ));
+                            }
                         }
                     }
-                }
-                if let Some(err) = error {
-                    ui.colored_label(theme::danger(), err);
-                }
-            });
-        if let Some(raw) = picked {
-            action = Some(DockAction::RequestWorkdir(raw));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new("也可以把文件夹直接拖进窗口")
+                                .size(11.0)
+                                .color(theme::text_dim()),
+                        );
+                    });
+                    if let Some(err) = error {
+                        ui.add_space(4.0);
+                        ui.colored_label(theme::danger(), err);
+                    }
+                });
+        });
+    if action.is_none() {
+        let dismiss = ui.input(|i| {
+            i.key_pressed(egui::Key::Escape)
+                || (i.pointer.any_click()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| !area.response.rect.contains(p) && !chip_rect.contains(p)))
+        });
+        if dismiss {
+            action = Some(DockAction::CloseCwdPopover);
         }
     }
     action
+}
+
+/// Last path component (or the full path for roots like `C:\`).
+pub fn workdir_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| display_workdir(path))
 }
 
 pub fn show_switch_error_banner(ui: &mut egui::Ui, error: &str) -> Option<DockAction> {

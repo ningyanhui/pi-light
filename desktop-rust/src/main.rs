@@ -17,6 +17,7 @@ use pi_light::{
     chat::{ChatMessage, ChatState, SessionHub},
     composer_invoke::{self, InvokeAction, InvokeChooser, InvokeKind, PiCommand},
     fonts,
+    icons::{self, Icon},
     markdown_ui::{self, MarkdownView},
     message_tree::{self, NodeId, NodeRole, BRANCH_HONESTY},
     onboarding::{self, FirstRunSurface},
@@ -37,6 +38,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("pi-light")
+            .with_decorations(false)
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([880.0, 560.0])
             .with_icon(app_icon::icon_data()),
@@ -72,7 +74,7 @@ struct PiLightApp {
     textures: ShellTextures,
     /// 当前活动工作区（写入 `Command::current_dir`；同时只有一个）。
     workdir: PathBuf,
-    workdir_draft: String,
+    welcome_action: Option<DockAction>,
     workdir_error: Option<String>,
     /// 最近一次成功 spawn 的 sidecar cwd。同路径切会话时复用进程。
     sidecar_cwd: PathBuf,
@@ -120,7 +122,6 @@ impl PiLightApp {
             .clone()
             .filter(|path| path.is_dir())
             .unwrap_or(fallback_workdir);
-        let workdir_draft = workdir.to_string_lossy().into_owned();
         let mut workspace = WorkspaceUi::default();
         workspace.bind_root(workdir.clone());
         let stored_onboarding = cc
@@ -145,7 +146,7 @@ impl PiLightApp {
             ref_chips: Vec::new(),
             textures: ShellTextures::load(&cc.egui_ctx),
             workdir: workdir.clone(),
-            workdir_draft,
+            welcome_action: None,
             workdir_error: None,
             sidecar_cwd: workdir,
             workspace,
@@ -274,14 +275,12 @@ impl PiLightApp {
                 let previous = self.workdir.clone();
                 self.workspace.switching = true;
                 self.workdir = path.clone();
-                self.workdir_draft = path.to_string_lossy().into_owned();
                 let ok = self.spawn_rpc(true);
                 self.workspace.switching = false;
                 if ok {
                     self.commit_workdir_success(path);
                 } else {
                     self.workdir = previous.clone();
-                    self.workdir_draft = previous.to_string_lossy().into_owned();
                     let _ = self.spawn_rpc(false);
                     self.workspace.switch_error = Some(workspace::SWITCH_FAIL_COPY.to_owned());
                     self.workspace.retry_path = Some(path);
@@ -292,7 +291,6 @@ impl PiLightApp {
 
     fn commit_workdir_success(&mut self, path: PathBuf) {
         self.workdir = path.clone();
-        self.workdir_draft = path.to_string_lossy().into_owned();
         self.sessions.set_active_workdir(path.clone());
         self.workspace.bind_root(path.clone());
         self.workspace.retry_path = None;
@@ -538,7 +536,6 @@ impl PiLightApp {
         match workspace::plan_cwd_switch(&self.sidecar_cwd, &target_wd) {
             CwdSwitchPlan::Reuse => {
                 self.workdir = target_wd.clone();
-                self.workdir_draft = target_wd.to_string_lossy().into_owned();
                 self.sessions.set_active_workdir(target_wd.clone());
                 self.workspace.bind_root(target_wd);
                 if let Some(path) = file {
@@ -1169,10 +1166,12 @@ impl eframe::App for PiLightApp {
         }
 
         self.workspace.poll_toast();
-        if matches!(surface, FirstRunSurface::Chat) {
+        let chat_surface = matches!(surface, FirstRunSurface::Chat);
+        self.show_title_bar(ctx, chat_surface);
+        if chat_surface {
+            self.handle_folder_input(ctx);
             self.show_status_bar(ctx);
             self.show_workspace_dock(ctx);
-            self.show_header(ctx);
         }
 
         self.admin.memory_insights = Some(self.sessions.active_chat().insights.clone());
@@ -1211,6 +1210,10 @@ impl eframe::App for PiLightApp {
                 }
             }
         }
+        if let Some(action) = self.welcome_action.take() {
+            self.apply_dock_action(ctx, action);
+        }
+        self.handle_window_frame(ctx, chat_surface);
         self.persist_sessions(false);
     }
 }
@@ -1299,13 +1302,12 @@ impl PiLightApp {
             }
             DockAction::InsertPath(rel) => self.insert_composer_path(&rel),
             DockAction::RequestWorkdir(raw) => self.request_workdir_change(&raw),
+            DockAction::PickFolder => self.pick_folder(),
             DockAction::OpenCwdPopover => {
-                self.workdir_draft = self.workdir.to_string_lossy().into_owned();
                 self.workspace.cwd_popover = true;
             }
             DockAction::CloseCwdPopover => {
                 self.workspace.cwd_popover = false;
-                self.workdir_draft = self.workdir.to_string_lossy().into_owned();
             }
             DockAction::GitStage => {
                 if let Some(path) = self.workspace.selected_git.clone() {
@@ -1361,56 +1363,230 @@ impl PiLightApp {
         }
     }
 
-    fn show_header(&mut self, ctx: &egui::Context) {
-        let mut reprobe = false;
-        let mut open_models = false;
-        let mut cwd_action = None;
+    fn pick_folder(&mut self) {
+        self.workspace.cwd_popover = false;
+        let picked = rfd::FileDialog::new()
+            .set_title("打开文件夹")
+            .set_directory(&self.workdir)
+            .pick_folder();
+        if let Some(path) = picked {
+            self.apply_workdir_path(path);
+        }
+    }
+
+    /// Ctrl+O and folders dropped onto the window both switch the workspace.
+    fn handle_folder_input(&mut self, ctx: &egui::Context) {
+        let open = ctx.input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND,
+                egui::Key::O,
+            ))
+        });
+        if open {
+            self.pick_folder();
+        }
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if let Some(path) = dropped.into_iter().next() {
+            if path.is_dir() {
+                self.apply_workdir_path(path);
+            } else {
+                self.workspace.show_toast("请拖入文件夹以切换工作区");
+            }
+        }
+    }
+
+    fn show_title_bar(&mut self, ctx: &egui::Context, chat: bool) {
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let streaming = chat && self.sessions.active_is_streaming();
         let recent = workspace::recent_workdirs(&self.sessions, &self.workdir);
-        egui::TopBottomPanel::top("header")
+        let mut action = None;
+        let mut reprobe = false;
+        egui::TopBottomPanel::top("title_bar")
+            .exact_height(44.0)
             .frame(
-                theme::glass_bar()
-                    .fill(theme::sidebar_bg())
-                    .rounding(egui::Rounding::ZERO)
-                    .inner_margin(egui::Margin::symmetric(14.0, 9.0)),
+                egui::Frame::none()
+                    .fill(theme::rail_bg())
+                    .inner_margin(egui::Margin {
+                        left: 14.0,
+                        right: 0.0,
+                        top: 0.0,
+                        bottom: 0.0,
+                    }),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    cwd_action = workspace::show_topbar_cwd(
-                        ui,
-                        &self.workdir,
-                        &mut self.workdir_draft,
-                        self.workspace.switching,
-                        self.workspace.cwd_popover,
-                        &recent,
-                        self.workspace
-                            .switch_error
-                            .as_deref()
-                            .or(self.workdir_error.as_deref()),
+                ui.style_mut().interaction.selectable_labels = false;
+                let bar = ui.max_rect();
+                let drag = ui.interact(
+                    bar,
+                    ui.id().with("title_drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if drag.double_clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                } else if drag.drag_started_by(egui::PointerButton::Primary) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                ui.horizontal_centered(|ui| {
+                    theme::pi_avatar(ui, 22.0);
+                    ui.label(
+                        egui::RichText::new("pi-light")
+                            .strong()
+                            .size(13.5)
+                            .color(theme::text_primary()),
                     );
-                    if self.sessions.active_is_streaming() {
-                        ui.add_space(8.0);
-                        theme::status_pill(ui, "● 生成中", theme::warn());
+                    if chat {
+                        ui.add_space(10.0);
+                        action = workspace::show_workspace_switcher(
+                            ui,
+                            &self.workdir,
+                            self.workspace.switching,
+                            self.workspace.cwd_popover,
+                            &recent,
+                            self.workspace
+                                .switch_error
+                                .as_deref()
+                                .or(self.workdir_error.as_deref()),
+                        );
+                        if theme::toolbar_button(ui, Icon::FolderOpen, "打开文件夹")
+                            .on_hover_text("Ctrl+O")
+                            .clicked()
+                        {
+                            action = Some(DockAction::PickFolder);
+                        }
+                        if streaming {
+                            ui.add_space(4.0);
+                            theme::status_pill(ui, "生成中", theme::warn());
+                        }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if theme::icon_button(ui, "👤", "账户与通用设置").clicked() {
-                            open_models = true;
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        if theme::window_button(ui, Icon::Close, true).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
-                        if theme::icon_button(ui, "↻", "重新扫描 Pi 并重连").clicked() {
+                        let max_icon = if maximized {
+                            Icon::Restore
+                        } else {
+                            Icon::Maximize
+                        };
+                        if theme::window_button(ui, max_icon, false).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                        }
+                        if theme::window_button(ui, Icon::Minimize, false).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+                        if !chat {
+                            return;
+                        }
+                        ui.add_space(10.0);
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        if icons::icon_button(ui, Icon::Gear, "设置").clicked() {
+                            action = Some(DockAction::OpenSettings);
+                        }
+                        if icons::icon_button(ui, Icon::Refresh, "重新扫描 Pi 并重连").clicked()
+                        {
                             reprobe = true;
+                        }
+                        if icons::icon_button(ui, Icon::Globe, "远程访问").clicked() {
+                            action = Some(DockAction::OpenRemote);
                         }
                     });
                 });
             });
-        if let Some(action) = cwd_action {
+        if let Some(action) = action {
             self.apply_dock_action(ctx, action);
         }
         if reprobe {
             self.reprobe();
         }
-        if open_models {
-            self.admin.open = true;
-            self.admin.active_tab = AdminTab::General;
-            self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
+    }
+
+    /// Frameless window chrome: 1px border, edge resize handles, and the
+    /// drop-a-folder overlay.
+    fn handle_window_frame(&mut self, ctx: &egui::Context, chat: bool) {
+        let screen = ctx.screen_rect();
+        let (maximized, fullscreen) = ctx.input(|i| {
+            let vp = i.viewport();
+            (
+                vp.maximized.unwrap_or(false),
+                vp.fullscreen.unwrap_or(false),
+            )
+        });
+        let fg = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("window_chrome"),
+        ));
+        if chat && ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            fg.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(170));
+            let card = egui::Rect::from_center_size(screen.center(), egui::vec2(360.0, 150.0));
+            fg.rect(
+                card,
+                theme::radius::XL,
+                theme::sidebar_bg(),
+                egui::Stroke::new(1.5_f32, theme::accent()),
+            );
+            icons::paint(
+                &fg,
+                egui::Rect::from_center_size(
+                    card.center() - egui::vec2(0.0, 26.0),
+                    egui::vec2(34.0, 34.0),
+                ),
+                Icon::FolderOpen,
+                theme::accent_bright(),
+            );
+            fg.text(
+                card.center() + egui::vec2(0.0, 18.0),
+                egui::Align2::CENTER_CENTER,
+                "松开以打开此文件夹",
+                egui::FontId::proportional(16.0),
+                theme::text_primary(),
+            );
+            fg.text(
+                card.center() + egui::vec2(0.0, 44.0),
+                egui::Align2::CENTER_CENTER,
+                "将作为新的工作区",
+                egui::FontId::proportional(12.0),
+                theme::text_dim(),
+            );
+        }
+        if maximized || fullscreen {
+            return;
+        }
+        fg.rect_stroke(
+            screen.shrink(0.5),
+            0.0,
+            egui::Stroke::new(1.0_f32, theme::hairline_strong()),
+        );
+        let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        const EDGE: f32 = 5.0;
+        let left = pos.x - screen.left() <= EDGE;
+        let right = screen.right() - pos.x <= EDGE;
+        let top = pos.y - screen.top() <= EDGE;
+        let bottom = screen.bottom() - pos.y <= EDGE;
+        use egui::{CursorIcon as C, ResizeDirection as R};
+        let hit = match (left, right, top, bottom) {
+            (true, _, true, _) => Some((R::NorthWest, C::ResizeNorthWest)),
+            (_, true, true, _) => Some((R::NorthEast, C::ResizeNorthEast)),
+            (true, _, _, true) => Some((R::SouthWest, C::ResizeSouthWest)),
+            (_, true, _, true) => Some((R::SouthEast, C::ResizeSouthEast)),
+            (true, ..) => Some((R::West, C::ResizeWest)),
+            (_, true, ..) => Some((R::East, C::ResizeEast)),
+            (_, _, true, _) => Some((R::North, C::ResizeNorth)),
+            (.., true) => Some((R::South, C::ResizeSouth)),
+            _ => None,
+        };
+        if let Some((dir, cursor)) = hit {
+            ctx.set_cursor_icon(cursor);
+            if ctx.input(|i| i.pointer.primary_pressed()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
         }
     }
 
@@ -1979,7 +2155,7 @@ impl PiLightApp {
         }
     }
 
-    fn show_chat_welcome(&self, ui: &mut egui::Ui) {
+    fn show_chat_welcome(&mut self, ui: &mut egui::Ui) {
         let top = ((ui.available_height() - 300.0) * 0.4).clamp(24.0, 160.0);
         ui.add_space(top);
         theme::centered_column(ui, 520.0, |ui| {
@@ -1994,14 +2170,57 @@ impl PiLightApp {
                 );
                 ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new(format!(
-                        "Pi 会在 {} 中读写文件、运行命令。",
-                        workspace::display_workdir(&self.workdir)
-                    ))
-                    .size(13.5)
-                    .color(theme::text_muted()),
+                    egui::RichText::new("Pi 会在当前工作区中读写文件、运行命令。")
+                        .size(13.5)
+                        .color(theme::text_muted()),
                 );
             });
+            ui.add_space(18.0);
+            let recent = workspace::recent_workdirs(&self.sessions, &self.workdir);
+            let current = workspace::display_workdir(&self.workdir);
+            let mut picked = None;
+            egui::Frame::none()
+                .fill(theme::card_bg())
+                .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
+                .rounding(egui::Rounding::same(theme::radius::LG))
+                .inner_margin(egui::Margin::same(6.0))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let title = format!("工作区 · {}", workspace::workdir_name(&self.workdir));
+                    if theme::menu_row(
+                        ui,
+                        Icon::FolderOpen,
+                        &title,
+                        Some(&current),
+                        Some("打开文件夹  Ctrl+O"),
+                        true,
+                    )
+                    .clicked()
+                    {
+                        picked = Some(DockAction::PickFolder);
+                    }
+                    for path in recent.iter().skip(1).take(3) {
+                        let detail = workspace::display_workdir(path);
+                        if theme::menu_row(
+                            ui,
+                            Icon::Clock,
+                            &workspace::workdir_name(path),
+                            Some(&detail),
+                            None,
+                            false,
+                        )
+                        .clicked()
+                        {
+                            picked = Some(DockAction::RequestWorkdir(
+                                path.to_string_lossy().into_owned(),
+                            ));
+                        }
+                    }
+                });
+            if picked.is_some() {
+                self.welcome_action = picked;
+            }
             ui.add_space(22.0);
             for (key, title, detail) in [
                 ("/", "调用命令", "执行 Pi 提供的斜杠命令"),
