@@ -32,11 +32,17 @@ Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol n
 ## Desktop composition
 
 1. **Workspace dock:** persistent left navigation for Sessions, Files and Git. The selected state uses a muted cobalt-tinted surface and a fine accent outline, not a full-bright neon block.
-2. **Top bar:** brand, current working directory, active model and actual runtime state. Keep the path switch discoverable without competing with the conversation.
-3. **Session strip:** current session identity and session-level actions.
+2. **Top bar:** brand mark, current working directory and actual runtime state. Keep the path switch discoverable without competing with the conversation; model and thinking level live in the composer, not here.
+3. **Session strip:** current session identity only (title, id, message count). Creating sessions lives in the dock so there is one entry point.
 4. **Conversation canvas:** assistant content is capped at a readable measure; user messages remain right-aligned and narrower. Streaming and completed messages share the same typographic rhythm.
-5. **Composer:** the strongest interactive surface. Primary send / stop / retry actions must be clear; model and context-reference affordances must describe what they really do.
+5. **Composer:** the strongest interactive surface: input + send on the first row, model / thinking / settings chips and stop / retry on the second. Context-reference affordances must describe what they really do.
 6. **Settings drawer:** one consistent panel surface with a clear title, tabs, scrollable content and explicit error feedback.
+
+## Rendering rules (desktop)
+
+- The theme forces egui dark visuals for both OS themes (`theme::apply_theme`); never rely on `ctx.set_visuals` alone, or light-mode Windows renders white widgets on graphite panels.
+- Only use glyphs that the bundled egui fonts, the system CJK font or the symbol fallback (`fonts.rs`) cover. Prefer short text labels or painter-drawn marks (`theme::pi_avatar`, `theme::send_button`) over decorative symbols.
+- Secondary per-message actions (copy, regenerate, edit) are quiet text buttons; reserve filled buttons for primary actions.
 
 ## Android companion composition
 

@@ -1369,8 +1369,9 @@ impl PiLightApp {
         egui::TopBottomPanel::top("header")
             .frame(
                 theme::glass_bar()
-                    .fill(theme::glass_strong())
-                    .inner_margin(egui::Margin::symmetric(14.0, 8.0)),
+                    .fill(theme::sidebar_bg())
+                    .rounding(egui::Rounding::ZERO)
+                    .inner_margin(egui::Margin::symmetric(14.0, 9.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -1386,18 +1387,9 @@ impl PiLightApp {
                             .as_deref()
                             .or(self.workdir_error.as_deref()),
                     );
-                    ui.add_space(8.0);
-                    if let Some(spec) = self.show_model_picker(ui, "header_model_combo", 188.0) {
-                        self.apply_model_spec(&spec);
-                    }
-                    self.show_thinking_chip(ui);
                     if self.sessions.active_is_streaming() {
                         ui.add_space(8.0);
-                        ui.label(
-                            egui::RichText::new("生成中")
-                                .size(11.0)
-                                .color(theme::warn()),
-                        );
+                        theme::status_pill(ui, "● 生成中", theme::warn());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if theme::icon_button(ui, "👤", "账户与通用设置").clicked() {
@@ -1420,26 +1412,6 @@ impl PiLightApp {
             self.admin.active_tab = AdminTab::General;
             self.admin.opened_pass = Some(ctx.cumulative_pass_nr());
         }
-    }
-
-    fn show_model_picker(
-        &self,
-        ui: &mut egui::Ui,
-        id_salt: &'static str,
-        width: f32,
-    ) -> Option<String> {
-        let current = provider_catalog::display_model_spec(
-            self.admin.model_config.live_model.as_deref(),
-            self.admin.model_config.default_provider.as_deref(),
-            self.admin.model_config.default_model.as_deref(),
-            &self.admin.model_config.available_models,
-            &self.admin.model_config.custom_providers,
-        );
-        let models = provider_catalog::usable_model_specs(
-            &self.admin.model_config.available_models,
-            &self.admin.model_config.custom_providers,
-        );
-        show_model_chip(ui, id_salt, &current, &models, width)
     }
 
     fn apply_model_spec(&mut self, spec: &str) {
@@ -1480,9 +1452,14 @@ impl PiLightApp {
 
         egui::TopBottomPanel::bottom("chat_input")
             .frame(
-                theme::glass_bar()
-                    .fill(theme::glass_strong())
-                    .inner_margin(egui::Margin::symmetric(18.0, 10.0)),
+                egui::Frame::none()
+                    .fill(theme::chrome_bg())
+                    .inner_margin(egui::Margin {
+                        left: 24.0,
+                        right: 24.0,
+                        top: 6.0,
+                        bottom: 8.0,
+                    }),
             )
             .min_height(96.0)
             .show(ctx, |ui| {
@@ -1509,82 +1486,107 @@ impl PiLightApp {
                     self.ref_chips.remove(idx);
                 }
 
-                theme::emphasis_frame().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let input = &mut self.sessions.active_chat_mut().input;
-                        let can_send = !is_streaming
-                            && !self.workspace.switching
-                            && (!input.trim().is_empty() || !chips_empty);
-                        let input_response = ui.add_sized(
-                            [ui.available_width() - 168.0, 36.0],
-                            egui::TextEdit::singleline(input)
-                                .hint_text("输入消息，/ 命令，@ 文件，# 引用会话")
-                                .frame(false)
-                                .interactive(!is_streaming),
-                        );
-                        if input_response.lost_focus()
-                            && ctx.input(|i| i.key_pressed(egui::Key::Enter))
-                            && can_send
-                            && !self.invoke.active
-                        {
-                            send_now = true;
-                            input_response.request_focus();
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if theme::send_button(ui, can_send).clicked() {
+                theme::emphasis_frame()
+                    .fill(theme::card_bg())
+                    .rounding(egui::Rounding::same(14.0))
+                    .inner_margin(egui::Margin {
+                        left: 14.0,
+                        right: 8.0,
+                        top: 8.0,
+                        bottom: 8.0,
+                    })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let input = &mut self.sessions.active_chat_mut().input;
+                            let can_send = !is_streaming
+                                && !self.workspace.switching
+                                && (!input.trim().is_empty() || !chips_empty);
+                            let input_response = ui.add_sized(
+                                [ui.available_width() - 48.0, 36.0],
+                                egui::TextEdit::singleline(input)
+                                    .hint_text("给 Pi 发消息…  / 命令 · @ 文件 · # 引用会话")
+                                    .font(egui::FontId::proportional(14.5))
+                                    .vertical_align(egui::Align::Center)
+                                    .frame(false)
+                                    .interactive(!is_streaming),
+                            );
+                            if input_response.lost_focus()
+                                && ctx.input(|i| i.key_pressed(egui::Key::Enter))
+                                && can_send
+                                && !self.invoke.active
+                            {
                                 send_now = true;
                                 input_response.request_focus();
                             }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if theme::send_button(ui, can_send).clicked() {
+                                        send_now = true;
+                                        input_response.request_focus();
+                                    }
+                                },
+                            );
+                        });
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
                             if let Some(spec) = show_model_chip(
                                 ui,
                                 "composer_model_combo",
                                 &current_spec,
                                 &usable_models,
-                                120.0,
+                                150.0,
                             ) {
                                 apply_model = Some(spec);
                             }
-                        });
-                    });
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("# 引用会话  ·  工具由 Skills / MCP 提供")
-                                .size(11.0)
-                                .color(theme::text_dim()),
-                        );
-                        if theme::icon_button(ui, "⚙", "打开设置").clicked() {
-                            open_settings = true;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if is_streaming {
-                                if ui
-                                    .add(egui::Button::new("■ 停止").min_size([60.0, 26.0].into()))
-                                    .on_hover_text("中止当前生成（发送 abort 命令）")
-                                    .clicked()
-                                {
-                                    abort_now = true;
-                                }
-                            } else if ui
-                                .add_enabled(
-                                    can_retry,
-                                    egui::Button::new("重试").min_size([60.0, 26.0].into()),
-                                )
-                                .on_hover_text(
-                                    "重新生成当前活动路径的最后一条助手回复（同会话分支）",
-                                )
-                                .clicked()
-                            {
-                                retry_now = true;
+                            self.show_thinking_chip(ui);
+                            if theme::icon_button(ui, "⚙", "打开设置").clicked() {
+                                open_settings = true;
                             }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if is_streaming {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("■ 停止")
+                                                        .color(theme::danger()),
+                                                )
+                                                .min_size([64.0, 26.0].into()),
+                                            )
+                                            .on_hover_text("中止当前生成（发送 abort 命令）")
+                                            .clicked()
+                                        {
+                                            abort_now = true;
+                                        }
+                                    } else if ui
+                                        .add_enabled(
+                                            can_retry,
+                                            egui::Button::new(
+                                                egui::RichText::new("↻ 重试")
+                                                    .color(theme::text_muted()),
+                                            )
+                                            .frame(false)
+                                            .min_size([56.0, 26.0].into()),
+                                        )
+                                        .on_hover_text(
+                                            "重新生成当前活动路径的最后一条助手回复（同会话分支）",
+                                        )
+                                        .clicked()
+                                    {
+                                        retry_now = true;
+                                    }
+                                },
+                            );
                         });
                     });
-                });
                 ui.add_space(6.0);
                 ui.vertical_centered(|ui| {
                     ui.label(
                         egui::RichText::new("pi-light 可能会犯错，请仔细辨别关键信息。")
-                            .size(10.0)
+                            .size(10.5)
                             .color(theme::text_dim()),
                     );
                 });
@@ -1619,7 +1621,7 @@ impl PiLightApp {
             .frame(
                 egui::Frame::none()
                     .fill(theme::chrome_bg())
-                    .inner_margin(egui::Margin::symmetric(24.0, 18.0)),
+                    .inner_margin(egui::Margin::symmetric(32.0, 12.0)),
             )
             .show(ctx, |ui| {
                 self.paint_main_backdrop(ui);
@@ -1685,7 +1687,7 @@ impl PiLightApp {
                                     }
                                 }
                             }
-                            ui.add_space(10.0);
+                            ui.add_space(14.0);
                         }
 
                         if streaming {
@@ -1721,25 +1723,30 @@ impl PiLightApp {
         }
         let mut action = None;
         let has_branches = self.sessions.active_chat().tree.has_branches();
+        if !has_branches && !self.tree_open {
+            return None;
+        }
         ui.horizontal(|ui| {
-            let label = if has_branches {
-                format!("消息树  {} 节点 · 有分支", rows.len())
-            } else {
-                format!("消息树  {} 节点", rows.len())
-            };
-            ui.strong(label);
+            ui.label(
+                egui::RichText::new(format!("消息树 · {} 节点 · 有分支", rows.len()))
+                    .size(12.0)
+                    .color(theme::text_muted()),
+            )
+            .on_hover_text(BRANCH_HONESTY);
             if ui
-                .small_button(if self.tree_open { "收起" } else { "展开" })
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(if self.tree_open { "收起" } else { "展开" })
+                            .size(12.0)
+                            .color(theme::accent_soft()),
+                    )
+                    .frame(false),
+                )
                 .clicked()
             {
                 self.tree_open = !self.tree_open;
             }
         });
-        ui.label(
-            egui::RichText::new(BRANCH_HONESTY)
-                .size(10.0)
-                .color(theme::text_dim()),
-        );
         if self.tree_open {
             theme::card_frame().show(ui, |ui| {
                 egui::ScrollArea::vertical()
@@ -1804,18 +1811,16 @@ impl PiLightApp {
     }
 
     fn show_session_bar(&mut self, ctx: &egui::Context) {
-        let streaming = self.sessions.any_streaming();
-        let switching = self.workspace.switching;
         let title = self.sessions.active().title.clone();
         let id = self.sessions.active().id;
-        let mut want_new = false;
+        let turns = self.sessions.active_chat().path_rows().len();
         let mut banner_action = None;
 
         egui::TopBottomPanel::top("session_bar")
             .frame(
-                theme::glass_bar()
-                    .fill(theme::glass_fill())
-                    .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
+                egui::Frame::none()
+                    .fill(theme::chrome_bg())
+                    .inner_margin(egui::Margin::symmetric(32.0, 10.0)),
             )
             .show(ctx, |ui| {
                 if let Some(err) = self.workspace.switch_error.clone() {
@@ -1823,42 +1828,26 @@ impl PiLightApp {
                     ui.add_space(4.0);
                 }
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(truncate_display(&title, 56))
-                                .strong()
-                                .size(14.0)
-                                .color(theme::text_primary()),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!("会话 #{id}"))
-                                .size(10.0)
-                                .color(theme::text_dim()),
-                        );
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                !streaming && !switching,
-                                egui::Button::new(
-                                    egui::RichText::new("+ 新会话")
-                                        .color(egui::Color32::WHITE)
-                                        .size(12.0),
-                                )
-                                .fill(theme::accent())
-                                .rounding(egui::Rounding::same(8.0)),
-                            )
-                            .clicked()
-                        {
-                            want_new = true;
-                        }
-                    });
+                    ui.label(
+                        egui::RichText::new(truncate_display(&title, 56))
+                            .strong()
+                            .size(15.0)
+                            .color(theme::text_primary()),
+                    );
+                    ui.add_space(4.0);
+                    let meta = if turns == 0 {
+                        format!("#{id}")
+                    } else {
+                        format!("#{id} · {turns} 条消息")
+                    };
+                    ui.label(
+                        egui::RichText::new(meta)
+                            .size(11.5)
+                            .color(theme::text_dim()),
+                    );
                 });
             });
 
-        if want_new {
-            self.do_new_session();
-        }
         if let Some(action) = banner_action {
             self.apply_dock_action(ctx, action);
         }
@@ -1875,20 +1864,21 @@ impl PiLightApp {
         let usable = composer_invoke::thinking_levels_usable(&levels)
             && !self.admin.model_config.thinking_rpc_failed;
         let label = if usable {
-            format!("思考强度 {current}")
+            format!("思考 · {current}")
         } else {
-            "思考强度 不可用".to_owned()
+            "思考 · 不可用".to_owned()
         };
         let resp = ui.add_enabled(
             usable,
             egui::Button::new(
                 egui::RichText::new(label)
-                    .size(11.0)
-                    .color(theme::text_primary()),
+                    .size(12.0)
+                    .color(theme::text_muted()),
             )
-            .fill(egui::Color32::from_rgb(29, 38, 52))
-            .stroke(egui::Stroke::new(1.0_f32, theme::accent_stroke_think()))
-            .rounding(egui::Rounding::same(12.0)),
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
+            .rounding(egui::Rounding::same(13.0))
+            .min_size(egui::vec2(0.0, 26.0)),
         );
         if !usable {
             resp.on_hover_text("当前模型不支持思考强度");
@@ -1990,30 +1980,63 @@ impl PiLightApp {
     }
 
     fn show_chat_welcome(&self, ui: &mut egui::Ui) {
-        ui.add_space(72.0);
-        theme::centered_column(ui, 460.0, |ui| {
-            theme::soft_card(ui, |ui| {
+        let top = ((ui.available_height() - 300.0) * 0.4).clamp(24.0, 160.0);
+        ui.add_space(top);
+        theme::centered_column(ui, 520.0, |ui| {
+            ui.vertical_centered(|ui| {
+                theme::pi_avatar(ui, 48.0);
+                ui.add_space(14.0);
                 ui.label(
-                    egui::RichText::new("可以开始了")
+                    egui::RichText::new("今天想做点什么？")
                         .strong()
-                        .size(22.0)
+                        .size(24.0)
                         .color(theme::text_primary()),
                 );
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("在下方输入消息。").size(14.0));
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new("要改模型或查看密钥，用左下角的「设置」。")
-                        .weak()
-                        .size(13.0),
+                    egui::RichText::new(format!(
+                        "Pi 会在 {} 中读写文件、运行命令。",
+                        workspace::display_workdir(&self.workdir)
+                    ))
+                    .size(13.5)
+                    .color(theme::text_muted()),
                 );
-                ui.add_space(4.0);
+            });
+            ui.add_space(22.0);
+            for (key, title, detail) in [
+                ("/", "调用命令", "执行 Pi 提供的斜杠命令"),
+                ("@", "引用文件", "把工作区文件加入上下文"),
+                ("#", "引用会话", "带上其他会话里的消息"),
+            ] {
+                egui::Frame::none()
+                    .fill(theme::card_bg())
+                    .rounding(egui::Rounding::same(10.0))
+                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            theme::keycap(ui, key);
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(title)
+                                    .size(13.5)
+                                    .color(theme::text_primary()),
+                            );
+                            ui.label(
+                                egui::RichText::new(detail)
+                                    .size(12.5)
+                                    .color(theme::text_dim()),
+                            );
+                        });
+                    });
+                ui.add_space(6.0);
+            }
+            ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
                 ui.label(
-                    egui::RichText::new(
-                        "输入 / 调用 Pi 命令，@ 引用工作区文件，# 引用会话消息。消息上可编辑 / 重新生成并切换同会话分支。",
-                    )
-                    .weak()
-                    .size(13.0),
+                    egui::RichText::new("消息可编辑、重新生成，并在同会话分支间切换。")
+                        .size(12.0)
+                        .color(theme::text_dim()),
                 );
             });
         });
@@ -2024,7 +2047,8 @@ impl PiLightApp {
             .exact_height(32.0)
             .frame(
                 theme::glass_bar()
-                    .fill(theme::glass_strong())
+                    .fill(theme::sidebar_bg())
+                    .rounding(egui::Rounding::ZERO)
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0)),
             )
             .show(ctx, |ui| {
@@ -2032,9 +2056,10 @@ impl PiLightApp {
                     let online = self.rpc_client.is_some() && self.pi_probe.is_ready();
                     let (dot_color, dot_tip) =
                         pi_dot_color(&self.pi_probe, self.rpc_client.is_some());
-                    ui.colored_label(
-                        if online { theme::ok() } else { dot_color },
-                        if online { "● 在线" } else { "● 离线" },
+                    ui.label(
+                        egui::RichText::new(if online { "● 在线" } else { "● 离线" })
+                            .size(11.5)
+                            .color(if online { theme::ok() } else { dot_color }),
                     )
                     .on_hover_text(dot_tip);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2381,24 +2406,29 @@ fn show_model_chip(
 ) -> Option<String> {
     let mut selected = None;
     let chip = if current.is_empty() {
-        "✦  模型 · 尚未选择".to_owned()
+        "选择模型".to_owned()
     } else {
-        let short = current.rsplit('/').next().unwrap_or(current);
-        format!("✦  模型 · {short}")
+        current.rsplit('/').next().unwrap_or(current).to_owned()
     };
     let mut choices: Vec<String> = models.to_vec();
     if !current.is_empty() && !choices.iter().any(|m| m == current) {
         choices.insert(0, current.to_owned());
     }
-    egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
-        .rounding(egui::Rounding::same(8.0))
-        .fill(egui::Color32::from_rgb(28, 36, 48))
-        .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
-        .show(ui, |ui| {
+    ui.scope(|ui| {
+        let w = &mut ui.visuals_mut().widgets;
+        w.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+        w.inactive.bg_stroke = egui::Stroke::new(1.0_f32, theme::hairline());
+        for v in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+            v.rounding = egui::Rounding::same(13.0);
+        }
+        {
             egui::ComboBox::from_id_salt(id_salt)
                 .width(width)
-                .selected_text(egui::RichText::new(chip).size(12.5))
+                .selected_text(
+                    egui::RichText::new(chip)
+                        .size(12.0)
+                        .color(theme::text_muted()),
+                )
                 .show_ui(ui, |ui| {
                     if choices.is_empty() {
                         ui.weak("连上 Pi 后会列出可用模型");
@@ -2410,25 +2440,28 @@ fn show_model_chip(
                         }
                     }
                 });
-        });
+        }
+    });
     selected.filter(|m| m != current)
 }
 
 // ── M3′ Trace / Token UI ──────────────────────────────────────────────────
 
 fn show_thinking_block(ui: &mut egui::Ui, chat: &ChatState) {
-    theme::think_frame().show(ui, |ui| {
-        ui.horizontal(|ui| {
+    theme::think_frame()
+        .fill(theme::sidebar_bg())
+        .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
+        .rounding(egui::Rounding::same(12.0))
+        .show(ui, |ui| {
+            ui.set_max_width(ui.available_width().min(920.0));
             ui.label(
-                egui::RichText::new("✦  思考过程")
-                    .strong()
-                    .size(13.0)
-                    .color(theme::accent_bright()),
+                egui::RichText::new(format!("工具调用 · {} 步", chat.insights.trace_steps.len()))
+                    .size(12.0)
+                    .color(theme::text_muted()),
             );
+            ui.add_space(6.0);
+            show_tool_cards(ui, chat);
         });
-        ui.add_space(6.0);
-        show_tool_cards(ui, chat);
-    });
 }
 
 fn show_tool_cards(ui: &mut egui::Ui, chat: &ChatState) {
@@ -2459,21 +2492,13 @@ fn show_tool_card(ui: &mut egui::Ui, step: &pi_light::pi_rpc::TraceStep) {
                 theme::package_glyph_color(&step.tool_name),
             );
             ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(&step.tool_name)
-                            .strong()
-                            .monospace()
-                            .size(12.5)
-                            .color(theme::text_primary()),
-                    );
-                    ui.label(
-                        egui::RichText::new(" TOOL ")
-                            .size(10.0)
-                            .color(egui::Color32::WHITE)
-                            .background_color(theme::accent()),
-                    );
-                });
+                ui.label(
+                    egui::RichText::new(&step.tool_name)
+                        .strong()
+                        .monospace()
+                        .size(12.5)
+                        .color(theme::text_primary()),
+                );
                 ui.label(
                     egui::RichText::new(step.args_preview.as_deref().unwrap_or(status))
                         .size(11.0)
@@ -2484,9 +2509,10 @@ fn show_tool_card(ui: &mut egui::Ui, step: &pi_light::pi_rpc::TraceStep) {
                 ui.label(
                     egui::RichText::new(dur)
                         .size(11.0)
-                        .color(theme::text_muted()),
+                        .monospace()
+                        .color(theme::text_dim()),
                 );
-                ui.colored_label(color, status);
+                theme::status_pill(ui, status, color);
             });
         });
     });
@@ -2519,7 +2545,13 @@ fn show_branch_nav(
         if ui
             .add_enabled(
                 enabled,
-                egui::Button::new("‹").min_size([22.0, 20.0].into()),
+                egui::Button::new(
+                    egui::RichText::new("‹")
+                        .size(14.0)
+                        .color(theme::text_muted()),
+                )
+                .frame(false)
+                .min_size([20.0, 20.0].into()),
             )
             .on_hover_text("上一条兄弟分支")
             .clicked()
@@ -2534,7 +2566,13 @@ fn show_branch_nav(
         if ui
             .add_enabled(
                 enabled,
-                egui::Button::new("›").min_size([22.0, 20.0].into()),
+                egui::Button::new(
+                    egui::RichText::new("›")
+                        .size(14.0)
+                        .color(theme::text_muted()),
+                )
+                .frame(false)
+                .min_size([20.0, 20.0].into()),
             )
             .on_hover_text("下一条兄弟分支")
             .clicked()
@@ -2553,34 +2591,45 @@ fn show_user_message(
     enabled: bool,
 ) -> Option<ChatUiAction> {
     let mut action = None;
+    let bubble_max = (ui.available_width() * 0.78).min(720.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-            .rounding(egui::Rounding::same(12.0))
-            .fill(egui::Color32::from_rgb(36, 52, 75))
-            .stroke(egui::Stroke::new(1.0_f32, theme::glass_stroke()))
+            .rounding(egui::Rounding {
+                nw: 14.0,
+                ne: 14.0,
+                sw: 14.0,
+                se: 4.0,
+            })
+            .fill(theme::selected_fill())
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(760.0));
+                ui.set_max_width(bubble_max);
                 if editing {
-                    ui.add(
-                        egui::TextEdit::multiline(draft)
-                            .desired_width(ui.available_width())
-                            .desired_rows(3),
-                    );
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                enabled && !draft.trim().is_empty(),
-                                egui::Button::new("发送分支"),
-                            )
-                            .clicked()
-                        {
-                            action = Some(ChatUiAction::EditConfirm);
-                        }
-                        if ui.button("取消").clicked() {
-                            action = Some(ChatUiAction::EditCancel);
-                        }
+                    ui.vertical(|ui| {
+                        ui.set_width(bubble_max);
+                        ui.add(
+                            egui::TextEdit::multiline(draft)
+                                .desired_width(ui.available_width())
+                                .desired_rows(3),
+                        );
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    enabled && !draft.trim().is_empty(),
+                                    egui::Button::new(
+                                        egui::RichText::new("发送分支").color(egui::Color32::WHITE),
+                                    )
+                                    .fill(theme::accent()),
+                                )
+                                .clicked()
+                            {
+                                action = Some(ChatUiAction::EditConfirm);
+                            }
+                            if ui.button("取消").clicked() {
+                                action = Some(ChatUiAction::EditCancel);
+                            }
+                        });
                     });
                 } else {
                     ui.label(
@@ -2588,31 +2637,34 @@ fn show_user_message(
                             .color(theme::text_primary())
                             .size(14.0),
                     );
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if let Some(nav) = show_branch_nav(
-                            ui,
-                            row.id,
-                            row.sibling_index,
-                            row.sibling_count,
-                            enabled,
-                        ) {
-                            action = Some(nav);
-                        }
-                        if ui
-                            .add_enabled(
-                                enabled,
-                                egui::Button::new("编辑").min_size([40.0, 20.0].into()),
-                            )
-                            .on_hover_text("改写这条用户消息并分出同会话分支")
-                            .clicked()
-                        {
-                            action = Some(ChatUiAction::EditStart(row.id));
-                        }
-                    });
                 }
             });
     });
+    if !editing {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(
+                        egui::RichText::new("编辑")
+                            .size(11.5)
+                            .color(theme::text_dim()),
+                    )
+                    .frame(false),
+                )
+                .on_hover_text("改写这条用户消息并分出同会话分支")
+                .clicked()
+            {
+                action = Some(ChatUiAction::EditStart(row.id));
+            }
+            if let Some(nav) =
+                show_branch_nav(ui, row.id, row.sibling_index, row.sibling_count, enabled)
+            {
+                action = Some(nav);
+            }
+        });
+    }
     action
 }
 
@@ -2652,10 +2704,11 @@ fn show_assistant_message(
                         ) {
                             action = Some(nav);
                         }
-                        if theme::icon_button(ui, "⧉", "复制回复").clicked() {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        if quiet_action(ui, "复制", true).clicked() {
                             ui.ctx().copy_text(row.text.clone());
                         }
-                        if theme::icon_button(ui, "↻", "重新生成").clicked() && enabled {
+                        if quiet_action(ui, "重新生成", enabled).clicked() {
                             action = Some(ChatUiAction::Regen(row.id));
                         }
                     });
@@ -2663,6 +2716,18 @@ fn show_assistant_message(
             });
     });
     action
+}
+
+fn quiet_action(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Response {
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(
+            egui::RichText::new(label)
+                .size(11.5)
+                .color(theme::text_dim()),
+        )
+        .frame(false),
+    )
 }
 
 fn show_streaming_assistant(ui: &mut egui::Ui, text: &str) {

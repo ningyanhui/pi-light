@@ -91,12 +91,12 @@ pub fn show_markdown(ui: &mut egui::Ui, src: &str, view: MarkdownView) {
         if view.show_role {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(RichText::new("✦").size(13.0).color(theme::accent_bright()));
+                theme::pi_avatar(ui, 20.0);
                 ui.label(
-                    RichText::new("助手")
-                        .size(12.0)
+                    RichText::new("Pi")
+                        .size(13.0)
                         .strong()
-                        .color(theme::accent_soft()),
+                        .color(theme::text_primary()),
                 );
             });
             ui.add_space(8.0);
@@ -946,7 +946,7 @@ mod tests {
         );
         assert!(tail.y > code.y + 8.0, "paragraph below code");
         assert!(
-            texts.iter().any(|(text, _)| text.contains("助手")),
+            texts.iter().any(|(text, _)| text == "Pi"),
             "role chip missing: {texts:?}"
         );
         let code_well = rects.iter().any(|rect| {

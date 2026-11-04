@@ -689,7 +689,9 @@ impl AdminPanelState {
             .movable(false)
             .constrain(false)
             .fixed_pos(drawer_pos)
-            .fixed_size(egui::vec2(drawer_w, drawer_h))
+            // fixed_size is the content size; subtract the frame's inner margins
+            // (18 / 14) so the drawer's outer edge stays on screen.
+            .fixed_size(egui::vec2(drawer_w - 36.0, drawer_h - 28.0))
             .order(egui::Order::Foreground)
             .frame(
                 egui::Frame::window(&ctx.style())

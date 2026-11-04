@@ -227,31 +227,31 @@ pub fn show_topbar_cwd(
     error: Option<&str>,
 ) -> Option<DockAction> {
     let mut action = None;
-    ui.label(
-        egui::RichText::new("π")
-            .strong()
-            .size(16.0)
-            .color(theme::accent()),
-    );
+    theme::pi_avatar(ui, 22.0);
     ui.label(
         egui::RichText::new("pi-light")
             .strong()
             .size(14.0)
             .color(theme::text_primary()),
     );
-    ui.add_space(10.0);
-    let badge = format!("当前工作区  {}", display_workdir(workdir));
+    ui.add_space(14.0);
+    let badge = display_workdir(workdir);
     let badge_resp = ui.add(
         egui::Button::new(
             egui::RichText::new(badge)
-                .size(12.0)
-                .color(theme::text_primary()),
+                .size(12.5)
+                .color(theme::text_muted()),
         )
-        .fill(theme::card_bg())
-        .stroke(Stroke::new(1.0_f32, theme::glass_stroke()))
-        .rounding(Rounding::same(14.0)),
+        .fill(if popover {
+            theme::hover_fill()
+        } else {
+            Color32::TRANSPARENT
+        })
+        .stroke(Stroke::new(1.0_f32, theme::hairline()))
+        .rounding(Rounding::same(8.0))
+        .min_size(egui::vec2(0.0, 28.0)),
     );
-    if badge_resp.on_hover_text("点击徽章即可切换工作区").clicked() {
+    if badge_resp.on_hover_text("切换工作区").clicked() {
         action = Some(if popover {
             DockAction::CloseCwdPopover
         } else {
@@ -264,13 +264,6 @@ pub fn show_topbar_cwd(
             egui::RichText::new(format!("◌  {SWITCHING_COPY}"))
                 .size(12.0)
                 .color(theme::accent_soft()),
-        );
-    } else {
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new("点击徽章即可切换工作区")
-                .size(11.0)
-                .color(theme::text_dim()),
         );
     }
 
@@ -290,7 +283,7 @@ pub fn show_topbar_cwd(
             .show(ui.ctx(), |ui| {
                 ui.set_min_width(420.0);
                 ui.label(
-                    egui::RichText::new("当前活动工作区唯一")
+                    egui::RichText::new("工作区路径")
                         .strong()
                         .size(13.0)
                         .color(theme::text_primary()),
@@ -403,58 +396,63 @@ pub fn show_dock(
     switching: bool,
     textures: Option<&ShellTextures>,
 ) -> Option<DockAction> {
-    ui.horizontal(|ui| {
-        for (tab, label, icon) in [
-            (
-                DockTab::Sessions,
-                "会话",
-                textures.and_then(|t| t.icon_sessions.as_ref()),
-            ),
-            (
-                DockTab::Files,
-                "文件",
-                textures.and_then(|t| t.icon_files.as_ref()),
-            ),
-            (
-                DockTab::Git,
-                "Git",
-                textures.and_then(|t| t.icon_git.as_ref()),
-            ),
-        ] {
-            let selected = workspace.dock == tab;
-            let text = egui::RichText::new(label).size(12.0).color(if selected {
-                theme::text_primary()
-            } else {
-                theme::text_muted()
+    egui::Frame::none()
+        .fill(theme::input_bg())
+        .rounding(Rounding::same(10.0))
+        .inner_margin(egui::Margin::same(3.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                let seg_w = ((ui.available_width() - 6.0) / 3.0).floor();
+                for (tab, label, icon) in [
+                    (
+                        DockTab::Sessions,
+                        "会话",
+                        textures.and_then(|t| t.icon_sessions.as_ref()),
+                    ),
+                    (
+                        DockTab::Files,
+                        "文件",
+                        textures.and_then(|t| t.icon_files.as_ref()),
+                    ),
+                    (
+                        DockTab::Git,
+                        "Git",
+                        textures.and_then(|t| t.icon_git.as_ref()),
+                    ),
+                ] {
+                    let selected = workspace.dock == tab;
+                    let text = egui::RichText::new(label).size(12.5).color(if selected {
+                        theme::text_primary()
+                    } else {
+                        theme::text_muted()
+                    });
+                    let button = if let Some(tex) = icon {
+                        egui::Button::image_and_text((tex.id(), egui::vec2(14.0, 14.0)), text)
+                    } else {
+                        egui::Button::new(text)
+                    };
+                    let resp = ui.add(
+                        button
+                            .fill(if selected {
+                                theme::card_bg()
+                            } else {
+                                Color32::TRANSPARENT
+                            })
+                            .stroke(if selected {
+                                Stroke::new(1.0_f32, theme::hairline())
+                            } else {
+                                Stroke::NONE
+                            })
+                            .rounding(Rounding::same(8.0))
+                            .min_size(egui::vec2(seg_w, 28.0)),
+                    );
+                    if resp.clicked() {
+                        workspace.dock = tab;
+                    }
+                }
             });
-            let button = if let Some(tex) = icon {
-                egui::Button::image_and_text((tex.id(), egui::vec2(16.0, 16.0)), text)
-            } else {
-                egui::Button::new(text)
-            };
-            let resp = ui.add(
-                button
-                    .fill(if selected {
-                        Color32::from_rgb(35, 51, 73)
-                    } else {
-                        theme::card_bg()
-                    })
-                    .stroke(if selected {
-                        Stroke::new(1.0_f32, theme::accent_stroke_soft())
-                    } else {
-                        Stroke::NONE
-                    })
-                    .rounding(Rounding::same(10.0))
-                    .min_size(egui::vec2(72.0, 36.0)),
-            );
-            if selected {
-                theme::paint_purple_glow(ui, resp.rect, 4.0);
-            }
-            if resp.clicked() {
-                workspace.dock = tab;
-            }
-        }
-    });
+        });
     ui.add_space(10.0);
 
     let mut action = match workspace.dock {
@@ -466,8 +464,9 @@ pub fn show_dock(
     };
 
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        ui.add_space(4.0);
+        ui.add_space(2.0);
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
             if dock_link(ui, "⚙ 设置").clicked() {
                 action = Some(DockAction::OpenSettings);
             }
@@ -478,11 +477,8 @@ pub fn show_dock(
                 action = Some(DockAction::OpenRemote);
             }
         });
-        ui.label(
-            egui::RichText::new("当前活动工作区唯一")
-                .size(10.0)
-                .color(theme::text_dim()),
-        );
+        ui.add_space(4.0);
+        theme::hairline_rule(ui);
     });
     action
 }
@@ -494,8 +490,8 @@ fn dock_link(ui: &mut egui::Ui, label: &str) -> egui::Response {
                 .size(12.0)
                 .color(theme::text_muted()),
         )
-        .fill(Color32::TRANSPARENT)
-        .stroke(Stroke::NONE),
+        .frame(false)
+        .min_size(egui::vec2(0.0, 28.0)),
     )
 }
 
@@ -515,18 +511,17 @@ fn show_sessions_panel(
                 .size(13.0),
         )
         .fill(theme::accent())
-        .rounding(Rounding::same(8.0))
-        .min_size(egui::vec2(ui.available_width(), 36.0)),
+        .rounding(Rounding::same(9.0))
+        .min_size(egui::vec2(ui.available_width(), 34.0)),
     );
-    theme::paint_purple_glow(ui, new_resp.rect, 8.0);
     if new_resp.clicked() {
         action = Some(DockAction::NewSession);
     }
     ui.add_space(8.0);
     ui.label(
-        egui::RichText::new(format!("按更新时间 · 共 {} 条", hub.list().len()))
+        egui::RichText::new(format!("最近会话 · {}", hub.list().len()))
             .size(11.0)
-            .color(theme::text_muted()),
+            .color(theme::text_dim()),
     );
     ui.add_space(6.0);
     if let Some(rename_action) = show_rename_dialog(ui, workspace, hub) {
@@ -549,7 +544,7 @@ fn show_sessions_panel(
                 let time = session_time_label(session.updated_at);
                 let (resp, menu) =
                     session_row(ui, i, &session.title, &display_workdir(wd), &time, selected);
-                ui.add_space(4.0);
+                ui.add_space(2.0);
                 if let Some(next) = menu {
                     action = Some(next);
                 } else if resp.clicked() && !locked {
@@ -605,31 +600,34 @@ fn session_row(
     selected: bool,
 ) -> (egui::Response, Option<DockAction>) {
     let mut action = None;
+    let hover_id = egui::Id::new(("dock_session_row_hover", index));
+    let was_hovered = ui.data(|d| d.get_temp::<bool>(hover_id).unwrap_or(false));
     let fill = if selected {
-        Color32::from_rgb(35, 51, 73)
+        theme::selected_fill()
+    } else if was_hovered {
+        theme::hover_fill()
     } else {
-        Color32::from_rgb(22, 29, 39)
+        Color32::TRANSPARENT
     };
     let inner = egui::Frame::none()
         .fill(fill)
         .stroke(theme::session_row_stroke(selected))
-        .rounding(Rounding::same(12.0))
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+        .rounding(Rounding::same(9.0))
+        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(title)
-                            .strong()
-                            .size(13.0)
-                            .color(theme::text_primary()),
-                    );
-                    ui.add_space(2.0);
+                    ui.label(egui::RichText::new(title).size(13.0).color(if selected {
+                        theme::text_primary()
+                    } else {
+                        theme::text_muted()
+                    }));
+                    ui.add_space(1.0);
                     ui.label(
                         egui::RichText::new(format!("{workdir}  ·  {time}"))
                             .size(11.0)
-                            .color(theme::text_muted()),
+                            .color(theme::text_dim()),
                     );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -648,6 +646,11 @@ fn session_row(
             });
         });
     let resp = inner.response.interact(egui::Sense::click());
+    let hovered = resp.hovered();
+    if hovered != was_hovered {
+        ui.data_mut(|d| d.insert_temp(hover_id, hovered));
+        ui.ctx().request_repaint();
+    }
     resp.context_menu(|ui| {
         if let Some(next) = session_context_menu(ui, index) {
             action = Some(next);
