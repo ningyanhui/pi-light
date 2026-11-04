@@ -123,7 +123,7 @@ private fun EmptyDeviceCard(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(PurpleDeep)
                 .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -159,7 +159,7 @@ private fun DeviceCard(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(SurfaceElevated)
                 .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -228,7 +228,7 @@ fun ShieldNote() {
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
                 .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,

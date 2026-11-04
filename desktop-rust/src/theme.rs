@@ -1,67 +1,67 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// 桌面壳共用外观。颜色与控件形状按验收原型自写，不引用外部素材。
+// pi-light UI system: matte graphite surfaces, restrained cobalt accent.
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
 
 pub fn amber() -> Color32 {
-    Color32::from_rgb(232, 196, 112)
+    Color32::from_rgb(226, 174, 92)
 }
 
 pub fn accent() -> Color32 {
-    Color32::from_rgb(124, 77, 255)
+    Color32::from_rgb(91, 137, 255)
 }
 
 pub fn accent_bright() -> Color32 {
-    Color32::from_rgb(155, 123, 255)
+    Color32::from_rgb(126, 164, 255)
 }
 
 pub fn accent_soft() -> Color32 {
-    Color32::from_rgb(168, 148, 255)
+    Color32::from_rgb(184, 204, 255)
 }
 
 pub fn ink() -> Color32 {
-    Color32::from_rgb(16, 14, 22)
+    Color32::from_rgb(11, 15, 21)
 }
 
 pub fn chrome_bg() -> Color32 {
-    Color32::from_rgb(10, 11, 16)
+    Color32::from_rgb(15, 19, 26)
 }
 
 pub fn sidebar_bg() -> Color32 {
-    Color32::from_rgb(8, 8, 14)
+    Color32::from_rgb(18, 23, 31)
 }
 
 pub fn card_bg() -> Color32 {
-    Color32::from_rgb(16, 17, 24)
+    Color32::from_rgb(27, 34, 45)
 }
 
 pub fn hairline() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 20)
+    Color32::from_rgb(43, 53, 68)
 }
 
 pub fn text_primary() -> Color32 {
-    Color32::from_rgb(232, 234, 240)
+    Color32::from_rgb(231, 236, 244)
 }
 
 pub fn text_muted() -> Color32 {
-    Color32::from_rgb(140, 144, 158)
+    Color32::from_rgb(157, 168, 183)
 }
 
 pub fn text_dim() -> Color32 {
-    Color32::from_rgb(110, 114, 128)
+    Color32::from_rgb(112, 125, 143)
 }
 
 pub fn ok() -> Color32 {
-    Color32::from_rgb(80, 200, 120)
+    Color32::from_rgb(62, 185, 139)
 }
 
 pub fn warn() -> Color32 {
-    Color32::from_rgb(220, 160, 70)
+    Color32::from_rgb(220, 169, 83)
 }
 
 pub fn danger() -> Color32 {
-    Color32::from_rgb(210, 90, 80)
+    Color32::from_rgb(225, 105, 105)
 }
 
 pub fn apply_theme(ctx: &egui::Context) {
@@ -69,19 +69,19 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.window_fill = chrome_bg();
     visuals.panel_fill = chrome_bg();
     visuals.extreme_bg_color = card_bg();
-    visuals.faint_bg_color = Color32::from_rgb(20, 22, 30);
-    visuals.code_bg_color = Color32::from_rgb(18, 20, 28);
+    visuals.faint_bg_color = Color32::from_rgb(22, 29, 39);
+    visuals.code_bg_color = Color32::from_rgb(17, 23, 31);
     visuals.hyperlink_color = accent_soft();
-    visuals.selection.bg_fill = Color32::from_rgb(56, 48, 88);
+    visuals.selection.bg_fill = Color32::from_rgb(37, 56, 83);
     visuals.selection.stroke.color = accent_soft();
-    visuals.window_rounding = Rounding::same(12.0);
+    visuals.window_rounding = Rounding::same(10.0);
     visuals.menu_rounding = Rounding::same(8.0);
     visuals.window_stroke = Stroke::new(1.0_f32, glass_stroke());
     visuals.widgets.noninteractive.bg_fill = card_bg();
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(18, 19, 26);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(26, 28, 38);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(32, 34, 46);
-    visuals.widgets.open.bg_fill = Color32::from_rgb(24, 26, 36);
+    visuals.widgets.inactive.bg_fill = Color32::from_rgb(29, 37, 49);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(39, 50, 66);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(47, 61, 80);
+    visuals.widgets.open.bg_fill = Color32::from_rgb(34, 44, 59);
     for widgets in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,
@@ -89,86 +89,78 @@ pub fn apply_theme(ctx: &egui::Context) {
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widgets.rounding = Rounding::same(8.0);
-        widgets.fg_stroke.color = Color32::from_rgb(214, 216, 224);
+        widgets.rounding = Rounding::same(7.0);
+        widgets.fg_stroke.color = Color32::from_rgb(231, 236, 244);
         widgets.bg_stroke = Stroke::new(1.0_f32, glass_stroke());
     }
     ctx.set_visuals(visuals);
 }
 
 pub fn glass_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(16, 14, 32, 172)
+    card_bg()
 }
 
 pub fn glass_strong() -> Color32 {
-    Color32::from_rgba_unmultiplied(18, 16, 36, 214)
+    sidebar_bg()
 }
 
-/// 默认面板边：近白低 alpha，对齐原型 `--border`（约 8–14%）。
-/// 禁止再把 accent-bright 紫边当作全站默认描边。
+/// Matte neutral border for panels and controls.
 pub fn glass_stroke() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 26)
+    hairline()
 }
 
 pub fn glass_stroke_strong() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 36)
+    Color32::from_rgb(58, 71, 89)
 }
 
-/// 强调边：仅选中会话 / composer / 思考块。α≈0.35，禁止不透明 accent()。
 pub fn accent_stroke_soft() -> Color32 {
-    Color32::from_rgba_unmultiplied(124, 77, 255, 90)
+    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
 }
 
 pub fn accent_stroke_think() -> Color32 {
-    Color32::from_rgba_unmultiplied(124, 77, 255, 56)
+    Color32::from_rgba_unmultiplied(91, 137, 255, 58)
 }
 
 pub fn accent_stroke_composer() -> Color32 {
-    Color32::from_rgba_unmultiplied(124, 77, 255, 72)
+    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
 }
 
 pub fn glass_shadow() -> egui::Shadow {
     egui::Shadow {
-        offset: egui::vec2(0.0, 0.0),
-        blur: 18.0,
+        offset: egui::vec2(0.0, 3.0),
+        blur: 14.0,
         spread: 0.0,
-        color: Color32::from_rgba_unmultiplied(124, 77, 255, 32),
+        color: Color32::from_rgba_unmultiplied(0, 0, 0, 28),
     }
 }
 
-/// 默认玻璃板：一层近白弱边 + 半透明 fill。无紫描边、无环状 glow。
 pub fn glass_frame() -> egui::Frame {
     egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-        .rounding(Rounding::same(12.0))
+        .inner_margin(egui::Margin::symmetric(14.0, 11.0))
+        .rounding(Rounding::same(10.0))
         .fill(glass_fill())
         .stroke(Stroke::new(1.0_f32, glass_stroke()))
 }
 
-/// 顶栏 / 底栏 / 会话条：只靠 fill 分层，不再套描边。
 pub fn glass_bar() -> egui::Frame {
-    glass_frame().stroke(Stroke::NONE)
+    glass_frame().fill(glass_strong()).stroke(Stroke::NONE)
 }
 
-/// composer / 思考块：淡紫强调边 + 轻 glow。
 pub fn emphasis_frame() -> egui::Frame {
-    glass_frame()
-        .stroke(Stroke::new(1.0_f32, accent_stroke_composer()))
-        .shadow(glass_shadow())
+    glass_frame().stroke(Stroke::new(1.0_f32, accent_stroke_composer()))
 }
 
 pub fn think_frame() -> egui::Frame {
     glass_frame()
-        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .inner_margin(egui::Margin::symmetric(12.0, 9.0))
         .stroke(Stroke::new(1.0_f32, accent_stroke_think()))
 }
 
-/// 设置卡 / TOOL 行：半透明 fill，无描边，避免卡中卡货架。
 pub fn card_frame() -> egui::Frame {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-        .rounding(Rounding::same(12.0))
-        .fill(Color32::from_rgba_unmultiplied(18, 16, 32, 168))
+        .rounding(Rounding::same(9.0))
+        .fill(card_bg())
         .stroke(Stroke::NONE)
 }
 
@@ -182,10 +174,10 @@ pub fn session_row_stroke(selected: bool) -> Stroke {
 
 pub fn soft_card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(22.0, 18.0))
+        .inner_margin(egui::Margin::symmetric(18.0, 16.0))
         .rounding(Rounding::same(12.0))
-        .fill(Color32::from_rgba_unmultiplied(22, 24, 34, 220))
-        .stroke(Stroke::NONE)
+        .fill(card_bg())
+        .stroke(Stroke::new(1.0_f32, glass_stroke()))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             add(ui)
@@ -197,18 +189,18 @@ pub fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     ui.add(
         egui::Button::new(egui::RichText::new(label).color(Color32::WHITE).strong())
             .fill(accent())
-            .rounding(Rounding::same(10.0))
-            .min_size(egui::vec2(132.0, 36.0)),
+            .rounding(Rounding::same(8.0))
+            .min_size(egui::vec2(120.0, 36.0)),
     )
 }
 
 pub fn ghost_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     ui.add(
         egui::Button::new(egui::RichText::new(label).color(text_primary()))
-            .fill(Color32::from_rgb(28, 30, 40))
+            .fill(Color32::from_rgb(32, 42, 56))
             .stroke(Stroke::new(1.0_f32, hairline()))
-            .rounding(Rounding::same(10.0))
-            .min_size(egui::vec2(88.0, 32.0)),
+            .rounding(Rounding::same(8.0))
+            .min_size(egui::vec2(84.0, 32.0)),
     )
 }
 
@@ -217,13 +209,13 @@ pub fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
         egui::Button::new(egui::RichText::new(icon).size(14.0).color(text_muted()))
             .fill(Color32::TRANSPARENT)
             .stroke(Stroke::NONE)
-            .min_size(egui::vec2(28.0, 28.0)),
+            .min_size(egui::vec2(30.0, 30.0)),
     )
     .on_hover_text(tip)
 }
 
 pub fn send_button(ui: &mut egui::Ui, enabled: bool) -> egui::Response {
-    let resp = ui.add_enabled(
+    ui.add_enabled(
         enabled,
         egui::Button::new(
             egui::RichText::new("➤")
@@ -237,30 +229,14 @@ pub fn send_button(ui: &mut egui::Ui, enabled: bool) -> egui::Response {
         .fill(if enabled {
             accent()
         } else {
-            Color32::from_rgb(40, 42, 54)
+            Color32::from_rgb(39, 47, 60)
         })
-        .rounding(Rounding::same(16.0))
-        .min_size(egui::vec2(36.0, 36.0)),
-    );
-    if enabled {
-        paint_purple_glow(ui, resp.rect, 10.0);
-    }
-    resp
+        .rounding(Rounding::same(9.0))
+        .min_size(egui::vec2(38.0, 36.0)),
+    )
 }
 
-pub fn paint_purple_glow(ui: &egui::Ui, rect: egui::Rect, expand: f32) {
-    let painter = ui.painter();
-    painter.rect_filled(
-        rect.expand(expand),
-        Rounding::same(18.0),
-        Color32::from_rgba_unmultiplied(124, 77, 255, 28),
-    );
-    painter.rect_filled(
-        rect.expand(expand * 0.4),
-        Rounding::same(16.0),
-        Color32::from_rgba_unmultiplied(155, 123, 255, 40),
-    );
-}
+pub fn paint_purple_glow(_ui: &egui::Ui, _rect: egui::Rect, _expand: f32) {}
 
 pub fn underline_tabs<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
@@ -323,14 +299,14 @@ pub fn segmented_tabs<T: Copy + PartialEq>(
                         .size(13.0),
                 )
                 .fill(if selected {
-                    Color32::from_rgb(28, 30, 40)
+                    Color32::from_rgb(32, 42, 56)
                 } else {
-                    Color32::from_rgb(18, 19, 26)
+                    Color32::from_rgb(29, 37, 49)
                 })
                 .stroke(Stroke::new(
                     1.0_f32,
                     if selected {
-                        Color32::from_rgb(48, 50, 64)
+                        Color32::from_rgb(58, 71, 89)
                     } else {
                         hairline()
                     },
@@ -352,14 +328,14 @@ pub fn filter_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
             text_muted()
         }))
         .fill(if selected {
-            Color32::from_rgb(28, 30, 42)
+            Color32::from_rgb(34, 46, 63)
         } else {
             Color32::TRANSPARENT
         })
         .stroke(Stroke::new(
             1.0_f32,
             if selected {
-                Color32::from_rgb(56, 58, 74)
+                Color32::from_rgb(58, 71, 89)
             } else {
                 hairline()
             },
@@ -408,7 +384,7 @@ pub fn package_glyph_color(name: &str) -> Color32 {
                 .bytes()
                 .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
             let palette = [
-                Color32::from_rgb(124, 92, 255),
+                Color32::from_rgb(91, 137, 255),
                 Color32::from_rgb(80, 160, 230),
                 Color32::from_rgb(90, 180, 140),
                 Color32::from_rgb(210, 150, 80),
@@ -433,7 +409,7 @@ pub fn toggle_switch(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let track = if on {
         accent()
     } else {
-        Color32::from_rgb(48, 50, 62)
+        Color32::from_rgb(43, 53, 68)
     };
     ui.painter().rect_filled(rect, Rounding::same(10.0), track);
     let knob_x = if on {
@@ -492,7 +468,7 @@ pub fn bar_row(ui: &mut egui::Ui, label: &str, ms: u64, max_ms: u64, color: Colo
         let avail = (ui.available_width() - 72.0).max(40.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(avail, 10.0), egui::Sense::hover());
         ui.painter()
-            .rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(28, 30, 40));
+            .rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(32, 42, 56));
         let frac = if max_ms == 0 {
             0.0
         } else {
@@ -522,7 +498,7 @@ pub fn centered_column(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui
     });
 }
 
-/// 折线几何仍保留给测试；琥珀/金 bolt 已退役，不得再作为主装饰。
+/// 折线几何仅为历史测试保留；主界面不再绘制闪电或氛围底图。
 pub fn bolt_polyline(origin: egui::Pos2, scale: f32) -> Vec<egui::Pos2> {
     const LINE: [[f32; 2]; 4] = [[0.72, 0.00], [0.26, 0.46], [0.54, 0.50], [0.12, 1.00]];
     LINE.into_iter()
@@ -530,23 +506,11 @@ pub fn bolt_polyline(origin: egui::Pos2, scale: f32) -> Vec<egui::Pos2> {
         .collect()
 }
 
-/// 旧琥珀折线闪电：退役为空操作。主路径请用 [`paint_atmosphere`]。
+/// 旧琥珀折线闪电：退役为空操作。
 pub fn paint_lightning_backdrop(_ui: &egui::Ui) {}
 
-pub fn paint_atmosphere(ui: &egui::Ui, texture: &egui::TextureHandle) {
-    let rect = ui.max_rect();
-    if rect.width() < 8.0 || rect.height() < 8.0 {
-        return;
-    }
-    let uv = cover_uv(texture.size_vec2(), rect.size());
-    let painter = ui.painter();
-    painter.image(texture.id(), rect, uv, Color32::WHITE);
-    painter.rect_filled(
-        rect,
-        Rounding::ZERO,
-        Color32::from_rgba_unmultiplied(7, 8, 14, 78),
-    );
-}
+/// 旧氛围底图：退役为空操作，主界面使用纯色 graphite canvas。
+pub fn paint_atmosphere(_ui: &egui::Ui, _texture: &egui::TextureHandle) {}
 
 pub fn cover_uv(tex: egui::Vec2, dest: egui::Vec2) -> egui::Rect {
     if tex.x <= 0.0 || tex.y <= 0.0 || dest.x <= 0.0 || dest.y <= 0.0 {
@@ -583,9 +547,9 @@ mod tests {
     }
 
     #[test]
-    fn accent_stays_indigo() {
-        assert_eq!(accent(), Color32::from_rgb(124, 77, 255));
-        assert_eq!(accent_bright(), Color32::from_rgb(155, 123, 255));
+    fn accent_uses_cobalt_palette() {
+        assert_eq!(accent(), Color32::from_rgb(91, 137, 255));
+        assert_eq!(accent_bright(), Color32::from_rgb(126, 164, 255));
     }
 
     #[test]
@@ -596,17 +560,11 @@ mod tests {
     }
 
     #[test]
-    fn default_glass_stroke_is_near_white_not_purple() {
-        let [r, g, b, a] = glass_stroke().to_srgba_unmultiplied();
-        assert_eq!((r, g, b), (255, 255, 255));
-        assert!((20..=36).contains(&a), "alpha={a}");
-        let [r, g, b, a] = glass_stroke_strong().to_srgba_unmultiplied();
-        assert_eq!((r, g, b), (255, 255, 255));
-        assert!((20..=36).contains(&a), "alpha={a}");
-        // 旧默认紫边不得回归
-        assert_ne!(
-            glass_stroke(),
-            Color32::from_rgba_unmultiplied(155, 123, 255, 72)
+    fn default_glass_stroke_is_neutral_and_composer_uses_cobalt() {
+        assert_eq!(glass_stroke(), Color32::from_rgb(43, 53, 68));
+        assert_eq!(
+            accent_stroke_composer(),
+            Color32::from_rgba_unmultiplied(91, 137, 255, 92)
         );
     }
 
@@ -620,9 +578,9 @@ mod tests {
         let stroke = session_row_stroke(true);
         assert_ne!(stroke.color, accent());
         let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
-        assert!((56..=115).contains(&a), "alpha={a}");
-        assert!((110..=140).contains(&r), "r={r}");
-        assert!((60..=95).contains(&g), "g={g}");
-        assert!(b >= 230, "b={b}");
+        assert!((80..=110).contains(&a), "alpha={a}");
+        assert!((80..=105).contains(&r), "r={r}");
+        assert!((120..=150).contains(&g), "g={g}");
+        assert!(b >= 240, "b={b}");
     }
 }

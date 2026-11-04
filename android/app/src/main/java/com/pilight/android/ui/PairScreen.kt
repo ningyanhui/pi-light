@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
@@ -87,11 +86,6 @@ fun PairScreen(
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
                 }
             },
-            actions = {
-                IconButton(onClick = { }) {
-                    Icon(Icons.Outlined.MoreVert, contentDescription = "更多")
-                }
-            },
             colors =
                 TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
@@ -123,7 +117,7 @@ fun PairScreen(
                 Column {
                     Text("扫码配对", fontWeight = FontWeight.SemiBold, color = PurplePrimary)
                     Text(
-                        "使用桌面版 pi-light 扫描二维码，或点下方框扫描桌面码",
+                        "在桌面端「设置 → 远程访问」打开配对码，然后在此处扫描桌面二维码，或手动输入配对码与中继地址。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary,
                     )
@@ -134,7 +128,7 @@ fun PairScreen(
                 modifier =
                     Modifier
                         .size(220.dp)
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(RoundedCornerShape(14.dp))
                         .background(androidx.compose.ui.graphics.Color.White)
                         .clickable(onClick = onScan),
                 contentAlignment = Alignment.Center,
@@ -159,7 +153,7 @@ fun PairScreen(
                 displayCode,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                fontSize = 42.sp,
+                fontSize = 36.sp,
                 letterSpacing = 2.sp,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -172,7 +166,7 @@ fun PairScreen(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(SurfaceCard)
                         .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,

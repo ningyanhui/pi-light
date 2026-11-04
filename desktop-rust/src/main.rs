@@ -1098,10 +1098,8 @@ impl PiLightApp {
         }
     }
 
-    fn paint_main_backdrop(&self, ui: &egui::Ui) {
-        if let Some(tex) = self.textures.atmosphere.as_ref() {
-            theme::paint_atmosphere(ui, tex);
-        }
+    fn paint_main_backdrop(&self, _ui: &egui::Ui) {
+        // Keep the conversation surface calm and readable; no decorative image overlay.
     }
 }
 
@@ -1496,9 +1494,9 @@ impl PiLightApp {
                             let btn = egui::Button::new(
                                 egui::RichText::new(label)
                                     .size(12.0)
-                                    .color(egui::Color32::from_rgb(180, 220, 255)),
+                                    .color(egui::Color32::from_rgb(184, 204, 255)),
                             )
-                            .fill(egui::Color32::from_rgba_unmultiplied(48, 32, 88, 220))
+                            .fill(egui::Color32::from_rgb(35, 51, 73))
                             .rounding(egui::Rounding::same(10.0));
                             if ui.add(btn).on_hover_text("点击移除此引用").clicked() {
                                 chip_to_remove = Some(i);
@@ -1550,8 +1548,11 @@ impl PiLightApp {
                     });
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        let _ = theme::icon_button(ui, "📎", "附件：用 # 引用会话消息");
-                        let _ = theme::icon_button(ui, "🌐", "网络与工具由 Skills / MCP 提供");
+                        ui.label(
+                            egui::RichText::new("# 引用会话  ·  工具由 Skills / MCP 提供")
+                                .size(11.0)
+                                .color(theme::text_dim()),
+                        );
                         if theme::icon_button(ui, "⚙", "打开设置").clicked() {
                             open_settings = true;
                         }
@@ -1617,8 +1618,8 @@ impl PiLightApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::TRANSPARENT)
-                    .inner_margin(16.0),
+                    .fill(theme::chrome_bg())
+                    .inner_margin(egui::Margin::symmetric(24.0, 18.0)),
             )
             .show(ctx, |ui| {
                 self.paint_main_backdrop(ui);
@@ -1822,12 +1823,19 @@ impl PiLightApp {
                     ui.add_space(4.0);
                 }
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("#sess-{id}  {title}"))
-                            .strong()
-                            .size(14.0)
-                            .color(theme::text_primary()),
-                    );
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(truncate_display(&title, 56))
+                                .strong()
+                                .size(14.0)
+                                .color(theme::text_primary()),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("会话 #{id}"))
+                                .size(10.0)
+                                .color(theme::text_dim()),
+                        );
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_enabled(
@@ -1838,7 +1846,7 @@ impl PiLightApp {
                                         .size(12.0),
                                 )
                                 .fill(theme::accent())
-                                .rounding(egui::Rounding::same(12.0)),
+                                .rounding(egui::Rounding::same(8.0)),
                             )
                             .clicked()
                         {
@@ -1878,7 +1886,7 @@ impl PiLightApp {
                     .size(11.0)
                     .color(theme::text_primary()),
             )
-            .fill(egui::Color32::from_rgba_unmultiplied(28, 24, 48, 200))
+            .fill(egui::Color32::from_rgb(29, 38, 52))
             .stroke(egui::Stroke::new(1.0_f32, theme::accent_stroke_think()))
             .rounding(egui::Rounding::same(12.0)),
         );
@@ -2336,7 +2344,7 @@ impl PiLightApp {
                         theme::soft_card(ui, |ui| {
                             ui.label(
                                 egui::RichText::new("Pi 没有启动")
-                                    .color(egui::Color32::from_rgb(210, 120, 80))
+                                    .color(theme::warn())
                                     .strong()
                                     .size(20.0),
                             );
@@ -2385,7 +2393,7 @@ fn show_model_chip(
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(8.0, 2.0))
         .rounding(egui::Rounding::same(8.0))
-        .fill(egui::Color32::from_rgb(18, 19, 28))
+        .fill(egui::Color32::from_rgb(28, 36, 48))
         .stroke(egui::Stroke::new(1.0_f32, theme::hairline()))
         .show(ui, |ui| {
             egui::ComboBox::from_id_salt(id_salt)
@@ -2549,10 +2557,10 @@ fn show_user_message(
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .rounding(egui::Rounding::same(12.0))
-            .fill(egui::Color32::from_rgba_unmultiplied(40, 28, 72, 200))
+            .fill(egui::Color32::from_rgb(36, 52, 75))
             .stroke(egui::Stroke::new(1.0_f32, theme::glass_stroke()))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.72);
+                ui.set_max_width(ui.available_width().min(760.0));
                 if editing {
                     ui.add(
                         egui::TextEdit::multiline(draft)
@@ -2614,12 +2622,16 @@ fn show_assistant_message(
     enabled: bool,
 ) -> Option<ChatUiAction> {
     let mut action = None;
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+    // 纵向列，左对齐。left_to_right 会让 Frame 继承横向流，多块 Markdown 被排成一行。
+    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+        let column = ui.available_width().min(920.0);
+        if column.is_finite() {
+            ui.set_max_width(column);
+        }
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(4.0, 6.0))
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.92);
                 markdown_ui::show_markdown(
                     ui,
                     &row.text,
@@ -2643,8 +2655,6 @@ fn show_assistant_message(
                         if theme::icon_button(ui, "⧉", "复制回复").clicked() {
                             ui.ctx().copy_text(row.text.clone());
                         }
-                        let _ = theme::icon_button(ui, "▲", "有帮助");
-                        let _ = theme::icon_button(ui, "▼", "没帮助");
                         if theme::icon_button(ui, "↻", "重新生成").clicked() && enabled {
                             action = Some(ChatUiAction::Regen(row.id));
                         }
@@ -2656,12 +2666,15 @@ fn show_assistant_message(
 }
 
 fn show_streaming_assistant(ui: &mut egui::Ui, text: &str) {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+        let column = ui.available_width() * 0.92;
+        if column.is_finite() {
+            ui.set_max_width(column);
+        }
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(4.0, 6.0))
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.92);
                 markdown_ui::show_markdown(
                     ui,
                     text,
@@ -2679,27 +2692,21 @@ fn show_streaming_assistant(ui: &mut egui::Ui, text: &str) {
 fn pi_dot_color(probe: &PiProbe, rpc_alive: bool) -> (egui::Color32, &'static str) {
     if !probe.is_ready() {
         return (
-            egui::Color32::from_rgb(200, 90, 70),
+            theme::danger(),
             "Pi 未就绪。恢复说明在主界面折叠区和设置「通用」页。",
         );
     }
     if rpc_alive {
         match probe {
-            PiProbe::BundledReady(_) => (
-                egui::Color32::from_rgb(80, 200, 100),
-                "Pi 就绪 — 内嵌 sidecar（Bundled Ready）",
-            ),
+            PiProbe::BundledReady(_) => (theme::ok(), "Pi 就绪 — 内嵌 sidecar（Bundled Ready）"),
             PiProbe::DetectedLocal { .. } => (
-                egui::Color32::from_rgb(80, 160, 230),
+                theme::accent_bright(),
                 "Pi 就绪 — 本机安装（Detected Local）",
             ),
             PiProbe::NotReady => unreachable!(),
         }
     } else {
-        (
-            egui::Color32::from_rgb(210, 150, 50),
-            "Pi 路径已找到但 RPC 尚未启动",
-        )
+        (theme::warn(), "Pi 路径已找到但 RPC 尚未启动")
     }
 }
 

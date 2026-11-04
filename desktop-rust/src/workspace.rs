@@ -247,7 +247,7 @@ pub fn show_topbar_cwd(
                 .size(12.0)
                 .color(theme::text_primary()),
         )
-        .fill(Color32::from_rgba_unmultiplied(28, 24, 48, 220))
+        .fill(theme::card_bg())
         .stroke(Stroke::new(1.0_f32, theme::glass_stroke()))
         .rounding(Rounding::same(14.0)),
     );
@@ -282,7 +282,7 @@ pub fn show_topbar_cwd(
             .anchor(egui::Align2::CENTER_TOP, [0.0, 64.0])
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(16, 14, 28, 245))
+                    .fill(theme::sidebar_bg())
                     .stroke(Stroke::new(1.0_f32, theme::glass_stroke_strong()))
                     .rounding(Rounding::same(12.0))
                     .inner_margin(egui::Margin::same(14.0)),
@@ -330,7 +330,7 @@ pub fn show_topbar_cwd(
                                         .size(12.0)
                                         .color(theme::text_primary()),
                                 )
-                                .fill(Color32::from_rgb(22, 20, 36))
+                                .fill(theme::card_bg())
                                 .min_size(egui::vec2(ui.available_width(), 26.0)),
                             )
                             .clicked()
@@ -423,7 +423,7 @@ pub fn show_dock(
         ] {
             let selected = workspace.dock == tab;
             let text = egui::RichText::new(label).size(12.0).color(if selected {
-                Color32::WHITE
+                theme::text_primary()
             } else {
                 theme::text_muted()
             });
@@ -435,11 +435,15 @@ pub fn show_dock(
             let resp = ui.add(
                 button
                     .fill(if selected {
-                        theme::accent()
+                        Color32::from_rgb(35, 51, 73)
                     } else {
-                        Color32::from_rgba_unmultiplied(16, 14, 28, 160)
+                        theme::card_bg()
                     })
-                    .stroke(Stroke::NONE)
+                    .stroke(if selected {
+                        Stroke::new(1.0_f32, theme::accent_stroke_soft())
+                    } else {
+                        Stroke::NONE
+                    })
                     .rounding(Rounding::same(10.0))
                     .min_size(egui::vec2(72.0, 36.0)),
             );
@@ -511,8 +515,8 @@ fn show_sessions_panel(
                 .size(13.0),
         )
         .fill(theme::accent())
-        .rounding(Rounding::same(10.0))
-        .min_size(egui::vec2(ui.available_width(), 34.0)),
+        .rounding(Rounding::same(8.0))
+        .min_size(egui::vec2(ui.available_width(), 36.0)),
     );
     theme::paint_purple_glow(ui, new_resp.rect, 8.0);
     if new_resp.clicked() {
@@ -602,9 +606,9 @@ fn session_row(
 ) -> (egui::Response, Option<DockAction>) {
     let mut action = None;
     let fill = if selected {
-        Color32::from_rgba_unmultiplied(48, 32, 88, 200)
+        Color32::from_rgb(35, 51, 73)
     } else {
-        Color32::from_rgba_unmultiplied(16, 14, 28, 70)
+        Color32::from_rgb(22, 29, 39)
     };
     let inner = egui::Frame::none()
         .fill(fill)

@@ -26,7 +26,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.pilight.android.CompanionViewModel
+import com.pilight.android.ui.theme.Bg
 import com.pilight.android.ui.theme.PurpleBright
+import com.pilight.android.ui.theme.Surface
 
 private data class Tab(
     val route: String,
@@ -49,10 +51,10 @@ fun PiLightApp(vm: CompanionViewModel = viewModel()) {
     val showBar = current?.route in setOf("home", "sessions", "settings") && !desktopFullscreen
 
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = Bg,
         bottomBar = {
             if (showBar) {
-                NavigationBar(containerColor = Color(0xFF12081E)) {
+                NavigationBar(containerColor = Surface) {
                     tabs.forEach { tab ->
                         NavigationBarItem(
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
