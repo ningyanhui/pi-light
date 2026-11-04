@@ -9,7 +9,7 @@
 [![Android APK](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml/badge.svg)](https://github.com/ningyanhui/pi-light/actions/workflows/android-apk.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-当前版本：**v0.3.1**（Windows 便携包为主路径）。
+当前版本：**v0.3.2**（Windows 便携包为主路径）。
 
 ---
 

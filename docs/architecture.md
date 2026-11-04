@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.3.1 — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊；同会话消息树；远程桌面 JPEG 轮询 + 浏览/触控/全屏；三栏工作区（会话 / 文件 / Git）与无感换 cwd。不含 WebRTC、不含 M3/M4 真能力闸门
+> **当前版本**：v0.3.2 — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊；同会话消息树；远程桌面 JPEG 轮询 + 浏览/触控/全屏；三栏工作区（会话 / 文件 / Git）与无感换 cwd；产品 UI 换轨 graphite + cobalt。不含 WebRTC、不含 M3/M4 真能力闸门
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -250,7 +250,8 @@ pi-light-windows-x64/
 | **v0.3.0-alpha** | M0+M1+M2+M5+M6-lite 预发布 | ✅ 已发布 |
 | **v0.3.0** | 正式版：整页对齐、消息树、远程桌面 JPEG 像素流、companion 流式/工具/停止/ASR | ✅ 已发布 |
 | **W0 / W1** | 三栏工作区：会话 / 文件树 / Git；无感知 cwd 切换 | ✅ 已合入 |
-| **v0.3.1** | 跳过强制首次引导；三栏工作区 + 无感换 cwd | 本发版 |
+| **v0.3.1** | 跳过强制首次引导；三栏工作区 + 无感换 cwd | ✅ 已发布 |
+| **v0.3.2** | 产品 UI 换轨 graphite + cobalt；companion 主题对齐；助手 Markdown 多块修复 | 本发版 |
 
 ---
 
@@ -342,4 +343,4 @@ do_send():
 
 ---
 
-*最后更新：v0.3.1（发版准备：跳过强制首次引导、三栏工作区、无感换 cwd）*
+*最后更新：v0.3.2（发版准备：产品 UI 换轨、companion 主题对齐、助手 Markdown 多块修复）*
