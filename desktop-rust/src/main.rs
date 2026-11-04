@@ -2622,12 +2622,16 @@ fn show_assistant_message(
     enabled: bool,
 ) -> Option<ChatUiAction> {
     let mut action = None;
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+    // 纵向列，左对齐。left_to_right 会让 Frame 继承横向流，多块 Markdown 被排成一行。
+    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+        let column = ui.available_width().min(920.0);
+        if column.is_finite() {
+            ui.set_max_width(column);
+        }
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(4.0, 6.0))
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(920.0));
                 markdown_ui::show_markdown(
                     ui,
                     &row.text,
@@ -2662,12 +2666,15 @@ fn show_assistant_message(
 }
 
 fn show_streaming_assistant(ui: &mut egui::Ui, text: &str) {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+        let column = ui.available_width() * 0.92;
+        if column.is_finite() {
+            ui.set_max_width(column);
+        }
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(4.0, 6.0))
             .fill(egui::Color32::TRANSPARENT)
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.92);
                 markdown_ui::show_markdown(
                     ui,
                     text,

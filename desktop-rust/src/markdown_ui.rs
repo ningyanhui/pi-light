@@ -81,23 +81,31 @@ pub fn show_markdown(ui: &mut egui::Ui, src: &str, view: MarkdownView) {
     if view.streaming {
         append_cursor(&mut blocks);
     }
-    if view.show_role {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(RichText::new("✦").size(13.0).color(theme::accent_bright()));
-            ui.label(
-                RichText::new("助手")
-                    .size(12.0)
-                    .strong()
-                    .color(theme::accent_soft()),
-            );
-        });
-        ui.add_space(8.0);
-    }
-    let spacing = ui.spacing_mut();
-    spacing.item_spacing.y = 8.0;
-    spacing.item_spacing.x = 8.0;
-    render_blocks(ui, &blocks, 0);
+    // 父 Ui 若是 left_to_right，Frame 会原样继承，块就会挤在同一行，
+    // 超出视口宽度的代码围栏和表格被纵向滚动裁掉。这里锁成纵向列。
+    ui.vertical(|ui| {
+        let width = ui.available_width();
+        if width.is_finite() && width > 0.0 {
+            ui.set_width(width);
+        }
+        if view.show_role {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(RichText::new("✦").size(13.0).color(theme::accent_bright()));
+                ui.label(
+                    RichText::new("助手")
+                        .size(12.0)
+                        .strong()
+                        .color(theme::accent_soft()),
+                );
+            });
+            ui.add_space(8.0);
+        }
+        let spacing = ui.spacing_mut();
+        spacing.item_spacing.y = 8.0;
+        spacing.item_spacing.x = 8.0;
+        render_blocks(ui, &blocks, 0);
+    });
 }
 
 fn parse_blocks(events: &[Event<'_>], i: &mut usize, until: Option<TagEnd>) -> Vec<Block> {
@@ -492,7 +500,7 @@ fn render_blocks(ui: &mut egui::Ui, blocks: &[Block], depth: usize) {
                 render_spans(ui, spans, size, true, theme::text_primary());
             }
             Block::Paragraph { spans } => {
-                render_spans(ui, spans, 14.0, false, Color32::from_rgb(214, 216, 224));
+                render_spans(ui, spans, 14.0, false, theme::text_primary());
             }
             Block::List {
                 ordered,
@@ -505,7 +513,7 @@ fn render_blocks(ui: &mut egui::Ui, blocks: &[Block], depth: usize) {
                 egui::Frame::none()
                     .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                     .rounding(Rounding::same(8.0))
-                    .fill(Color32::from_rgba_unmultiplied(20, 18, 36, 140))
+                    .fill(theme::sidebar_bg())
                     .stroke(Stroke::new(1.0_f32, theme::glass_stroke()))
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
@@ -550,7 +558,7 @@ fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str) {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(12.0, 10.0))
         .rounding(Rounding::same(8.0))
-        .fill(Color32::from_rgba_unmultiplied(12, 14, 22, 230))
+        .fill(theme::ink())
         .stroke(Stroke::new(1.0_f32, theme::glass_stroke()))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -586,7 +594,7 @@ fn render_table(
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(2.0, 2.0))
         .rounding(Rounding::same(8.0))
-        .fill(Color32::from_rgba_unmultiplied(16, 16, 26, 160))
+        .fill(theme::card_bg())
         .stroke(Stroke::new(1.0_f32, theme::glass_stroke()))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -622,7 +630,7 @@ fn table_cell(ui: &mut egui::Ui, spans: &[Inline], header: bool) {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(8.0, 4.0))
         .fill(if header {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 12)
+            theme::sidebar_bg()
         } else {
             Color32::TRANSPARENT
         })
@@ -632,11 +640,7 @@ fn table_cell(ui: &mut egui::Ui, spans: &[Inline], header: bool) {
                 spans,
                 if header { 12.5 } else { 13.0 },
                 header,
-                if header {
-                    theme::text_primary()
-                } else {
-                    Color32::from_rgb(214, 216, 224)
-                },
+                theme::text_primary(),
             );
         });
 }
@@ -688,7 +692,7 @@ fn paint_inlines(ui: &mut egui::Ui, spans: &[Inline], size: f32, strong: bool, c
                         .monospace()
                         .size((size - 1.0).max(12.0))
                         .color(theme::accent_soft())
-                        .background_color(Color32::from_rgb(24, 22, 38)),
+                        .background_color(theme::card_bg()),
                 );
             }
             Inline::Link { text, dest } => {
@@ -874,5 +878,110 @@ mod tests {
     fn incomplete_streaming_table_does_not_panic() {
         let blocks = parse_markdown("| 章节 | 内容要点 |\n| ---");
         assert!(!blocks.is_empty());
+    }
+
+    /// 复现助手气泡的横向父布局：块必须上下堆叠，表格单元格仍是网格。
+    #[test]
+    fn multiblock_markdown_stacks_under_horizontal_parent() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::default());
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(520.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    ui.set_width(480.0);
+                    // 与修复前 show_assistant_message 相同的方向：左对齐被误写成横向流。
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                        ui.set_max_width(480.0);
+                        show_markdown(
+                            ui,
+                            FIXTURE,
+                            MarkdownView {
+                                streaming: false,
+                                show_role: true,
+                            },
+                        );
+                    });
+                });
+        });
+
+        let mut texts = Vec::new();
+        let mut rects = Vec::new();
+        for clipped in &output.shapes {
+            collect_shapes(&clipped.shape, &mut texts, &mut rects);
+        }
+        let heading = text_pos(&texts, "文档结构概览");
+        let col_a = text_pos(&texts, "章节");
+        let col_b = text_pos(&texts, "内容要点");
+        let reminder = text_pos(&texts, "几点提醒");
+        let list_item = text_pos(&texts, "敏感信息");
+        let code = text_pos(&texts, "ok");
+        let tail = text_pos(&texts, "需要我继续");
+        let kafka = text_pos(&texts, "Kafka");
+
+        assert!(
+            col_a.y > heading.y + 12.0,
+            "table should sit below the heading, heading={heading:?} col={col_a:?}"
+        );
+        assert!(
+            (col_a.y - col_b.y).abs() < 8.0 && col_b.x > col_a.x + 16.0,
+            "header cells should share a row, a={col_a:?} b={col_b:?}"
+        );
+        assert!(
+            kafka.y > col_a.y + 8.0 && (kafka.x - col_a.x).abs() < 24.0,
+            "body cell should stack under its header, header={col_a:?} kafka={kafka:?}"
+        );
+        assert!(reminder.y > col_a.y + 8.0, "second heading below table");
+        assert!(list_item.y > reminder.y + 8.0, "list below second heading");
+        assert!(
+            code.y > list_item.y + 8.0 && (code.x - heading.x).abs() < 80.0,
+            "fenced code should stack in the same column, heading={heading:?} code={code:?}"
+        );
+        assert!(tail.y > code.y + 8.0, "paragraph below code");
+        assert!(
+            texts.iter().any(|(text, _)| text.contains("助手")),
+            "role chip missing: {texts:?}"
+        );
+        let code_well = rects.iter().any(|rect| {
+            rect.contains(code) && rect.width() > 80.0 && rect.height() > 16.0 && rect.left() < 80.0
+        });
+        assert!(
+            code_well,
+            "code fence frame missing or clipped off the column, code={code:?} rects={rects:?}"
+        );
+    }
+
+    fn text_pos(texts: &[(String, egui::Pos2)], needle: &str) -> egui::Pos2 {
+        texts
+            .iter()
+            .find(|(text, _)| text.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle} in {texts:?}"))
+            .1
+    }
+
+    fn collect_shapes(
+        shape: &egui::Shape,
+        texts: &mut Vec<(String, egui::Pos2)>,
+        rects: &mut Vec<egui::Rect>,
+    ) {
+        match shape {
+            egui::Shape::Text(text) => {
+                texts.push((text.galley.text().to_owned(), text.pos));
+            }
+            egui::Shape::Rect(rect) => rects.push(rect.rect),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_shapes(shape, texts, rects);
+                }
+            }
+            _ => {}
+        }
     }
 }
