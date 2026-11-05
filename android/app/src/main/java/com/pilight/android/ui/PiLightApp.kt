@@ -17,7 +17,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -28,6 +27,7 @@ import androidx.navigation.compose.rememberNavController
 import com.pilight.android.CompanionViewModel
 import com.pilight.android.ui.theme.Bg
 import com.pilight.android.ui.theme.PurpleBright
+import com.pilight.android.ui.theme.PurplePrimary
 import com.pilight.android.ui.theme.Surface
 
 private data class Tab(
@@ -73,7 +73,7 @@ fun PiLightApp(vm: CompanionViewModel = viewModel()) {
                                 NavigationBarItemDefaults.colors(
                                     selectedIconColor = PurpleBright,
                                     selectedTextColor = PurpleBright,
-                                    indicatorColor = Color(0x332A1648),
+                                    indicatorColor = PurplePrimary.copy(alpha = 0.20f),
                                 ),
                         )
                     }

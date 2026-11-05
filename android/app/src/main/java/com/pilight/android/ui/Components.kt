@@ -78,7 +78,7 @@ fun BrandMark(
 fun QrImage(
     payload: String,
     modifier: Modifier = Modifier,
-    fg: Color = Color(0xFF1A0B2E),
+    fg: Color = Color(0xFF0A0C10),
     bg: Color = Color.White,
 ) {
     val bmp =

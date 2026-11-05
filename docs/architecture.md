@@ -1,6 +1,6 @@
 # pi-light 架构说明
 
-> **当前版本**：v0.3.2 — M0 设置抽屉七 Tab；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊；同会话消息树；远程桌面 JPEG 轮询 + 浏览/触控/全屏；三栏工作区（会话 / 文件 / Git）与无感换 cwd；产品 UI 换轨 graphite + cobalt。不含 WebRTC、不含 M3/M4 真能力闸门
+> **当前版本**：v0.3.2 — M0 居中设置七分类；M1 市场；M2 Slim 预置；M5 桌面远程（配对码/二维码、Cloudflare Tunnel、已授权设备）；M6-lite companion 扫码/输码后一通远程聊；同会话消息树；远程桌面 JPEG 轮询 + 浏览/触控/全屏；三栏工作区（会话 / 文件 / Git）与无感换 cwd；产品 UI 换轨 indigo（桌面已齐，companion 本波对齐共享色板）。不含 WebRTC、不含 M3/M4 真能力闸门
 > **主路径**：`desktop-rust/`（egui/eframe）
 > **许可**：Apache-2.0 洁净室
 
@@ -25,13 +25,13 @@
 │  │ Git       │ │                                                    │ │
 │  └──────────┘ └──────────────────────────────────────────────────┘ │
 │  顶栏：品牌 + 模型下拉 + 当前工作区徽章                               │
-│  底栏左下角：⚙ 设置（右侧抽屉：模型 / Skills / MCP / 扩展市场 /     │
+│  底栏左下角：⚙ 设置（居中面板七分类：模型 / Skills / MCP / 扩展市场 / │
 │                      记忆 / 远程访问 / 通用）                         │
 │  底栏右侧：Tokens / Trace                                            │
 │                                                                       │
 │  pi_path 模块：路径解析（env → sidecar → PATH）                        │
 │  pi_rpc 模块（M2′+M4′+）：JSONL over stdin/stdout                     │
-│  admin_panel 模块：设置抽屉（七 Tab）+ provider_catalog + ext_market / pi_pkg │
+│  admin_panel 模块：居中设置（七分类）+ provider_catalog + ext_market / pi_pkg │
 │  remote_access + relay_mgr + remote_gateway + desktop_stream：配对 / 中继 / 桌面帧   │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ std::process::Command（stdin/stdout piped）
@@ -73,7 +73,7 @@ pi-light/
 │   │   ├── workspace_tree.rs     # 文件树
 │   │   ├── workspace_git.rs      # Git Changes / History
 │   │   ├── session_insights.rs   # Token / Trace（M3′）
-│   │   ├── admin_panel.rs        # 设置抽屉（七 Tab）
+│   │   ├── admin_panel.rs        # 居中设置（七分类）
 │   │   ├── ext_market.rs         # 扩展市场 UI（浏览 / 详情 / 确认安装 / 一键启用）
 │   │   ├── pi_pkg.rs             # `pi install` / `list` / `remove` + settings.json
 │   │   ├── preset_packages.rs    # Slim/操控 lockfile、settings 本地 path 同步
@@ -123,7 +123,7 @@ pi-light/
 | `api_keys` | 设置页写入 Pi `auth.json` 的 API 密钥；保存后掩码，不回显明文；允许自定义 provider id |
 | `provider_catalog` | 内置厂商卡片 + 自定义 API 表单；读写 `models.json` 的 `providers` 对象 |
 | `session_insights` | Token 用量（`get_session_stats` + `message_update.usage`）；工具 Trace（含 args 预览） |
-| `admin_panel` | 左下角齿轮打开右侧抽屉。Tab：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用。密钥写入 `auth.json` 后只显示掩码 |
+| `admin_panel` | 左下角齿轮打开居中设置面板。分类：模型 / Skills / MCP / 扩展市场 / 记忆 / 远程访问 / 通用。密钥写入 `auth.json` 后只显示掩码 |
 | `ext_market` | 扩展市场：npm `pi-package` 目录、类型滤镜、详情卡、元数据审计、确认安装；操控三包一键启用 |
 | `pi_pkg` | 经 sidecar 执行 `pi install` / `pi list` / `pi remove`；解析 `settings.json` `packages` |
 | `preset_packages` | 嵌入 lockfile；Slim 本地 path 写入 settings；操控包启用/停用；computer-use 权限向导闸门 |
@@ -252,7 +252,7 @@ pi-light-windows-x64/
 | **v0.3.0** | 正式版：整页对齐、消息树、远程桌面 JPEG 像素流、companion 流式/工具/停止/ASR | ✅ 已发布 |
 | **W0 / W1** | 三栏工作区：会话 / 文件树 / Git；无感知 cwd 切换 | ✅ 已合入 |
 | **v0.3.1** | 跳过强制首次引导；三栏工作区 + 无感换 cwd | ✅ 已发布 |
-| **v0.3.2** | 产品 UI 换轨 graphite + cobalt；companion 主题对齐；助手 Markdown 多块修复 | 本发版 |
+| **v0.3.2** | 桌面 UI 换轨 indigo + 居中设置；companion 本波对齐共享色板；助手 Markdown 多块修复 | 本发版 |
 
 ---
 
@@ -277,7 +277,7 @@ CI / Release 仍只构建 debug APK（`testDebugUnitTest` + `assembleDebug`）�
 
 | 类目 | 限制说明 |
 |------|---------|
-| API Key | 设置抽屉的「模型」页可写入 `auth.json` 的字面 API 密钥。保存后只显示固定掩码，不回显明文，错误信息也不包含密钥。OAuth 不在此覆盖。环境变量与 `/login` 仍可用 |
+| API Key | 居中设置的「模型」页可写入 `auth.json` 的字面 API 密钥。保存后只显示固定掩码，不回显明文，错误信息也不包含密钥。OAuth 不在此覆盖。环境变量与 `/login` 仍可用 |
 | 会话持久化 | `~/.pi-light/sessions.json`（v2）保存壳内会话、活动路径和消息树。Pi 会话文件仍在则 `switch_session`，否则 `new_session` 并保留壳内记录。同会话分支是壳侧树，不是 Pi 会话 fork |
 | Token 用量 | 依赖 Pi 上报 `message_update.usage` 或 `get_session_stats`；Pi 未上报时显示「用量未知 / 不支持」 |
 

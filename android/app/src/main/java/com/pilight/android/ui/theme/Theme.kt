@@ -12,35 +12,35 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Legacy token names remain for source compatibility. The visual system is
-// now graphite + cobalt: quieter surfaces, clearer contrast, fewer neon tones.
-val PurplePrimary = Color(0xFF9BB8FF)
-val PurpleBright = Color(0xFF648FFF)
-val PurpleDeep = Color(0xFF1D2A3E)
-val Bg = Color(0xFF0D1219)
-val Surface = Color(0xFF141B24)
-val SurfaceCard = Color(0xFF1B2430)
-val SurfaceElevated = Color(0xFF232F3D)
-val Connected = Color(0xFF43C394)
-val Muted = Color(0xFFA1ADBC)
-val AccentBlue = Color(0xFF648FFF)
+// Legacy token names remain for source compatibility. Values match the shared
+// indigo palette in docs/ui-system.md (desktop theme.rs accent / surfaces).
+val PurplePrimary = Color(0xFF7C8CFF)
+val PurpleBright = Color(0xFF9AA6FF)
+val PurpleDeep = Color(0xFF20263E)
+val Bg = Color(0xFF0A0C10)
+val Surface = Color(0xFF11151B)
+val SurfaceCard = Color(0xFF161B23)
+val SurfaceElevated = Color(0xFF1B212B)
+val Connected = Color(0xFF34D399)
+val Muted = Color(0xFFA3ADBD)
+val AccentBlue = Color(0xFF7C8CFF)
 
 private val DarkColors =
     darkColorScheme(
         primary = PurplePrimary,
-        onPrimary = Color(0xFF101A2A),
+        onPrimary = Color(0xFF0A0C10),
         primaryContainer = PurpleDeep,
-        onPrimaryContainer = Color(0xFFDCE6FF),
+        onPrimaryContainer = Color(0xFFC7CEFF),
         secondary = Muted,
-        tertiary = Color(0xFF66C9BD),
+        tertiary = Color(0xFF22D3EE),
         background = Bg,
         surface = Surface,
         surfaceVariant = SurfaceCard,
         onBackground = Color(0xFFE8EDF5),
         onSurface = Color(0xFFE8EDF5),
         onSurfaceVariant = Muted,
-        outline = Color(0xFF3A485A),
-        error = Color(0xFFFF7777),
+        outline = Color(0xFF232A35),
+        error = Color(0xFFF87171),
     )
 
 private val AppTypography =
