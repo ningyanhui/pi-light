@@ -617,12 +617,13 @@ fn session_row(
     let resp = inner.response.interact(egui::Sense::click());
     let menu_id = egui::Id::new(("dock_session_row_menu", index));
     let menu_was_open = ui.data(|d| d.get_temp::<bool>(menu_id).unwrap_or(false));
+    let btn = egui::Rect::from_center_size(
+        egui::pos2(resp.rect.right() - 22.0, resp.rect.center().y),
+        egui::vec2(26.0, 24.0),
+    );
+    // Always create the child so egui's auto-ids (and the menu state) stay stable per row.
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
     if selected || menu_was_open || ui.rect_contains_pointer(resp.rect) {
-        let btn = egui::Rect::from_center_size(
-            egui::pos2(resp.rect.right() - 22.0, resp.rect.center().y),
-            egui::vec2(26.0, 24.0),
-        );
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
         let open = {
             let ui = &mut child;
             ui.menu_button(
