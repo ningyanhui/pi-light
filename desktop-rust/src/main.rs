@@ -2597,9 +2597,14 @@ impl PiLightApp {
         let workdir = self.workdir.clone();
         let chat = self.sessions.active_chat_mut();
         chat.memory_pending = false;
-        let total = chat.insights.trace_steps.len();
-        let steps = chat.insights.trace_steps[chat.memory_mark.min(total)..].to_vec();
-        chat.memory_mark = total;
+        let turn_tools = std::mem::take(&mut chat.memory_turn_tools);
+        let steps: Vec<_> = chat
+            .insights
+            .trace_steps
+            .iter()
+            .filter(|s| turn_tools.contains(&s.tool_call_id))
+            .cloned()
+            .collect();
         let user = chat
             .messages
             .iter()
