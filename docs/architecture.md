@@ -202,6 +202,7 @@ pi-light-windows-x64/
 | `auth.json` | API 凭据。设置页可写入 `api_key`；界面不读回明文。OAuth 条目不在此覆盖 |
 | `skills/` | 用户级 skills 目录（M4′+ 发现 + settings 推导启用状态） |
 | `AGENTS.md` / `CLAUDE.md` | 用户级记忆指令（M4′+ 摘要展示 + 内联编辑写回） |
+| `memory/projects/<slug>/` | 按工作区隔离的 pi-memory 目录（启动 sidecar 时注入 `PI_MEMORY_DIR`，用户已设置则不覆盖）；`sessions/session-<id>.md` 为壳侧每轮自动写入的会话摘要 |
 
 ### Skills 发现路径（优先级由高到低）
 

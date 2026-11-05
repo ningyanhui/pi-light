@@ -8,6 +8,22 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 
 const FONT_ID: &str = "pi-light-cjk";
+const SYMBOL_FONT_ID: &str = "pi-light-symbols";
+
+/// 系统符号字体（仅作回退）。Windows: Segoe UI Symbol。
+fn symbol_candidates() -> Vec<PathBuf> {
+    let windir = std::env::var_os("WINDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    match std::env::consts::OS {
+        "windows" => vec![windir.join("Fonts").join("seguisym.ttf")],
+        "macos" => vec![PathBuf::from("/System/Library/Fonts/Apple Symbols.ttf")],
+        _ => vec![
+            PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            PathBuf::from("/usr/share/fonts/TTF/DejaVuSans.ttf"),
+        ],
+    }
+}
 
 /// 在默认拉丁字体之后挂上系统 CJK 字体。找不到字体时保持 egui 默认。
 pub fn install_system_cjk(ctx: &egui::Context) {
@@ -22,6 +38,17 @@ pub fn install_system_cjk(ctx: &egui::Context) {
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         if let Some(list) = fonts.families.get_mut(&family) {
             list.push(FONT_ID.to_owned());
+        }
+    }
+    // 符号回退：egui 默认字体与微软雅黑缺 ✓ ✎ ⧉ 等符号，避免显示成方框。
+    if let Some(sym) = load_first_font(&symbol_candidates()) {
+        fonts
+            .font_data
+            .insert(SYMBOL_FONT_ID.to_owned(), egui::FontData::from_owned(sym));
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            if let Some(list) = fonts.families.get_mut(&family) {
+                list.push(SYMBOL_FONT_ID.to_owned());
+            }
         }
     }
     ctx.set_fonts(fonts);

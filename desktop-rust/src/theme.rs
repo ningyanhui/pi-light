@@ -1,99 +1,223 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// pi-light UI system: matte graphite surfaces, restrained cobalt accent.
+// pi-light UI system: near-black layered surfaces, indigo→cyan accent.
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
 
 pub fn amber() -> Color32 {
-    Color32::from_rgb(226, 174, 92)
+    Color32::from_rgb(251, 191, 36)
 }
 
 pub fn accent() -> Color32 {
-    Color32::from_rgb(91, 137, 255)
+    Color32::from_rgb(124, 140, 255)
 }
 
 pub fn accent_bright() -> Color32 {
-    Color32::from_rgb(126, 164, 255)
+    Color32::from_rgb(154, 166, 255)
 }
 
 pub fn accent_soft() -> Color32 {
-    Color32::from_rgb(184, 204, 255)
+    Color32::from_rgb(199, 206, 255)
 }
 
 pub fn ink() -> Color32 {
-    Color32::from_rgb(11, 15, 21)
+    Color32::from_rgb(10, 12, 16)
 }
 
 pub fn chrome_bg() -> Color32 {
-    Color32::from_rgb(15, 19, 26)
+    Color32::from_rgb(10, 12, 16)
 }
 
 pub fn sidebar_bg() -> Color32 {
-    Color32::from_rgb(18, 23, 31)
+    Color32::from_rgb(17, 21, 27)
 }
 
 pub fn card_bg() -> Color32 {
-    Color32::from_rgb(27, 34, 45)
+    Color32::from_rgb(22, 27, 35)
 }
 
 pub fn hairline() -> Color32 {
-    Color32::from_rgb(43, 53, 68)
+    Color32::from_rgb(35, 42, 53)
 }
 
 pub fn text_primary() -> Color32 {
-    Color32::from_rgb(231, 236, 244)
+    Color32::from_rgb(232, 237, 245)
 }
 
 pub fn text_muted() -> Color32 {
-    Color32::from_rgb(157, 168, 183)
+    Color32::from_rgb(163, 173, 189)
 }
 
 pub fn text_dim() -> Color32 {
-    Color32::from_rgb(112, 125, 143)
+    Color32::from_rgb(107, 118, 136)
 }
 
 pub fn ok() -> Color32 {
-    Color32::from_rgb(62, 185, 139)
+    Color32::from_rgb(52, 211, 153)
 }
 
 pub fn warn() -> Color32 {
-    Color32::from_rgb(220, 169, 83)
+    Color32::from_rgb(251, 191, 36)
 }
 
 pub fn danger() -> Color32 {
-    Color32::from_rgb(225, 105, 105)
+    Color32::from_rgb(248, 113, 113)
+}
+
+/// Fill for text inputs and wells: one step darker than the canvas.
+pub fn input_bg() -> Color32 {
+    Color32::from_rgb(13, 16, 21)
+}
+
+/// Selected / tinted row fill (muted cobalt over graphite).
+pub fn selected_fill() -> Color32 {
+    Color32::from_rgb(32, 38, 62)
+}
+
+/// Neutral hover fill for list rows and ghost controls.
+pub fn hover_fill() -> Color32 {
+    Color32::from_rgb(27, 33, 43)
+}
+
+/// Title bar / icon rail: the darkest chrome layer.
+pub fn rail_bg() -> Color32 {
+    Color32::from_rgb(13, 16, 21)
+}
+
+/// Raised card one step above `card_bg` (hovered cards, keycaps).
+pub fn card_raised() -> Color32 {
+    Color32::from_rgb(27, 33, 43)
+}
+
+/// Stronger divider for focused or floating surfaces.
+pub fn hairline_strong() -> Color32 {
+    Color32::from_rgb(46, 55, 70)
+}
+
+/// Secondary accent (cyan) used for gradients and live indicators.
+pub fn accent_cyan() -> Color32 {
+    Color32::from_rgb(34, 211, 238)
+}
+
+/// Corner radii shared by every surface.
+pub mod radius {
+    pub const SM: f32 = 6.0;
+    pub const MD: f32 = 8.0;
+    pub const LG: f32 = 12.0;
+    pub const XL: f32 = 16.0;
+}
+
+pub fn dark_visuals() -> egui::Visuals {
+    let mut visuals = egui::Visuals::dark();
+    visuals.dark_mode = true;
+    visuals.override_text_color = None;
+    visuals.window_fill = chrome_bg();
+    visuals.panel_fill = chrome_bg();
+    visuals.extreme_bg_color = input_bg();
+    visuals.faint_bg_color = Color32::from_rgb(22, 29, 39);
+    visuals.code_bg_color = Color32::from_rgb(17, 23, 31);
+    visuals.hyperlink_color = accent_bright();
+    visuals.warn_fg_color = warn();
+    visuals.error_fg_color = danger();
+    visuals.selection.bg_fill = Color32::from_rgb(37, 56, 83);
+    visuals.selection.stroke = Stroke::new(1.0_f32, accent_soft());
+    visuals.window_rounding = Rounding::same(12.0);
+    visuals.menu_rounding = Rounding::same(10.0);
+    visuals.window_stroke = Stroke::new(1.0_f32, glass_stroke_strong());
+    visuals.window_shadow = egui::Shadow {
+        offset: egui::vec2(0.0, 8.0),
+        blur: 24.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(110),
+    };
+    visuals.popup_shadow = egui::Shadow {
+        offset: egui::vec2(0.0, 6.0),
+        blur: 16.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(90),
+    };
+    visuals.striped = false;
+    visuals.slider_trailing_fill = true;
+    visuals.handle_shape = egui::style::HandleShape::Circle;
+
+    let w = &mut visuals.widgets;
+    w.noninteractive.bg_fill = card_bg();
+    w.noninteractive.weak_bg_fill = card_bg();
+    w.noninteractive.bg_stroke = Stroke::new(1.0_f32, hairline());
+    w.noninteractive.fg_stroke = Stroke::new(1.0_f32, text_primary());
+
+    w.inactive.bg_fill = Color32::from_rgb(29, 37, 49);
+    w.inactive.weak_bg_fill = Color32::from_rgb(29, 37, 49);
+    w.inactive.bg_stroke = Stroke::new(1.0_f32, hairline());
+    w.inactive.fg_stroke = Stroke::new(1.0_f32, text_primary());
+
+    w.hovered.bg_fill = Color32::from_rgb(38, 48, 63);
+    w.hovered.weak_bg_fill = Color32::from_rgb(38, 48, 63);
+    w.hovered.bg_stroke = Stroke::new(1.0_f32, glass_stroke_strong());
+    w.hovered.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
+    w.hovered.expansion = 0.0;
+
+    w.active.bg_fill = Color32::from_rgb(46, 60, 80);
+    w.active.weak_bg_fill = Color32::from_rgb(46, 60, 80);
+    w.active.bg_stroke = Stroke::new(1.0_f32, accent_stroke_soft());
+    w.active.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
+    w.active.expansion = 0.0;
+
+    w.open.bg_fill = Color32::from_rgb(34, 44, 59);
+    w.open.weak_bg_fill = Color32::from_rgb(34, 44, 59);
+    w.open.bg_stroke = Stroke::new(1.0_f32, glass_stroke_strong());
+    w.open.fg_stroke = Stroke::new(1.0_f32, text_primary());
+
+    for widgets in [
+        &mut w.noninteractive,
+        &mut w.inactive,
+        &mut w.hovered,
+        &mut w.active,
+        &mut w.open,
+    ] {
+        widgets.rounding = Rounding::same(7.0);
+    }
+    visuals
 }
 
 pub fn apply_theme(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::dark();
-    visuals.window_fill = chrome_bg();
-    visuals.panel_fill = chrome_bg();
-    visuals.extreme_bg_color = card_bg();
-    visuals.faint_bg_color = Color32::from_rgb(22, 29, 39);
-    visuals.code_bg_color = Color32::from_rgb(17, 23, 31);
-    visuals.hyperlink_color = accent_soft();
-    visuals.selection.bg_fill = Color32::from_rgb(37, 56, 83);
-    visuals.selection.stroke.color = accent_soft();
-    visuals.window_rounding = Rounding::same(10.0);
-    visuals.menu_rounding = Rounding::same(8.0);
-    visuals.window_stroke = Stroke::new(1.0_f32, glass_stroke());
-    visuals.widgets.noninteractive.bg_fill = card_bg();
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(29, 37, 49);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(39, 50, 66);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(47, 61, 80);
-    visuals.widgets.open.bg_fill = Color32::from_rgb(34, 44, 59);
-    for widgets in [
-        &mut visuals.widgets.noninteractive,
-        &mut visuals.widgets.inactive,
-        &mut visuals.widgets.hovered,
-        &mut visuals.widgets.active,
-        &mut visuals.widgets.open,
-    ] {
-        widgets.rounding = Rounding::same(7.0);
-        widgets.fg_stroke.color = Color32::from_rgb(231, 236, 244);
-        widgets.bg_stroke = Stroke::new(1.0_f32, glass_stroke());
-    }
-    ctx.set_visuals(visuals);
+    // eframe follows the OS theme; on light-mode Windows `set_visuals` alone would
+    // leave egui's light widgets (white buttons / inputs) on our graphite panels.
+    ctx.set_theme(egui::Theme::Dark);
+    let visuals = dark_visuals();
+    ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+    ctx.set_visuals_of(egui::Theme::Light, visuals);
+    ctx.all_styles_mut(|style| {
+        use egui::{FontFamily, FontId, TextStyle};
+        style.text_styles = [
+            (
+                TextStyle::Small,
+                FontId::new(11.0, FontFamily::Proportional),
+            ),
+            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
+            (
+                TextStyle::Button,
+                FontId::new(13.0, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Heading,
+                FontId::new(20.0, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(13.0, FontFamily::Monospace),
+            ),
+        ]
+        .into();
+        let spacing = &mut style.spacing;
+        spacing.item_spacing = egui::vec2(8.0, 6.0);
+        spacing.button_padding = egui::vec2(10.0, 5.0);
+        spacing.interact_size.y = 26.0;
+        spacing.combo_height = 280.0;
+        spacing.menu_margin = egui::Margin::same(6.0);
+        spacing.window_margin = egui::Margin::same(12.0);
+        spacing.scroll = egui::style::ScrollStyle::thin();
+    });
 }
 
 pub fn glass_fill() -> Color32 {
@@ -114,15 +238,15 @@ pub fn glass_stroke_strong() -> Color32 {
 }
 
 pub fn accent_stroke_soft() -> Color32 {
-    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+    Color32::from_rgba_unmultiplied(124, 140, 255, 92)
 }
 
 pub fn accent_stroke_think() -> Color32 {
-    Color32::from_rgba_unmultiplied(91, 137, 255, 58)
+    Color32::from_rgba_unmultiplied(124, 140, 255, 58)
 }
 
 pub fn accent_stroke_composer() -> Color32 {
-    Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+    Color32::from_rgba_unmultiplied(124, 140, 255, 92)
 }
 
 pub fn glass_shadow() -> egui::Shadow {
@@ -207,33 +331,103 @@ pub fn ghost_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
 pub fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
     ui.add(
         egui::Button::new(egui::RichText::new(icon).size(14.0).color(text_muted()))
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::NONE)
-            .min_size(egui::vec2(30.0, 30.0)),
+            .frame(false)
+            .min_size(egui::vec2(28.0, 28.0)),
     )
     .on_hover_text(tip)
 }
 
 pub fn send_button(ui: &mut egui::Ui, enabled: bool) -> egui::Response {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(
-            egui::RichText::new("➤")
-                .color(if enabled {
-                    Color32::WHITE
+    let resp = ui
+        .add_enabled(
+            enabled,
+            egui::Button::new("")
+                .fill(if enabled {
+                    accent()
                 } else {
-                    Color32::from_rgb(160, 160, 170)
+                    Color32::from_rgb(36, 44, 57)
                 })
-                .size(14.0),
+                .stroke(Stroke::NONE)
+                .rounding(Rounding::same(10.0))
+                .min_size(egui::vec2(36.0, 36.0)),
         )
-        .fill(if enabled {
-            accent()
-        } else {
-            Color32::from_rgb(39, 47, 60)
-        })
+        .on_hover_text("发送（Enter）");
+    let color = if enabled { Color32::WHITE } else { text_dim() };
+    let c = resp.rect.center();
+    let stroke = Stroke::new(2.0_f32, color);
+    let painter = ui.painter();
+    painter.line_segment(
+        [c + egui::vec2(0.0, 6.0), c + egui::vec2(0.0, -6.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [c + egui::vec2(-5.0, -1.0), c + egui::vec2(0.0, -6.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [c + egui::vec2(5.0, -1.0), c + egui::vec2(0.0, -6.0)],
+        stroke,
+    );
+    resp
+}
+
+/// Brand mark: rounded cobalt tile with a π glyph.
+pub fn pi_avatar(ui: &mut egui::Ui, size: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, Rounding::same(size * 0.28), accent());
+    // Hand-drawn π: fonts disagree on the glyph (some render a capital Π).
+    let c = rect.center();
+    let u = size / 20.0;
+    let stroke = Stroke::new((1.9 * u).max(1.2), Color32::WHITE);
+    let p = |x: f32, y: f32| c + egui::vec2(x * u, y * u);
+    painter.line_segment([p(-6.0, -3.6), p(6.2, -4.2)], stroke);
+    painter.line_segment([p(-2.6, -3.8), p(-3.4, 5.2)], stroke);
+    painter.add(egui::Shape::line(
+        vec![p(2.6, -4.0), p(2.4, 2.6), p(3.0, 4.6), p(4.6, 5.0)],
+        stroke,
+    ));
+    resp
+}
+
+/// Small rounded status pill (e.g. 完成 / 运行中 / 失败).
+pub fn status_pill(ui: &mut egui::Ui, label: &str, color: Color32) -> egui::Response {
+    egui::Frame::none()
+        .fill(color.gamma_multiply(0.16))
         .rounding(Rounding::same(9.0))
-        .min_size(egui::vec2(38.0, 36.0)),
-    )
+        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(label).size(11.0).color(color));
+        })
+        .response
+}
+
+/// Keycap-style hint, e.g. `/`  `@`  `#`.
+pub fn keycap(ui: &mut egui::Ui, key: &str) {
+    egui::Frame::none()
+        .fill(input_bg())
+        .stroke(Stroke::new(1.0_f32, glass_stroke_strong()))
+        .rounding(Rounding::same(5.0))
+        .inner_margin(egui::Margin::symmetric(6.0, 1.0))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(key)
+                    .monospace()
+                    .size(12.0)
+                    .color(text_primary()),
+            );
+        });
+}
+
+/// Thin horizontal separator in the hairline color.
+pub fn hairline_rule(ui: &mut egui::Ui) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0_f32, hairline()),
+    );
 }
 
 pub fn paint_purple_glow(_ui: &egui::Ui, _rect: egui::Rect, _expand: f32) {}
@@ -384,7 +578,7 @@ pub fn package_glyph_color(name: &str) -> Color32 {
                 .bytes()
                 .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
             let palette = [
-                Color32::from_rgb(91, 137, 255),
+                Color32::from_rgb(124, 140, 255),
                 Color32::from_rgb(80, 160, 230),
                 Color32::from_rgb(90, 180, 140),
                 Color32::from_rgb(210, 150, 80),
@@ -529,6 +723,202 @@ pub fn cover_uv(tex: egui::Vec2, dest: egui::Vec2) -> egui::Rect {
     }
 }
 
+/// Vertical navigation row (settings categories): icon + label, accent bar when selected.
+pub fn nav_row(
+    ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    let fill = if selected {
+        selected_fill()
+    } else if resp.hovered() {
+        hover_fill()
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, radius::MD, fill);
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.top() + 9.0),
+                egui::vec2(3.0, rect.height() - 18.0),
+            ),
+            1.5,
+            accent(),
+        );
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    crate::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 20.0, rect.center().y),
+            egui::vec2(16.0, 16.0),
+        ),
+        icon,
+        if selected {
+            accent_bright()
+        } else {
+            text_muted()
+        },
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 38.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        if selected {
+            text_primary()
+        } else {
+            text_muted()
+        },
+    );
+    resp
+}
+
+/// Dropdown / command row: icon, title, optional dim detail line and a
+/// right-aligned shortcut hint.
+pub fn menu_row(
+    ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
+    title: &str,
+    detail: Option<&str>,
+    hint: Option<&str>,
+    emphasis: bool,
+) -> egui::Response {
+    let h = if detail.is_some() { 44.0 } else { 34.0 };
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, radius::MD, hover_fill());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let painter = ui.painter_at(rect.shrink(2.0));
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 18.0, rect.center().y),
+        egui::vec2(16.0, 16.0),
+    );
+    let icon_color = if emphasis {
+        accent_bright()
+    } else {
+        text_muted()
+    };
+    crate::icons::paint(&painter, icon_rect, icon, icon_color);
+    let hint_w = if let Some(hint) = hint {
+        let g = painter.text(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            hint,
+            egui::FontId::proportional(11.0),
+            text_dim(),
+        );
+        g.width() + 16.0
+    } else {
+        0.0
+    };
+    let x = rect.left() + 36.0;
+    let text_clip = egui::Rect::from_min_max(
+        egui::pos2(x, rect.top()),
+        egui::pos2(rect.right() - 8.0 - hint_w, rect.bottom()),
+    );
+    let text_painter = ui.painter_at(text_clip);
+    let title_color = if emphasis {
+        text_primary()
+    } else {
+        text_primary().gamma_multiply(0.92)
+    };
+    if let Some(detail) = detail {
+        text_painter.text(
+            egui::pos2(x, rect.top() + 7.0),
+            egui::Align2::LEFT_TOP,
+            title,
+            egui::FontId::proportional(13.0),
+            title_color,
+        );
+        text_painter.text(
+            egui::pos2(x, rect.bottom() - 7.0),
+            egui::Align2::LEFT_BOTTOM,
+            detail,
+            egui::FontId::proportional(11.0),
+            text_dim(),
+        );
+    } else {
+        text_painter.text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            title,
+            egui::FontId::proportional(13.0),
+            title_color,
+        );
+    }
+    resp
+}
+
+/// Ghost toolbar button: line icon + label, 28px tall.
+pub fn toolbar_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui::Response {
+    let font = egui::FontId::proportional(12.5);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, text_muted());
+    let size = egui::vec2(10.0 + 15.0 + 6.0 + galley.size().x + 10.0, 28.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        ui.painter().rect_filled(rect, radius::MD, card_bg());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let color = if hovered {
+        text_primary()
+    } else {
+        text_muted()
+    };
+    let icon_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 10.0, rect.center().y - 7.5),
+        egui::vec2(15.0, 15.0),
+    );
+    crate::icons::paint(ui.painter(), icon_rect, icon, color);
+    ui.painter().galley(
+        egui::pos2(
+            icon_rect.right() + 6.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        color,
+    );
+    resp
+}
+
+/// Caption button for the frameless title bar (minimize / maximize / close).
+pub fn window_button(ui: &mut egui::Ui, icon: crate::icons::Icon, close: bool) -> egui::Response {
+    let h = ui.available_height();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(44.0, h), egui::Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        let fill = if close {
+            Color32::from_rgb(196, 43, 28)
+        } else {
+            hover_fill()
+        };
+        ui.painter().rect_filled(rect, 0.0, fill);
+    }
+    let color = if hovered {
+        text_primary()
+    } else {
+        text_muted()
+    };
+    crate::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0)),
+        icon,
+        color,
+    );
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,9 +937,9 @@ mod tests {
     }
 
     #[test]
-    fn accent_uses_cobalt_palette() {
-        assert_eq!(accent(), Color32::from_rgb(91, 137, 255));
-        assert_eq!(accent_bright(), Color32::from_rgb(126, 164, 255));
+    fn accent_uses_indigo_palette() {
+        assert_eq!(accent(), Color32::from_rgb(124, 140, 255));
+        assert_eq!(accent_bright(), Color32::from_rgb(154, 166, 255));
     }
 
     #[test]
@@ -560,11 +950,11 @@ mod tests {
     }
 
     #[test]
-    fn default_glass_stroke_is_neutral_and_composer_uses_cobalt() {
-        assert_eq!(glass_stroke(), Color32::from_rgb(43, 53, 68));
+    fn default_glass_stroke_is_neutral_and_composer_uses_accent() {
+        assert_eq!(glass_stroke(), Color32::from_rgb(35, 42, 53));
         assert_eq!(
             accent_stroke_composer(),
-            Color32::from_rgba_unmultiplied(91, 137, 255, 92)
+            Color32::from_rgba_unmultiplied(124, 140, 255, 92)
         );
     }
 
@@ -579,8 +969,8 @@ mod tests {
         assert_ne!(stroke.color, accent());
         let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
         assert!((80..=110).contains(&a), "alpha={a}");
-        assert!((80..=105).contains(&r), "r={r}");
-        assert!((120..=150).contains(&g), "g={g}");
+        assert!((110..=135).contains(&r), "r={r}");
+        assert!((125..=155).contains(&g), "g={g}");
         assert!(b >= 240, "b={b}");
     }
 }

@@ -125,6 +125,46 @@ fn handle_prompt(out: &mut impl Write, id: Option<String>, cmd: &serde_json::Val
     emit(out, serde_json::json!({"type": "agent_start"}));
     emit(out, serde_json::json!({"type": "turn_start"}));
 
+    for (id, tool, args) in [
+        (
+            "mock-read-1",
+            "read",
+            serde_json::json!({ "path": "src/session/manager.rs" }),
+        ),
+        (
+            "mock-edit-1",
+            "edit",
+            serde_json::json!({
+                "path": "src/session/manager.rs",
+                "edits": [{
+                    "oldText": "let session = load(path)?;",
+                    "newText": "let session = load(path)
+            .with_context(|| format!(\"load {path:?}\"))?;"
+                }]
+            }),
+        ),
+    ] {
+        emit(
+            out,
+            serde_json::json!({
+                "type": "tool_execution_start",
+                "toolCallId": id,
+                "toolName": tool,
+                "args": args
+            }),
+        );
+        emit(
+            out,
+            serde_json::json!({
+                "type": "tool_execution_end",
+                "toolCallId": id,
+                "toolName": tool,
+                "result": { "content": [{ "type": "text", "text": "ok" }], "details": {} },
+                "isError": false,
+                "durationMs": 340
+            }),
+        );
+    }
     emit(
         out,
         serde_json::json!({

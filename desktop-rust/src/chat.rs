@@ -44,6 +44,10 @@ pub struct ChatState {
     pub last_sent_prompt: Option<String>,
     /// 活动路径已偏离 Pi 当前线性上下文，下次发送需要 new_session 回放。
     pub pi_stale: bool,
+    /// 本轮出现过的工具调用 id（Pi 可能复用 id，按 id 而非下标取本轮步骤）。
+    pub memory_turn_tools: Vec<String>,
+    /// 本轮已结束、待写入会话记忆。
+    pub memory_pending: bool,
 }
 
 impl ChatState {
@@ -174,6 +178,11 @@ impl ChatState {
     /// Process a single `PiRpcEvent` from the RPC client.
     pub fn handle_rpc_event(&mut self, event: PiRpcEvent) {
         self.insights.handle_rpc_event(&event);
+        if let PiRpcEvent::ToolTraceStart { tool_call_id, .. } = &event {
+            if !self.memory_turn_tools.contains(tool_call_id) {
+                self.memory_turn_tools.push(tool_call_id.clone());
+            }
+        }
         match event {
             PiRpcEvent::TextDelta(delta) => {
                 if !self.is_streaming {
@@ -182,6 +191,9 @@ impl ChatState {
                 self.append_delta(&delta);
             }
             PiRpcEvent::AgentSettled { aborted } => {
+                if aborted {
+                    self.memory_turn_tools.clear();
+                }
                 self.finalize_turn(aborted);
             }
             PiRpcEvent::ProcessExited { .. } => {

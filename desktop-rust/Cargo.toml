@@ -41,6 +41,8 @@ zeroize = "=1.8.1"
 # GFM 子集解析（表 / 强调 / 围栏代码）。渲染在 markdown_ui，不走裸 Label。
 # 钉 0.12：0.13+ TagEnd 拆分且部分版本 MSRV > rustc 1.83。
 pulldown-cmark = { version = "0.12", default-features = false }
+# Native folder picker (MIT). Linux uses the default gtk3 backend.
+rfd = "0.15"
 
 # Windows: don't spawn a console window when running the GUI binary
 [target.'cfg(windows)'.dependencies]
