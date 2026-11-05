@@ -42,6 +42,8 @@ Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol n
 5. **Conversation canvas:** content is centred at ≤820px. Tool calls render as a step timeline (`timeline_ui::show_timeline`): 读取 / 执行 / 修改 / 写入 / 搜索 rows with status, duration and an inline diff for edit / write steps (`tool_step::summarize` derives target and diff from the tool `args`).
 6. **Composer:** a floating card centred under the canvas: reference chips, the input, then 引用文件 / model / thinking on the left and retry + send (or 停止 while streaming) on the right.
 7. **Settings panel:** a centered modal (max 1040×780) over the shell with a 184px left category nav (`theme::nav_row`, painter icons) and a scrollable content pane; 模型提供商 dialogs open at a fixed 520px width with a viewport-bounded, scrolling body.
+   - 记忆：左侧按 项目指令 / 项目记忆 / 会话记忆 / 用户指令 / 全局记忆 分组的文件列表，右侧 markdown 全文查看，可切换编辑并在文件管理器中显示。
+   - Skills：卡片显示 SKILL.md 描述与来源（项目/用户），点击在右侧查看全文。MCP：卡片显示 command / args / env，支持编辑、二次确认删除、查看 mcp.json。
 
 ## Rendering rules (desktop)
 

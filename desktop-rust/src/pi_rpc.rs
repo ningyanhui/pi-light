@@ -197,7 +197,23 @@ impl PiRpcClient {
     where
         F: Fn() + Send + 'static,
     {
+        Self::spawn_with_env(bin_path, cwd, &[], on_event)
+    }
+
+    /// Like [`Self::spawn`], with extra environment variables for the sidecar.
+    pub fn spawn_with_env<F>(
+        bin_path: &Path,
+        cwd: Option<&Path>,
+        envs: &[(&str, PathBuf)],
+        on_event: F,
+    ) -> io::Result<Self>
+    where
+        F: Fn() + Send + 'static,
+    {
         let mut cmd = Command::new(bin_path);
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
         cmd.args(["--mode", "rpc"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

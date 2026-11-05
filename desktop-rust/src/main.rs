@@ -189,9 +189,20 @@ impl PiLightApp {
         }
         self.ensure_shell_path();
 
+        let memory_env: Vec<(&str, PathBuf)> = pi_light::memory_store::sidecar_memory_dir(
+            admin_panel::pi_agent_dir().as_deref(),
+            &self.workdir,
+        )
+        .map(|dir| {
+            let _ = std::fs::create_dir_all(&dir);
+            vec![(pi_light::memory_store::MEMORY_DIR_ENV, dir)]
+        })
+        .unwrap_or_default();
         if let Some(path) = self.pi_probe.path() {
             let ctx = self.egui_ctx.clone();
-            match PiRpcClient::spawn(path, Some(&self.workdir), move || ctx.request_repaint()) {
+            match PiRpcClient::spawn_with_env(path, Some(&self.workdir), &memory_env, move || {
+                ctx.request_repaint()
+            }) {
                 Ok(mut client) => {
                     let attach =
                         session_store::rpc_attach(self.sessions.active().session_file.as_deref());
@@ -847,6 +858,9 @@ impl PiLightApp {
                 }
 
                 self.sessions.active_chat_mut().handle_rpc_event(event);
+                if request_stats {
+                    self.sessions.active_chat_mut().memory_pending = true;
+                }
                 if let Some(note) = companion_note {
                     match &note {
                         CompanionChatEvent::Settled { .. } | CompanionChatEvent::Error { .. } => {
@@ -1195,6 +1209,10 @@ impl eframe::App for PiLightApp {
             }
         }
 
+        self.flush_session_memory();
+        if self.admin.workdir.as_deref() != Some(self.workdir.as_path()) {
+            self.admin.set_workdir(self.workdir.clone());
+        }
         self.admin.memory_insights = Some(self.sessions.active_chat().insights.clone());
         let panel_ret = if matches!(surface, FirstRunSurface::ModelSetup) {
             AdminPanelReturn::default()
@@ -2568,3 +2586,54 @@ fn truncate_display(s: &str, max_chars: usize) -> String {
 //
 // `PiRpcClient` implements Drop itself (close stdin → wait → kill), so
 // simply dropping `PiLightApp` is sufficient.  No extra on_exit needed.
+
+impl PiLightApp {
+    /// 本轮结束后把问题 / 文件 / 命令 / 结论追加到会话记忆文件（不调用模型）。
+    fn flush_session_memory(&mut self) {
+        if !self.sessions.active_chat().memory_pending {
+            return;
+        }
+        let session = self.sessions.active().clone();
+        let workdir = self.workdir.clone();
+        let chat = self.sessions.active_chat_mut();
+        chat.memory_pending = false;
+        let total = chat.insights.trace_steps.len();
+        let steps = chat.insights.trace_steps[chat.memory_mark.min(total)..].to_vec();
+        chat.memory_mark = total;
+        let user = chat
+            .messages
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                ChatMessage::User(t) => Some(t.clone()),
+                ChatMessage::Assistant(_) => None,
+            })
+            .unwrap_or_default();
+        let assistant = match chat.messages.last() {
+            Some(ChatMessage::Assistant(t)) => t.clone(),
+            _ => String::new(),
+        };
+        if user.trim().is_empty() {
+            return;
+        }
+        let dir = match std::env::var_os(pi_light::memory_store::MEMORY_DIR_ENV) {
+            Some(v) if !v.is_empty() => PathBuf::from(v),
+            _ => match admin_panel::pi_agent_dir() {
+                Some(agent) => pi_light::memory_store::project_memory_dir(&agent, &workdir),
+                None => return,
+            },
+        };
+        let turn = pi_light::memory_store::TurnDigest {
+            session_title: &session.title,
+            workdir: &workdir,
+            user: &user,
+            assistant: &assistant,
+            steps: &steps,
+        };
+        let path = pi_light::memory_store::session_memory_path(&dir, session.id);
+        match pi_light::memory_store::append_turn_digest(&path, &turn) {
+            Ok(()) => self.admin.refresh_memory_files(),
+            Err(e) => self.admin.last_error = Some(format!("会话记忆写入失败：{e}")),
+        }
+    }
+}

@@ -13,97 +13,414 @@ pub(super) const MCP_EMPTY_MSG: &str = "未找到 MCP 配置文件\n\
     （已查：~/.pi/agent/mcp.json、.pi/mcp.json）\n\
     创建后点击「⟳ 刷新」。";
 
-pub(super) struct SkillsMcpUi {
-    pub(super) skill_toggle: Option<String>,
-    pub(super) mcp_toggle: Option<String>,
-    pub(super) mcp_add: Option<(String, String)>,
+pub(super) struct SkillsPageUi {
+    pub(super) toggle: Option<String>,
+    pub(super) view: Option<PathBuf>,
     pub(super) pkg_action: InstalledAction,
 }
 
-pub(super) fn render_skills_mcp_workspace(
+pub(super) fn render_skills_page(
     ui: &mut egui::Ui,
     state: &mut AdminPanelState,
-) -> SkillsMcpUi {
-    ui.label(egui::RichText::new("技能开关与配置").strong().size(14.0));
-    ui.label(
-        egui::RichText::new("已从 mcp.json / settings.json 加载。启用的功能将自动连接。")
-            .weak()
-            .size(11.0),
-    );
-    ui.add_space(8.0);
-
-    let mut skill_toggle = None;
-    let mut mcp_toggle = None;
-    let mut mcp_add = None;
-    ui.columns(2, |cols| {
-        cols[0].label(egui::RichText::new("技能 (Skills)").strong().size(13.0));
-        cols[0].add(
-            egui::TextEdit::singleline(&mut state.skill_query)
-                .hint_text("搜索技能…")
-                .desired_width(f32::INFINITY),
+    body_h: f32,
+) -> SkillsPageUi {
+    let mut toggle = None;
+    let mut view = None;
+    let enabled = state
+        .skill_items
+        .iter()
+        .filter(|i| i.state == ItemState::Enabled)
+        .count();
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{enabled} 个启用 · 共 {} 个",
+                state.skill_items.len()
+            ))
+            .size(12.0)
+            .color(crate::theme::text_muted()),
         );
-        let query = state.skill_query.clone();
-        skill_toggle = render_item_list(
-            &mut cols[0],
-            "Skills",
-            &mut state.skill_items,
-            SKILLS_EMPTY_MSG,
-            &query,
-        );
-
-        cols[1].label(
-            egui::RichText::new("MCP 服务器 (Servers)")
-                .strong()
-                .size(13.0),
-        );
-        cols[1].add(
-            egui::TextEdit::singleline(&mut state.mcp_query)
-                .hint_text("搜索 MCP 服务器…")
-                .desired_width(f32::INFINITY),
-        );
-        let query = state.mcp_query.clone();
-        mcp_toggle = render_item_list(
-            &mut cols[1],
-            "MCP 服务",
-            &mut state.mcp_items,
-            MCP_EMPTY_MSG,
-            &query,
-        );
-        cols[1].add_space(8.0);
-        cols[1].label(egui::RichText::new("添加服务").strong().size(12.0));
-        cols[1].horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add(
-                egui::TextEdit::singleline(&mut state.mcp_new_id)
-                    .hint_text("名称")
-                    .desired_width(100.0),
-            );
-            ui.add(
-                egui::TextEdit::singleline(&mut state.mcp_new_command)
-                    .hint_text("命令，例如 npx")
-                    .desired_width(ui.available_width().max(80.0)),
+                egui::TextEdit::singleline(&mut state.skill_query)
+                    .hint_text("搜索技能或描述…")
+                    .desired_width(220.0),
             );
         });
-        if cols[1].button("写入 mcp.json").clicked() {
-            mcp_add = Some((state.mcp_new_id.clone(), state.mcp_new_command.clone()));
-        }
     });
+    ui.add_space(8.0);
 
-    ui.add_space(6.0);
-    if let Some(path) = mcp_config_hint() {
-        ui.label(
-            egui::RichText::new(format!("配置文件：{}", path.display()))
-                .weak()
-                .size(11.0),
+    let pane_h = (body_h * 0.62).clamp(260.0, 540.0);
+    let list_w = (ui.available_width() * 0.46).clamp(260.0, 380.0);
+    let needle = state.skill_query.trim().to_lowercase();
+    let ws = state.workdir.clone();
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(list_w, pane_h),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(list_w);
+                egui::ScrollArea::vertical()
+                    .id_salt("skills_list")
+                    .auto_shrink([false; 2])
+                    .max_height(pane_h)
+                    .show(ui, |ui| {
+                        if state.skill_items.is_empty() {
+                            show_empty(ui, SKILLS_EMPTY_MSG);
+                            return;
+                        }
+                        for item in &state.skill_items {
+                            let desc = state
+                                .skill_descriptions
+                                .get(&item.id)
+                                .map(String::as_str)
+                                .unwrap_or("");
+                            if !needle.is_empty()
+                                && !item.id.to_lowercase().contains(&needle)
+                                && !desc.to_lowercase().contains(&needle)
+                            {
+                                continue;
+                            }
+                            let selected = matches!(
+                                (&state.skill_view, &item.config_path),
+                                (Some((v, _)), Some(p)) if v == p
+                            );
+                            let project = matches!(
+                                (&ws, &item.config_path),
+                                (Some(w), Some(p)) if p.starts_with(w)
+                            );
+                            let (fill, stroke) = if selected {
+                                (
+                                    crate::theme::selected_fill(),
+                                    crate::theme::accent_stroke_soft(),
+                                )
+                            } else {
+                                (crate::theme::card_bg(), crate::theme::hairline())
+                            };
+                            egui::Frame::none()
+                                .fill(fill)
+                                .stroke(egui::Stroke::new(1.0_f32, stroke))
+                                .rounding(egui::Rounding::same(crate::theme::radius::MD))
+                                .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        let name = egui::RichText::new(&item.display_name)
+                                            .strong()
+                                            .size(13.0)
+                                            .color(crate::theme::text_primary());
+                                        if ui
+                                            .add(egui::Label::new(name).sense(egui::Sense::click()))
+                                            .clicked()
+                                        {
+                                            view = item.config_path.clone();
+                                        }
+                                        let (tag, color) = if project {
+                                            ("项目", crate::theme::accent_cyan())
+                                        } else {
+                                            ("用户", crate::theme::text_muted())
+                                        };
+                                        crate::theme::status_pill(ui, tag, color);
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let on = item.state == ItemState::Enabled;
+                                                if item.capability == ItemCapability::ReadWrite
+                                                    && crate::theme::toggle_switch(ui, on).clicked()
+                                                {
+                                                    toggle = Some(item.id.clone());
+                                                }
+                                            },
+                                        );
+                                    });
+                                    let text = if desc.is_empty() {
+                                        "（无描述）"
+                                    } else {
+                                        desc
+                                    };
+                                    let label = egui::RichText::new(truncate(text, 140))
+                                        .size(11.5)
+                                        .color(crate::theme::text_muted());
+                                    if ui
+                                        .add(egui::Label::new(label).sense(egui::Sense::click()))
+                                        .clicked()
+                                    {
+                                        view = item.config_path.clone();
+                                    }
+                                });
+                            ui.add_space(6.0);
+                        }
+                    });
+            },
         );
-    }
-    ui.add_space(10.0);
+        ui.add_space(8.0);
+        ui.vertical(|ui| {
+            egui::Frame::none()
+                .fill(crate::theme::card_bg())
+                .rounding(egui::Rounding::same(crate::theme::radius::MD))
+                .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                .show(ui, |ui| {
+                    ui.set_min_height(pane_h - 20.0);
+                    ui.set_width(ui.available_width());
+                    match &state.skill_view {
+                        Some((path, text)) => {
+                            ui.label(
+                                egui::RichText::new(path.to_string_lossy())
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(crate::theme::text_muted()),
+                            );
+                            ui.add_space(6.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("skill_view")
+                                .auto_shrink([false; 2])
+                                .max_height(pane_h - 50.0)
+                                .show(ui, |ui| {
+                                    crate::markdown_ui::show_markdown(
+                                        ui,
+                                        text,
+                                        crate::markdown_ui::MarkdownView {
+                                            streaming: false,
+                                            show_role: false,
+                                        },
+                                    );
+                                });
+                        }
+                        None => {
+                            ui.label(
+                                egui::RichText::new("点击左侧技能名称或描述，查看 SKILL.md 全文。")
+                                    .color(crate::theme::text_muted()),
+                            );
+                        }
+                    }
+                });
+        });
+    });
+    ui.add_space(14.0);
     let pkg_action = ext_market::render_installed_table(ui, &state.installed_packages, "", true);
-    SkillsMcpUi {
-        skill_toggle,
-        mcp_toggle,
-        mcp_add,
+    SkillsPageUi {
+        toggle,
+        view,
         pkg_action,
     }
+}
+
+pub(super) fn render_mcp_page(ui: &mut egui::Ui, state: &mut AdminPanelState) -> McpPageUi {
+    let mut out = McpPageUi::default();
+    let enabled = state
+        .mcp_items
+        .iter()
+        .filter(|i| i.state == ItemState::Enabled)
+        .count();
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{enabled} 个启用 · 共 {} 个",
+                state.mcp_items.len()
+            ))
+            .size(12.0)
+            .color(crate::theme::text_muted()),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.mcp_query)
+                    .hint_text("搜索 MCP 服务…")
+                    .desired_width(220.0),
+            );
+        });
+    });
+    ui.add_space(8.0);
+    if state.mcp_items.is_empty() {
+        show_empty(ui, MCP_EMPTY_MSG);
+    }
+    let needle = state.mcp_query.trim().to_lowercase();
+    for item in &state.mcp_items {
+        if !needle.is_empty() && !item.id.to_lowercase().contains(&needle) {
+            continue;
+        }
+        let detail = state.mcp_details.get(&item.id);
+        let on = item.state == ItemState::Enabled;
+        egui::Frame::none()
+            .fill(crate::theme::card_bg())
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::hairline()))
+            .rounding(egui::Rounding::same(crate::theme::radius::MD))
+            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(&item.display_name)
+                            .strong()
+                            .size(13.0)
+                            .color(crate::theme::text_primary()),
+                    );
+                    let (tag, color) = if on {
+                        ("已启用", crate::theme::ok())
+                    } else {
+                        ("已关闭", crate::theme::text_muted())
+                    };
+                    crate::theme::status_pill(ui, tag, color);
+                    let editable = item.capability == ItemCapability::ReadWrite
+                        && item.id != "__parse_error__";
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !editable {
+                            return;
+                        }
+                        if crate::theme::toggle_switch(ui, on).clicked() {
+                            out.toggle = Some(item.id.clone());
+                        }
+                        if state.mcp_confirm_remove.as_deref() == Some(item.id.as_str()) {
+                            if ui.button("取消").clicked() {
+                                out.cancel_remove = true;
+                            }
+                            let confirm =
+                                egui::RichText::new("确认删除").color(crate::theme::danger());
+                            if ui.button(confirm).clicked() {
+                                out.remove = Some(item.id.clone());
+                            }
+                        } else {
+                            if crate::theme::ghost_button(ui, "删除").clicked() {
+                                out.remove_request = Some(item.id.clone());
+                            }
+                            if crate::theme::ghost_button(ui, "编辑").clicked() {
+                                out.edit = Some(item.id.clone());
+                            }
+                        }
+                    });
+                });
+                if let Some(d) = detail {
+                    let line = match &d.url {
+                        Some(url) if d.command.is_empty() => url.clone(),
+                        _ => std::iter::once(d.command.as_str())
+                            .chain(d.args.iter().map(String::as_str))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    };
+                    if !line.trim().is_empty() {
+                        ui.label(
+                            egui::RichText::new(truncate(&line, 160))
+                                .monospace()
+                                .size(11.0)
+                                .color(crate::theme::text_muted()),
+                        );
+                    }
+                    if !d.env.is_empty() {
+                        let keys: Vec<&str> = d.env.keys().map(String::as_str).collect();
+                        ui.label(
+                            egui::RichText::new(format!("env: {}", keys.join(", ")))
+                                .size(11.0)
+                                .color(crate::theme::text_dim()),
+                        );
+                    }
+                }
+            });
+        ui.add_space(6.0);
+    }
+
+    ui.add_space(8.0);
+    egui::Frame::none()
+        .fill(crate::theme::card_raised())
+        .stroke(egui::Stroke::new(1.0_f32, crate::theme::hairline()))
+        .rounding(egui::Rounding::same(crate::theme::radius::MD))
+        .inner_margin(egui::Margin::symmetric(14.0, 12.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let title = match &state.mcp_editing {
+                Some(id) => format!("编辑服务：{id}"),
+                None => "添加服务".to_owned(),
+            };
+            ui.label(egui::RichText::new(title).strong().size(13.0));
+            ui.add_space(6.0);
+            let editing = state.mcp_editing.is_some();
+            egui::Grid::new("mcp_form")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("名称");
+                    ui.add_enabled(
+                        !editing,
+                        egui::TextEdit::singleline(&mut state.mcp_new_id)
+                            .hint_text("例如 filesystem")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.end_row();
+                    ui.label("命令");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.mcp_new_command)
+                            .hint_text("例如 npx")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.end_row();
+                    ui.label("参数");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut state.mcp_new_args)
+                            .hint_text(
+                                "每行一个，例如\n-y\n@modelcontextprotocol/server-filesystem",
+                            )
+                            .desired_rows(3)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    ui.end_row();
+                    ui.label("环境变量");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut state.mcp_new_env)
+                            .hint_text("每行 KEY=VALUE")
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    ui.end_row();
+                });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if crate::theme::primary_button(ui, "保存到 mcp.json").clicked() {
+                    out.save = true;
+                }
+                if editing && crate::theme::ghost_button(ui, "取消编辑").clicked() {
+                    out.cancel_edit = true;
+                }
+            });
+        });
+
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if let Some(path) = mcp_config_hint() {
+            ui.label(
+                egui::RichText::new(format!("配置文件：{}", path.display()))
+                    .size(11.0)
+                    .color(crate::theme::text_muted()),
+            );
+        }
+        let label = if state.mcp_show_json {
+            "收起 mcp.json"
+        } else {
+            "查看 mcp.json"
+        };
+        if crate::theme::ghost_button(ui, label).clicked() {
+            out.toggle_json = true;
+        }
+    });
+    if state.mcp_show_json {
+        egui::Frame::none()
+            .fill(crate::theme::input_bg())
+            .rounding(egui::Rounding::same(crate::theme::radius::MD))
+            .inner_margin(egui::Margin::same(10.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::ScrollArea::vertical()
+                    .id_salt("mcp_json")
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(&state.mcp_json_text)
+                                .monospace()
+                                .size(11.0),
+                        );
+                    });
+            });
+    }
+    out
 }
 
 pub(super) fn mcp_config_hint() -> Option<PathBuf> {
@@ -113,249 +430,201 @@ pub(super) fn mcp_config_hint() -> Option<PathBuf> {
 pub(super) fn render_memory_workspace(
     ui: &mut egui::Ui,
     state: &mut AdminPanelState,
+    body_h: f32,
 ) -> (bool, bool, Option<PathBuf>) {
-    ui.label(egui::RichText::new("记忆设置").strong().size(14.0));
-    ui.label(
-        egui::RichText::new("管理应用内的记忆文件、记忆片段与长期上下文存储。")
-            .weak()
-            .size(11.0),
-    );
-    ui.add_space(8.0);
-    ui.add(
-        egui::TextEdit::singleline(&mut state.memory_query)
-            .hint_text("搜索记忆文件…")
-            .desired_width(f32::INFINITY),
-    );
-    ui.add_space(8.0);
+    use crate::memory_store::MemoryGroup;
 
     let mut save = false;
     let mut cancel = false;
     let mut open_path = None;
-    let query = state.memory_query.clone();
-    ui.columns(2, |cols| {
-        if let Some(editor) = &mut state.memory_editor {
-            let (s, c) = render_memory_editor(&mut cols[0], editor);
-            save = s;
-            cancel = c;
+    let mut pick: Option<PathBuf> = None;
+    let mut reveal: Option<PathBuf> = None;
+    let pane_h = (body_h - 12.0).max(280.0);
+    let list_w = 236.0;
+
+    if state.memory_selected.is_none() {
+        if let Some(first) = state.memory_files.first() {
+            pick = Some(first.path.clone());
         }
-        open_path = render_memory_list(
-            &mut cols[0],
-            &state.memory_entries,
-            state.session_memory_text.as_deref(),
-            state
+    }
+
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(list_w, pane_h),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(list_w);
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.memory_query)
+                        .hint_text("搜索记忆文件…")
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(4.0);
+                let needle = state.memory_query.trim().to_lowercase();
+                egui::ScrollArea::vertical()
+                    .id_salt("mem_tree")
+                    .auto_shrink([false; 2])
+                    .max_height(pane_h - 34.0)
+                    .show(ui, |ui| {
+                        for group in MemoryGroup::ALL {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(group.label())
+                                    .strong()
+                                    .size(12.0)
+                                    .color(crate::theme::text_primary()),
+                            )
+                            .on_hover_text(group.hint());
+                            ui.label(
+                                egui::RichText::new(group.hint())
+                                    .size(10.5)
+                                    .color(crate::theme::text_muted()),
+                            );
+                            ui.add_space(2.0);
+                            let mut any = false;
+                            for file in state.memory_files.iter().filter(|f| {
+                                f.group == group
+                                    && (needle.is_empty()
+                                        || f.label.to_lowercase().contains(&needle))
+                            }) {
+                                any = true;
+                                let selected =
+                                    state.memory_selected.as_deref() == Some(file.path.as_path());
+                                let resp = ui
+                                    .with_layout(
+                                        egui::Layout::top_down_justified(egui::Align::Min),
+                                        |ui| {
+                                            ui.selectable_label(
+                                                selected,
+                                                egui::RichText::new(&file.label).size(12.0),
+                                            )
+                                        },
+                                    )
+                                    .inner
+                                    .on_hover_text(file.path.display().to_string());
+                                if resp.clicked() {
+                                    pick = Some(file.path.clone());
+                                }
+                            }
+                            if !any {
+                                ui.label(
+                                    egui::RichText::new("暂无文件")
+                                        .size(11.0)
+                                        .italics()
+                                        .color(crate::theme::text_muted()),
+                                );
+                            }
+                        }
+                    });
+            },
+        );
+        ui.separator();
+        ui.vertical(|ui| {
+            let Some(path) = state.memory_selected.clone() else {
+                show_empty(
+                    ui,
+                    "还没有记忆文件。Pi 写入长期记忆、或每轮回复结束后，这里会自动出现。",
+                );
+                return;
+            };
+            let editing = state
                 .memory_editor
                 .as_ref()
-                .map(|editor| editor.source_path.as_path()),
-            &query,
-        );
-
-        render_trace_token_panel(&mut cols[1], state.memory_insights.as_ref());
-    });
-    (save, cancel, open_path)
-}
-
-pub(super) fn render_trace_token_panel(
-    ui: &mut egui::Ui,
-    insights: Option<&crate::session_insights::SessionInsights>,
-) {
-    crate::theme::card_frame().show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Trace / Token 面板")
+                .is_some_and(|e| e.source_path == path);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        path.file_name().and_then(|s| s.to_str()).unwrap_or("文件"),
+                    )
                     .strong()
-                    .size(13.0),
-            );
-            ui.label(egui::RichText::new("Beta").weak().size(10.0));
-        });
-        let Some(insights) = insights else {
-            ui.label(
-                egui::RichText::new("进入对话后，这里会显示本轮 Token 与工具耗时。")
-                    .weak()
-                    .size(11.0),
-            );
-            return;
-        };
-        let (tokens, trace, tps) = insights.footer_metric_parts();
-        ui.label(
-            egui::RichText::new(format!("{tokens}  ·  {trace}  ·  {tps}"))
-                .weak()
-                .size(11.0),
-        );
-        ui.add_space(8.0);
-        let slices = insights.token_slices();
-        let total: u64 = slices.iter().map(|(_, v)| *v).sum();
-        let colors = [
-            crate::theme::accent(),
-            crate::theme::ok(),
-            crate::theme::warn(),
-            crate::theme::accent_soft(),
-        ];
-        let chart: Vec<(egui::Color32, f32)> = slices
-            .iter()
-            .enumerate()
-            .map(|(i, (_, v))| (colors[i % colors.len()], *v as f32))
-            .collect();
-        ui.horizontal(|ui| {
-            crate::theme::donut_chart(
-                ui,
-                &chart,
-                if total == 0 {
-                    "—".to_owned()
-                } else {
-                    format!("{total}")
-                }
-                .as_str(),
-            );
-            ui.vertical(|ui| {
-                for (i, (label, value)) in slices.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(colors[i % colors.len()], "●");
-                        ui.label(
-                            egui::RichText::new(format!("{label}  {value}"))
-                                .size(11.0)
-                                .color(crate::theme::text_muted()),
-                        );
-                    });
-                }
-                if slices.is_empty() {
-                    ui.label(egui::RichText::new("暂无 Token 明细").weak().size(11.0));
-                }
-            });
-        });
-        ui.add_space(10.0);
-        ui.label(
-            egui::RichText::new("工具调用时间（本轮）")
-                .strong()
-                .size(12.0),
-        );
-        let max_ms = insights
-            .trace_steps
-            .iter()
-            .filter_map(|s| s.duration_ms)
-            .max()
-            .unwrap_or(0);
-        if insights.trace_steps.is_empty() {
-            ui.label(egui::RichText::new("暂无工具调用").weak().size(11.0));
-        } else {
-            for (i, step) in insights.trace_steps.iter().enumerate() {
-                crate::theme::bar_row(
-                    ui,
-                    &step.tool_name,
-                    step.duration_ms.unwrap_or(0),
-                    max_ms,
-                    colors[i % colors.len()],
+                    .size(14.0),
                 );
-            }
-        }
-    });
-}
-
-/// 渲染条目列表，返回被点击的开关 id。`query` 只过滤显示，不改数据。
-pub(super) fn render_item_list(
-    ui: &mut egui::Ui,
-    section: &str,
-    items: &mut [ManagedItem],
-    empty_msg: &str,
-    query: &str,
-) -> Option<String> {
-    ui.add_space(4.0);
-    let enabled = items
-        .iter()
-        .filter(|item| item.state == ItemState::Enabled)
-        .count();
-    ui.label(
-        egui::RichText::new(format!(
-            "{section}    {enabled} 个启用 / {} 个",
-            items.len()
-        ))
-        .strong()
-        .size(13.0),
-    );
-    ui.add_space(6.0);
-
-    if items.is_empty() {
-        show_empty(ui, empty_msg);
-        return None;
-    }
-
-    let needle = query.trim().to_lowercase();
-    let shown: Vec<usize> = items
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| {
-            if needle.is_empty() {
-                return true;
-            }
-            let tag = item.tag.as_deref().unwrap_or("");
-            item.display_name.to_lowercase().contains(&needle)
-                || item.id.to_lowercase().contains(&needle)
-                || tag.to_lowercase().contains(&needle)
-        })
-        .map(|(index, _)| index)
-        .collect();
-
-    if shown.is_empty() {
-        ui.label(
-            egui::RichText::new("没有匹配的条目")
-                .weak()
-                .italics()
-                .size(12.0),
-        );
-        return None;
-    }
-
-    let mut toggle_id: Option<String> = None;
-    for index in shown {
-        let item = &mut items[index];
-        let is_enabled = item.state == ItemState::Enabled;
-        let can_toggle = item.capability == ItemCapability::ReadWrite;
-        let (state_text, state_color) = match item.state {
-            ItemState::Enabled => ("已启用", crate::theme::ok()),
-            ItemState::Disabled => ("已关闭", crate::theme::danger()),
-            ItemState::Unknown => ("未知", crate::theme::warn()),
-        };
-
-        egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-            .rounding(egui::Rounding::same(8.0))
-            .fill(ui.visuals().extreme_bg_color)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(&item.display_name).strong().size(13.0));
-                        if let Some(tag) = &item.tag {
-                            ui.label(egui::RichText::new(tag).weak().monospace().size(11.0));
-                        }
-                        if item.capability == ItemCapability::ReadOnly {
-                            ui.label(
-                                egui::RichText::new("只读，没有可写的配置路径")
-                                    .weak()
-                                    .size(10.0),
-                            );
-                        }
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if can_toggle && crate::theme::toggle_switch(ui, is_enabled).clicked() {
-                            toggle_id = Some(item.id.clone());
-                        }
-                        ui.label(
-                            egui::RichText::new(state_text)
-                                .color(state_color)
-                                .size(12.0),
-                        );
-                    });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::icons::icon_button(
+                        ui,
+                        crate::icons::Icon::FolderOpen,
+                        "在文件管理器中显示",
+                    )
+                    .clicked()
+                    {
+                        reveal = Some(path.clone());
+                    }
+                    if !editing
+                        && crate::icons::icon_button(ui, crate::icons::Icon::Edit, "编辑").clicked()
+                    {
+                        open_path = Some(path.clone());
+                    }
                 });
             });
-        ui.add_space(6.0);
-    }
+            ui.label(
+                egui::RichText::new(path.to_string_lossy())
+                    .monospace()
+                    .size(10.5)
+                    .color(crate::theme::text_muted()),
+            );
+            ui.add_space(6.0);
+            if editing {
+                if let Some(editor) = &mut state.memory_editor {
+                    let (s, c) = render_memory_editor(ui, editor, pane_h - 110.0);
+                    save = s;
+                    cancel = c;
+                }
+                return;
+            }
+            egui::Frame::none()
+                .fill(crate::theme::card_bg())
+                .rounding(egui::Rounding::same(crate::theme::radius::MD))
+                .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("mem_view")
+                        .auto_shrink([false; 2])
+                        .max_height(pane_h - 80.0)
+                        .show(ui, |ui| match &state.memory_view {
+                            Some((p, text)) if *p == path && !text.trim().is_empty() => {
+                                crate::markdown_ui::show_markdown(
+                                    ui,
+                                    text,
+                                    crate::markdown_ui::MarkdownView {
+                                        streaming: false,
+                                        show_role: false,
+                                    },
+                                );
+                            }
+                            Some((p, _)) if *p == path => {
+                                ui.label(egui::RichText::new("（空文件）").italics());
+                            }
+                            _ => {
+                                ui.label("…");
+                            }
+                        });
+                });
+        });
+    });
 
-    toggle_id
+    if let Some(path) = pick {
+        if state
+            .memory_editor
+            .as_ref()
+            .is_some_and(|e| e.source_path != path)
+        {
+            state.memory_editor = None;
+        }
+        state.load_memory_view(path);
+    }
+    if let Some(path) = reveal {
+        if let Err(e) = crate::workspace_git::reveal_in_file_manager(&path) {
+            state.last_error = Some(e);
+        }
+    }
+    (save, cancel, open_path)
 }
 
 /// 渲染记忆内联编辑器，返回 (save_clicked, cancel_clicked)。
 pub(super) fn render_memory_editor(
     ui: &mut egui::Ui,
     editor: &mut MemoryEditorState,
+    max_height: f32,
 ) -> (bool, bool) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -393,7 +662,7 @@ pub(super) fn render_memory_editor(
     ui.add_space(4.0);
     egui::ScrollArea::vertical()
         .id_salt("mem_editor_scroll")
-        .max_height(200.0)
+        .max_height(max_height.max(160.0))
         .show(ui, |ui| {
             ui.add(
                 egui::TextEdit::multiline(&mut editor.content)
@@ -426,103 +695,6 @@ pub(super) fn render_memory_editor(
     });
 
     (save_clicked, cancel_clicked)
-}
-
-/// 渲染记忆列表，返回用户点击「编辑」的条目路径（None = 未点击）。
-pub(super) fn render_memory_list(
-    ui: &mut egui::Ui,
-    entries: &[MemoryEntry],
-    session_text: Option<&str>,
-    active_edit_path: Option<&Path>,
-    query: &str,
-) -> Option<PathBuf> {
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new("记忆文件").strong().size(13.0));
-    ui.add_space(6.0);
-
-    let mut open_path: Option<PathBuf> = None;
-
-    for layer in [
-        MemoryLayer::Project,
-        MemoryLayer::User,
-        MemoryLayer::Session,
-    ] {
-        let needle = query.trim().to_ascii_lowercase();
-        let layer_entries: Vec<&MemoryEntry> = entries
-            .iter()
-            .filter(|e| e.layer == layer)
-            .filter(|e| {
-                needle.is_empty()
-                    || e.key.to_ascii_lowercase().contains(&needle)
-                    || e.excerpt.to_ascii_lowercase().contains(&needle)
-                    || e.source_path
-                        .as_ref()
-                        .and_then(|p| p.to_str())
-                        .is_some_and(|p| p.to_ascii_lowercase().contains(&needle))
-            })
-            .collect();
-        let has_session = layer == MemoryLayer::Session && session_text.is_some();
-        let has_content = !layer_entries.is_empty() || has_session;
-
-        egui::CollapsingHeader::new(
-            egui::RichText::new(format!("▸ {} 层", layer.label()))
-                .strong()
-                .size(13.0),
-        )
-        .id_salt(format!("mem_{}", layer.label()))
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(layer.description())
-                    .weak()
-                    .italics()
-                    .size(11.0),
-            );
-            ui.add_space(4.0);
-
-            if !has_content {
-                show_empty(ui, layer.empty_label());
-                return;
-            }
-
-            if has_session {
-                let text = session_text.unwrap_or_default();
-                show_excerpt_frame(
-                    ui,
-                    "会话上下文",
-                    &truncate(text, 240),
-                    None,
-                    None,
-                    &mut open_path,
-                );
-            }
-
-            for entry in layer_entries {
-                let is_active = entry
-                    .source_path
-                    .as_deref()
-                    .zip(active_edit_path)
-                    .map(|(a, b)| a == b)
-                    .unwrap_or(false);
-                show_excerpt_frame(
-                    ui,
-                    &entry.key,
-                    &entry.excerpt,
-                    entry.source_path.as_ref(),
-                    if is_active {
-                        None
-                    } else {
-                        entry.source_path.as_ref()
-                    },
-                    &mut open_path,
-                );
-                ui.add_space(3.0);
-            }
-        });
-        ui.add_space(4.0);
-    }
-
-    open_path
 }
 
 /// 首次引导 / 通用设置：当前 bash 来源（内嵌 MinGit 或系统路径）。
@@ -820,45 +992,6 @@ pub(super) fn render_models(
     }
 
     (rpc_request, want_restart, write_error)
-}
-
-pub(super) fn show_excerpt_frame(
-    ui: &mut egui::Ui,
-    title: &str,
-    excerpt: &str,
-    display_path: Option<&PathBuf>,
-    edit_path: Option<&PathBuf>,
-    open_path_out: &mut Option<PathBuf>,
-) {
-    egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-        .rounding(egui::Rounding::same(4.0))
-        .fill(ui.visuals().extreme_bg_color)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(title).strong().size(12.0));
-                if let Some(p) = display_path {
-                    ui.label(
-                        egui::RichText::new(format!("({})", p.to_string_lossy()))
-                            .weak()
-                            .monospace()
-                            .size(10.0),
-                    );
-                }
-                if let Some(p) = edit_path {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("✏")
-                            .on_hover_text("在面板内编辑此文件")
-                            .clicked()
-                        {
-                            *open_path_out = Some(p.clone());
-                        }
-                    });
-                }
-            });
-            ui.label(egui::RichText::new(excerpt).weak().size(11.0));
-        });
 }
 
 pub(super) fn show_empty(ui: &mut egui::Ui, msg: &str) {

@@ -32,6 +32,8 @@ use crate::provider_catalog::{self, AddProviderForm, CustomProvider};
 
 mod views;
 use views::*;
+pub mod extensions;
+use extensions::*;
 pub use views::{show_pi_binary_recovery, show_shell_source};
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
@@ -128,24 +130,6 @@ impl MemoryLayer {
             MemoryLayer::Project => "Project",
             MemoryLayer::User => "User",
             MemoryLayer::Session => "Session",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            MemoryLayer::Project => "当前项目指令（CLAUDE.md / AGENTS.md / .pi/APPEND_SYSTEM.md）",
-            MemoryLayer::User => "用户级跨项目指令（~/.pi/agent/AGENTS.md 或 CLAUDE.md）",
-            MemoryLayer::Session => "本次 RPC 会话临时上下文（进程重启后不保留）",
-        }
-    }
-
-    fn empty_label(self) -> &'static str {
-        match self {
-            MemoryLayer::Project => {
-                "未发现项目指令文件（CLAUDE.md / AGENTS.md / .pi/APPEND_SYSTEM.md）"
-            }
-            MemoryLayer::User => "未发现用户指令文件（~/.pi/agent/AGENTS.md）",
-            MemoryLayer::Session => "当前会话无注入上下文",
         }
     }
 }
@@ -325,6 +309,22 @@ pub struct AdminPanelState {
     pub memory_insights: Option<crate::session_insights::SessionInsights>,
     /// 是否显示首次模型引导。默认关，仅「通用」页可打开。
     pub show_onboarding: bool,
+    /// 当前工作区（项目级 skills / mcp / 记忆从这里发现）。
+    pub workdir: Option<PathBuf>,
+    pub memory_files: Vec<crate::memory_store::MemoryFile>,
+    pub memory_selected: Option<PathBuf>,
+    /// 查看器缓存：(路径, 内容)。
+    pub memory_view: Option<(PathBuf, String)>,
+    /// skill id → SKILL.md 描述。
+    pub skill_descriptions: std::collections::BTreeMap<String, String>,
+    pub skill_view: Option<(PathBuf, String)>,
+    pub mcp_details: std::collections::BTreeMap<String, McpDetail>,
+    pub mcp_new_args: String,
+    pub mcp_new_env: String,
+    pub mcp_editing: Option<String>,
+    pub mcp_confirm_remove: Option<String>,
+    pub mcp_show_json: bool,
+    pub mcp_json_text: String,
 }
 
 impl AdminPanelState {
@@ -334,12 +334,15 @@ impl AdminPanelState {
         let (items, settings) = discover_skills_with_settings();
         self.skill_items = items;
         self.skills_settings = Some(settings);
+        self.skill_descriptions = skill_descriptions(&self.skill_items);
         self.skills_state = DiscoveryState::Ready;
 
         self.mcp_items = discover_mcp();
+        self.mcp_details = discover_mcp_details();
         self.mcp_state = DiscoveryState::Ready;
 
         self.memory_entries = discover_memory();
+        self.refresh_memory_files();
         self.memory_state = DiscoveryState::Ready;
 
         self.model_config = discover_model_config();
@@ -350,6 +353,35 @@ impl AdminPanelState {
 
         let auth_path = pi_agent_dir().map(|dir| dir.join("auth.json"));
         self.api_keys.refresh(auth_path.as_deref());
+    }
+
+    pub fn set_workdir(&mut self, path: PathBuf) {
+        if let Ok(mut root) = WORKSPACE_ROOT.lock() {
+            *root = Some(path.clone());
+        }
+        self.workdir = Some(path);
+        self.memory_selected = None;
+        self.memory_view = None;
+        if self.skills_state != DiscoveryState::NotStarted {
+            self.rediscover();
+        }
+    }
+
+    /// 重新枚举记忆文件，并刷新查看器里当前文件的内容。
+    pub fn refresh_memory_files(&mut self) {
+        self.memory_files = crate::memory_store::list_memory_files(
+            self.workdir.as_deref(),
+            pi_agent_dir().as_deref(),
+        );
+        if let Some(path) = self.memory_selected.clone() {
+            self.load_memory_view(path);
+        }
+    }
+
+    pub fn load_memory_view(&mut self, path: PathBuf) {
+        let text = fs::read_to_string(&path).unwrap_or_else(|e| format!("读取失败：{e}"));
+        self.memory_selected = Some(path.clone());
+        self.memory_view = Some((path, text));
     }
 
     pub fn rediscover(&mut self) {
@@ -683,7 +715,7 @@ impl AdminPanelState {
         let mut memory_want_save = false;
         let mut memory_want_cancel = false;
         let mut memory_open_path: Option<PathBuf> = None;
-        let mut mcp_add: Option<(String, String)> = None;
+        let mut mcp_page: Option<McpPageUi> = None;
         let mut close_drawer = false;
         let mut models_result = provider_catalog::ModelsTabResult::default();
         let mut market_result = ext_market::MarketUiResult::default();
@@ -825,23 +857,23 @@ impl AdminPanelState {
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         match self.active_tab {
-                            AdminTab::Skills | AdminTab::Mcp => {
-                                let workspace = render_skills_mcp_workspace(ui, self);
-                                if let Some(id) = workspace.skill_toggle {
+                            AdminTab::Skills => {
+                                let page = render_skills_page(ui, self, body_h);
+                                if let Some(id) = page.toggle {
                                     if let Err(e) = self.toggle_skill(&id) {
                                         self.last_error = Some(e);
                                     }
                                 }
-                                if let Some(id) = workspace.mcp_toggle {
-                                    if let Err(e) = self.toggle_mcp(&id) {
-                                        self.last_error = Some(e);
-                                    }
+                                if let Some(path) = page.view {
+                                    self.open_skill_view(path);
                                 }
-                                mcp_add = workspace.mcp_add;
-                                skills_pkg_action = workspace.pkg_action;
+                                skills_pkg_action = page.pkg_action;
+                            }
+                            AdminTab::Mcp => {
+                                mcp_page = Some(render_mcp_page(ui, self));
                             }
                             AdminTab::Memory => {
-                                let (save, cancel, open_path) = render_memory_workspace(ui, self);
+                                let (save, cancel, open_path) = render_memory_workspace(ui, self, body_h);
                                 memory_want_save = save;
                                 memory_want_cancel = cancel;
                                 memory_open_path = open_path;
@@ -1013,24 +1045,8 @@ impl AdminPanelState {
             self.apply_control_disable(&name);
         }
 
-        if let Some((id, command)) = mcp_add {
-            match pi_agent_dir() {
-                Some(dir) => {
-                    let path = dir.join("mcp.json");
-                    match upsert_mcp_server(&path, &id, &command) {
-                        Ok(()) => {
-                            self.mcp_items = discover_mcp();
-                            self.mcp_new_id.clear();
-                            self.mcp_new_command.clear();
-                            self.sidecar_restart_needed = true;
-                        }
-                        Err(err) => self.last_error = Some(format!("添加 MCP 失败：{err}")),
-                    }
-                }
-                None => {
-                    self.last_error = Some("找不到 Pi 配置目录，无法写入 mcp.json。".to_owned());
-                }
-            }
+        if let Some(page) = mcp_page {
+            self.apply_mcp_page(page);
         }
 
         // ── 应用记忆编辑器动作（在 egui 闭包外，避免借用冲突）──────────
@@ -1045,6 +1061,7 @@ impl AdminPanelState {
                 Some((_, Ok(()))) => {
                     self.memory_entries = discover_memory();
                     self.memory_editor = None;
+                    self.refresh_memory_files();
                 }
                 Some((_, Err(e))) => {
                     if let Some(ed) = &mut self.memory_editor {
@@ -1178,6 +1195,16 @@ fn apply_models_result(
 
 // ── Pi path resolution ────────────────────────────────────────────────────
 
+static WORKSPACE_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// 当前工作区；壳尚未告知时退回进程 cwd。
+fn workspace_root() -> io::Result<PathBuf> {
+    match WORKSPACE_ROOT.lock().ok().and_then(|root| root.clone()) {
+        Some(path) => Ok(path),
+        None => std::env::current_dir(),
+    }
+}
+
 /// Pi agent 目录（默认 ~/.pi/agent，可被 PI_CODING_AGENT_DIR 覆盖）。
 pub fn pi_agent_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("PI_CODING_AGENT_DIR") {
@@ -1193,7 +1220,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn pi_project_dir() -> Option<PathBuf> {
-    std::env::current_dir().ok().map(|d| d.join(".pi"))
+    workspace_root().ok().map(|d| d.join(".pi"))
 }
 
 // ── Skills settings ───────────────────────────────────────────────────────
@@ -1286,7 +1313,7 @@ pub fn discover_skills_with_settings() -> (Vec<ManagedItem>, SkillsSettings) {
     let dirs: &[(Option<PathBuf>, _)] = &[
         (pi_project_dir().map(|d| d.join("skills")), ()),
         (
-            std::env::current_dir()
+            workspace_root()
                 .ok()
                 .map(|d| d.join(".agents").join("skills")),
             (),
@@ -1586,7 +1613,7 @@ pub fn discover_memory() -> Vec<MemoryEntry> {
 
 fn project_memory_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
+    if let Ok(cwd) = workspace_root() {
         for name in &["CLAUDE.md", "AGENTS.md", "AGENTS.override.md"] {
             paths.push(cwd.join(name));
         }

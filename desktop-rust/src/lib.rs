@@ -13,6 +13,7 @@ pub mod ext_market;
 pub mod fonts;
 pub mod icons;
 pub mod markdown_ui;
+pub mod memory_store;
 pub mod message_tree;
 pub mod onboarding;
 pub mod pi_path;
