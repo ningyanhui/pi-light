@@ -1783,7 +1783,7 @@ impl PiLightApp {
                                                 .size(12.0)
                                                 .color(theme::accent_bright()),
                                         )
-                                        .fill(theme::accent_soft())
+                                        .fill(theme::accent().gamma_multiply(0.18))
                                         .stroke(egui::Stroke::new(
                                             1.0_f32,
                                             theme::accent().gamma_multiply(0.35),
@@ -2144,26 +2144,6 @@ impl PiLightApp {
                 }
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.label(
-                        egui::RichText::new(truncate_display(&title, 48))
-                            .strong()
-                            .size(14.0)
-                            .color(theme::text_primary()),
-                    );
-                    if streaming {
-                        theme::status_pill(ui, "Agent 运行中", theme::accent_cyan());
-                    } else {
-                        let meta = if turns == 0 {
-                            format!("#{id}")
-                        } else {
-                            format!("#{id} · {turns} 条消息")
-                        };
-                        ui.label(
-                            egui::RichText::new(meta)
-                                .size(11.5)
-                                .color(theme::text_dim()),
-                        );
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if icons::icon_button_sized(
                             ui,
@@ -2177,24 +2157,58 @@ impl PiLightApp {
                         {
                             toggle_inspector = true;
                         }
-                        let model = spec.rsplit('/').next().unwrap_or(spec);
-                        let model = if model.is_empty() {
-                            "未选择模型"
-                        } else {
-                            model
-                        };
-                        egui::Frame::none()
-                            .stroke(egui::Stroke::new(1.0_f32, theme::hairline_strong()))
-                            .rounding(egui::Rounding::same(theme::radius::SM))
-                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(format!("{model} · 思考 {thinking}"))
-                                        .monospace()
-                                        .size(11.0)
-                                        .color(theme::text_muted()),
+                        if ui.available_width() > 360.0 {
+                            let model = spec.rsplit('/').next().unwrap_or(spec);
+                            let model = if model.is_empty() {
+                                "未选择模型"
+                            } else {
+                                model
+                            };
+                            egui::Frame::none()
+                                .stroke(egui::Stroke::new(1.0_f32, theme::hairline_strong()))
+                                .rounding(egui::Rounding::same(theme::radius::SM))
+                                .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("{model} · 思考 {thinking}"))
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(theme::text_muted()),
+                                    );
+                                });
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let meta_w = if streaming { 96.0 } else { 90.0 };
+                            ui.scope(|ui| {
+                                ui.set_max_width((ui.available_width() - meta_w).max(40.0));
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&title)
+                                            .strong()
+                                            .size(14.0)
+                                            .color(theme::text_primary()),
+                                    )
+                                    .truncate(),
                                 );
                             });
+                            if streaming {
+                                theme::status_pill(ui, "Agent 运行中", theme::accent_cyan());
+                            } else {
+                                let meta = if turns == 0 {
+                                    format!("#{id}")
+                                } else {
+                                    format!("#{id} · {turns} 条消息")
+                                };
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(meta)
+                                            .size(11.5)
+                                            .color(theme::text_dim()),
+                                    )
+                                    .truncate(),
+                                );
+                            }
+                        });
                     });
                 });
             });

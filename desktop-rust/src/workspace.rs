@@ -599,6 +599,7 @@ fn session_row(
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
+                    ui.set_max_width((ui.available_width() - 28.0).max(0.0));
                     ui.label(egui::RichText::new(title).size(13.0).color(if selected {
                         theme::text_primary()
                     } else {
@@ -611,22 +612,36 @@ fn session_row(
                             .color(theme::text_dim()),
                     );
                 });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let hover = ui.rect_contains_pointer(ui.max_rect()) || selected;
-                    if hover {
-                        ui.menu_button(
-                            egui::RichText::new("⋯")
-                                .size(16.0)
-                                .color(theme::text_muted()),
-                            |ui| {
-                                action = session_context_menu(ui, index);
-                            },
-                        );
-                    }
-                });
             });
         });
     let resp = inner.response.interact(egui::Sense::click());
+    let menu_id = egui::Id::new(("dock_session_row_menu", index));
+    let menu_was_open = ui.data(|d| d.get_temp::<bool>(menu_id).unwrap_or(false));
+    if selected || menu_was_open || ui.rect_contains_pointer(resp.rect) {
+        let btn = egui::Rect::from_center_size(
+            egui::pos2(resp.rect.right() - 22.0, resp.rect.center().y),
+            egui::vec2(26.0, 24.0),
+        );
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
+        let open = {
+            let ui = &mut child;
+            ui.menu_button(
+                egui::RichText::new("⋯")
+                    .size(16.0)
+                    .color(theme::text_muted()),
+                |ui| {
+                    if let Some(next) = session_context_menu(ui, index) {
+                        action = Some(next);
+                    }
+                },
+            )
+            .inner
+            .is_some()
+        };
+        if open != menu_was_open {
+            ui.data_mut(|d| d.insert_temp(menu_id, open));
+        }
+    }
     let hovered = resp.hovered();
     if hovered != was_hovered {
         ui.data_mut(|d| d.insert_temp(hover_id, hovered));
