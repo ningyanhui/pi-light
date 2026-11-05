@@ -255,8 +255,9 @@ impl AdminPanelState {
 
     pub(super) fn apply_mcp_page(&mut self, page: McpPageUi) {
         if let Some(id) = page.toggle {
-            if let Err(e) = self.toggle_mcp(&id) {
-                self.last_error = Some(e);
+            match self.toggle_mcp(&id) {
+                Ok(()) => self.reload_mcp(),
+                Err(e) => self.last_error = Some(e),
             }
         }
         if let Some(id) = page.edit {
@@ -323,6 +324,7 @@ impl AdminPanelState {
             let id = self.mcp_new_id.trim().to_owned();
             match upsert_mcp_server_full(&path, &id, &self.mcp_new_command, &args, &env) {
                 Ok(()) => {
+                    self.last_error = None;
                     self.clear_mcp_form();
                     self.reload_mcp();
                     self.sidecar_restart_needed = true;

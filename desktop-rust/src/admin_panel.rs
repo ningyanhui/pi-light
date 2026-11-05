@@ -337,8 +337,7 @@ impl AdminPanelState {
         self.skill_descriptions = skill_descriptions(&self.skill_items);
         self.skills_state = DiscoveryState::Ready;
 
-        self.mcp_items = discover_mcp();
-        self.mcp_details = discover_mcp_details();
+        self.reload_mcp();
         self.mcp_state = DiscoveryState::Ready;
 
         self.memory_entries = discover_memory();
