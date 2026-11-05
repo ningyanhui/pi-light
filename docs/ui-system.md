@@ -41,7 +41,7 @@ Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol n
 4. **Session strip + inspector:** the strip shows title, id / message count (or an Agent 运行中 pill), the current model · thinking, and the inspector toggle. The right inspector (`timeline_ui::show_inspector`, default on at ≥1280px) shows context usage, files read / changed this turn and run stats.
 5. **Conversation canvas:** content is centred at ≤820px. Tool calls render as a step timeline (`timeline_ui::show_timeline`): 读取 / 执行 / 修改 / 写入 / 搜索 rows with status, duration and an inline diff for edit / write steps (`tool_step::summarize` derives target and diff from the tool `args`).
 6. **Composer:** a floating card centred under the canvas: reference chips, the input, then 引用文件 / model / thinking on the left and retry + send (or 停止 while streaming) on the right.
-7. **Settings drawer:** one consistent panel surface with a clear title, tabs, scrollable content and explicit error feedback.
+7. **Settings panel:** a centered modal (max 1040×780) over the shell with a 184px left category nav (`theme::nav_row`, painter icons) and a scrollable content pane; 模型提供商 dialogs open at a fixed 520px width with a viewport-bounded, scrolling body.
 
 ## Rendering rules (desktop)
 

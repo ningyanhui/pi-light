@@ -723,6 +723,63 @@ pub fn cover_uv(tex: egui::Vec2, dest: egui::Vec2) -> egui::Rect {
     }
 }
 
+/// Vertical navigation row (settings categories): icon + label, accent bar when selected.
+pub fn nav_row(
+    ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    let fill = if selected {
+        selected_fill()
+    } else if resp.hovered() {
+        hover_fill()
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, radius::MD, fill);
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.top() + 9.0),
+                egui::vec2(3.0, rect.height() - 18.0),
+            ),
+            1.5,
+            accent(),
+        );
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    crate::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 20.0, rect.center().y),
+            egui::vec2(16.0, 16.0),
+        ),
+        icon,
+        if selected {
+            accent_bright()
+        } else {
+            text_muted()
+        },
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 38.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        if selected {
+            text_primary()
+        } else {
+            text_muted()
+        },
+    );
+    resp
+}
+
 /// Dropdown / command row: icon, title, optional dim detail line and a
 /// right-aligned shortcut hint.
 pub fn menu_row(

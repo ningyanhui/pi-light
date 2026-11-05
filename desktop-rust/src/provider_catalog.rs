@@ -1047,6 +1047,10 @@ pub fn render_add_provider(
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .order(egui::Order::Tooltip)
         .default_size(egui::vec2(540.0, 520.0))
+        .min_width(520.0)
+        .max_width(520.0)
+        .max_height((ctx.screen_rect().height() - 80.0).max(240.0))
+        .vscroll(true)
         .show(ctx, |ui| {
             actions = render_add_provider_body(ui, add, form, false);
         });
