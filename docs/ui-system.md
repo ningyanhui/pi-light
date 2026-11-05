@@ -6,7 +6,7 @@ This document records the shared visual rules for the native desktop shell and A
 
 - **Work-first, not decoration-first.** The interface should feel like a focused coding workspace. Content, tool activity, connection state and next actions take priority over ornament.
 - **Layered near-black surfaces.** Use opaque, layered surfaces rather than translucent glass cards stacked over a decorative wallpaper.
-- **Cobalt as the single primary accent.** Reserve accent blue for selected navigation, primary actions, focus and links. Do not use it as a large background fill everywhere.
+- **Indigo as the single primary accent.** Reserve `#7C8CFF` for selected navigation, primary actions, focus and links. Do not use it as a large background fill everywhere.
 - **Semantic status colors.** Green means ready/success, amber means attention/waiting, red means failure/destructive. Provider and package identity colors may remain distinct.
 - **Consistent density.** Keep control heights, spacing, corner radii and text hierarchy predictable across desktop and mobile.
 
@@ -31,7 +31,7 @@ This document records the shared visual rules for the native desktop shell and A
 | Warning | `#FBBF24` | Waiting / degraded |
 | Danger | `#F87171` | Error / destructive |
 
-Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol names such as `PurplePrimary` are retained for source compatibility; their values now represent the cobalt palette.
+Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol names such as `PurplePrimary` are retained for source compatibility; their values now represent the shared indigo palette.
 
 ## Desktop composition
 
