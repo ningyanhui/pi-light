@@ -32,6 +32,8 @@ pub enum Icon {
     User,
     Terminal,
     Clock,
+    More,
+    PanelRight,
 }
 
 struct Pen<'a> {
@@ -235,6 +237,15 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.circle(12.0, 12.0, 8.5);
             pen.line(&[(12.0, 7.0), (12.0, 12.0), (15.5, 14.0)]);
             pen.dot(12.0, 12.0, 0.6);
+        }
+        Icon::More => {
+            pen.dot(6.0, 12.0, 1.4);
+            pen.dot(12.0, 12.0, 1.4);
+            pen.dot(18.0, 12.0, 1.4);
+        }
+        Icon::PanelRight => {
+            pen.rect(3.5, 4.5, 17.0, 15.0, 2.5);
+            pen.line(&[(14.5, 4.5), (14.5, 19.5)]);
         }
     }
 }

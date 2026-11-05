@@ -37,10 +37,11 @@ Android uses the matching Compose tokens in `ui/theme/Theme.kt`. Legacy symbol n
 
 1. **Title bar (frameless):** the window has no OS decorations (`with_decorations(false)`); `show_title_bar` paints brand, the workspace switcher, 打开文件夹, remote / reconnect / settings icons and custom minimize / maximize / close. Empty bar space drags the window, double-click toggles maximize, and `handle_window_frame` provides 5px resize edges plus a 1px window border.
 2. **Workspace switching:** never ask for a typed path. The switcher dropdown offers the native folder picker (`rfd`), recent folders, and a drag-and-drop hint; Ctrl+O and dropping a folder onto the window do the same. All routes end in `apply_workdir_path`.
-3. **Session strip:** current session identity only (title, id, message count). Creating sessions lives in the dock so there is one entry point.
-4. **Conversation canvas:** assistant content is capped at a readable measure; user messages remain right-aligned and narrower. Streaming and completed messages share the same typographic rhythm.
-5. **Composer:** the strongest interactive surface: input + send on the first row, model / thinking / settings chips and stop / retry on the second. Context-reference affordances must describe what they really do.
-6. **Settings drawer:** one consistent panel surface with a clear title, tabs, scrollable content and explicit error feedback.
+3. **Icon rail + side panel:** a 48px rail (`show_icon_rail`) switches the 248px side panel between 会话 / 文件 / Git; clicking the active icon collapses the panel. The rail also holds 扩展市场 and 设置. Sessions are grouped into 最近 (24h) / 更早, with one 新建会话 entry in the panel header.
+4. **Session strip + inspector:** the strip shows title, id / message count (or an Agent 运行中 pill), the current model · thinking, and the inspector toggle. The right inspector (`timeline_ui::show_inspector`, default on at ≥1280px) shows context usage, files read / changed this turn and run stats.
+5. **Conversation canvas:** content is centred at ≤820px. Tool calls render as a step timeline (`timeline_ui::show_timeline`): 读取 / 执行 / 修改 / 写入 / 搜索 rows with status, duration and an inline diff for edit / write steps (`tool_step::summarize` derives target and diff from the tool `args`).
+6. **Composer:** a floating card centred under the canvas: reference chips, the input, then 引用文件 / model / thinking on the left and retry + send (or 停止 while streaming) on the right.
+7. **Settings drawer:** one consistent panel surface with a clear title, tabs, scrollable content and explicit error feedback.
 
 ## Rendering rules (desktop)
 

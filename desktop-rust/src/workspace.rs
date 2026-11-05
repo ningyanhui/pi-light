@@ -74,6 +74,8 @@ pub struct Toast {
 
 pub struct WorkspaceUi {
     pub dock: DockTab,
+    /// Side panel visibility; the icon rail toggles it.
+    pub dock_open: bool,
     pub git_page: GitPage,
     pub cwd_popover: bool,
     pub switching: bool,
@@ -94,6 +96,7 @@ impl Default for WorkspaceUi {
     fn default() -> Self {
         Self {
             dock: DockTab::Sessions,
+            dock_open: true,
             git_page: GitPage::Changes,
             cwd_popover: false,
             switching: false,
@@ -211,6 +214,15 @@ pub fn session_time_label(updated_at: u64) -> String {
         updated_at
     };
     workspace_git::relative_from_now(secs as i64, now_secs())
+}
+
+fn is_recent(updated_at: u64) -> bool {
+    let secs = if updated_at > 10_000_000_000 {
+        updated_at / 1000
+    } else {
+        updated_at
+    };
+    now_secs() - (secs as i64) < 24 * 3600
 }
 
 fn now_secs() -> i64 {
@@ -432,66 +444,37 @@ pub fn show_dock(
     switching: bool,
     textures: Option<&ShellTextures>,
 ) -> Option<DockAction> {
-    egui::Frame::none()
-        .fill(theme::input_bg())
-        .rounding(Rounding::same(10.0))
-        .inner_margin(egui::Margin::same(3.0))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 3.0;
-                let seg_w = ((ui.available_width() - 6.0) / 3.0).floor().max(0.0);
-                for (tab, label, icon) in [
-                    (
-                        DockTab::Sessions,
-                        "会话",
-                        textures.and_then(|t| t.icon_sessions.as_ref()),
-                    ),
-                    (
-                        DockTab::Files,
-                        "文件",
-                        textures.and_then(|t| t.icon_files.as_ref()),
-                    ),
-                    (
-                        DockTab::Git,
-                        "Git",
-                        textures.and_then(|t| t.icon_git.as_ref()),
-                    ),
-                ] {
-                    let selected = workspace.dock == tab;
-                    let text = egui::RichText::new(label).size(12.5).color(if selected {
-                        theme::text_primary()
-                    } else {
-                        theme::text_muted()
-                    });
-                    let button = if let Some(tex) = icon {
-                        egui::Button::image_and_text((tex.id(), egui::vec2(14.0, 14.0)), text)
-                    } else {
-                        egui::Button::new(text)
-                    };
-                    let resp = ui.add(
-                        button
-                            .fill(if selected {
-                                theme::card_bg()
-                            } else {
-                                Color32::TRANSPARENT
-                            })
-                            .stroke(if selected {
-                                Stroke::new(1.0_f32, theme::hairline())
-                            } else {
-                                Stroke::NONE
-                            })
-                            .rounding(Rounding::same(8.0))
-                            .min_size(egui::vec2(seg_w, 28.0)),
-                    );
-                    if resp.clicked() {
-                        workspace.dock = tab;
-                    }
+    let title = match workspace.dock {
+        DockTab::Sessions => "会话",
+        DockTab::Files => "文件",
+        DockTab::Git => "Git",
+    };
+    let mut header_action = None;
+    ui.horizontal(|ui| {
+        ui.set_min_height(28.0);
+        ui.label(
+            egui::RichText::new(title)
+                .strong()
+                .size(13.5)
+                .color(theme::text_primary()),
+        );
+        if workspace.dock == DockTab::Sessions {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let enabled = !(streaming || switching);
+                let resp = ui
+                    .add_enabled_ui(enabled, |ui| {
+                        crate::icons::icon_button(ui, crate::icons::Icon::Plus, "新建会话")
+                    })
+                    .inner;
+                if resp.clicked() {
+                    header_action = Some(DockAction::NewSession);
                 }
             });
-        });
-    ui.add_space(10.0);
+        }
+    });
+    ui.add_space(6.0);
 
-    let mut action = match workspace.dock {
+    let action = match workspace.dock {
         DockTab::Sessions => {
             show_sessions_panel(ui, workspace, hub, workdir, streaming || switching)
         }
@@ -499,36 +482,7 @@ pub fn show_dock(
         DockTab::Git => show_git_panel(ui, workspace, switching, textures),
     };
 
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            if dock_link(ui, "⚙ 设置").clicked() {
-                action = Some(DockAction::OpenSettings);
-            }
-            if dock_link(ui, "市场").clicked() {
-                action = Some(DockAction::OpenMarketplace);
-            }
-            if dock_link(ui, "远程").clicked() {
-                action = Some(DockAction::OpenRemote);
-            }
-        });
-        ui.add_space(4.0);
-        theme::hairline_rule(ui);
-    });
-    action
-}
-
-fn dock_link(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(
-            egui::RichText::new(label)
-                .size(12.0)
-                .color(theme::text_muted()),
-        )
-        .frame(false)
-        .min_size(egui::vec2(0.0, 28.0)),
-    )
+    action.or(header_action)
 }
 
 fn show_sessions_panel(
@@ -539,27 +493,6 @@ fn show_sessions_panel(
     locked: bool,
 ) -> Option<DockAction> {
     let mut action = None;
-    let new_resp = ui.add_enabled(
-        !locked,
-        egui::Button::new(
-            egui::RichText::new("+ 新建会话")
-                .color(Color32::WHITE)
-                .size(13.0),
-        )
-        .fill(theme::accent())
-        .rounding(Rounding::same(9.0))
-        .min_size(egui::vec2(ui.available_width(), 34.0)),
-    );
-    if new_resp.clicked() {
-        action = Some(DockAction::NewSession);
-    }
-    ui.add_space(8.0);
-    ui.label(
-        egui::RichText::new(format!("最近会话 · {}", hub.list().len()))
-            .size(11.0)
-            .color(theme::text_dim()),
-    );
-    ui.add_space(6.0);
     if let Some(rename_action) = show_rename_dialog(ui, workspace, hub) {
         action = Some(rename_action);
     }
@@ -571,15 +504,27 @@ fn show_sessions_panel(
         .max_height(list_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            let mut group: Option<bool> = None;
             for i in indices {
                 let Some(session) = hub.list().get(i) else {
                     continue;
                 };
+                let recent = is_recent(session.updated_at);
+                if group != Some(recent) {
+                    group = Some(recent);
+                    ui.add_space(if recent { 2.0 } else { 10.0 });
+                    ui.label(
+                        egui::RichText::new(if recent { "最近" } else { "更早" })
+                            .size(11.0)
+                            .color(theme::text_dim()),
+                    );
+                    ui.add_space(4.0);
+                }
                 let selected = i == active;
                 let wd = session.workdir.as_deref().unwrap_or(workdir);
                 let time = session_time_label(session.updated_at);
                 let (resp, menu) =
-                    session_row(ui, i, &session.title, &display_workdir(wd), &time, selected);
+                    session_row(ui, i, &session.title, &workdir_name(wd), &time, selected);
                 ui.add_space(2.0);
                 if let Some(next) = menu {
                     action = Some(next);

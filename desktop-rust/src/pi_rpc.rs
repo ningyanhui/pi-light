@@ -85,6 +85,8 @@ pub struct TraceStep {
     pub duration_ms: Option<u64>,
     /// Compact JSON of `args` from `tool_execution_start` (truncated).
     pub args_preview: Option<String>,
+    /// Target / diff derived from the full `args` for the timeline view.
+    pub summary: Option<crate::tool_step::StepSummary>,
 }
 
 /// Events delivered from the Pi stdout reader to the UI thread.
@@ -101,6 +103,7 @@ pub enum PiRpcEvent {
         tool_call_id: String,
         tool_name: String,
         args_preview: Option<String>,
+        summary: Option<crate::tool_step::StepSummary>,
     },
     /// Tool execution finished (`tool_execution_end`).
     ToolTraceEnd {
@@ -501,10 +504,12 @@ fn parse_events(val: &Value) -> Vec<PiRpcEvent> {
             if tool_call_id.is_empty() {
                 Vec::new()
             } else {
+                let summary = crate::tool_step::summarize(&tool_name, val.get("args"));
                 vec![PiRpcEvent::ToolTraceStart {
                     tool_call_id,
                     tool_name,
                     args_preview: preview_tool_args(val.get("args")),
+                    summary,
                 }]
             }
         }

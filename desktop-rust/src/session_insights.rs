@@ -198,6 +198,7 @@ impl SessionInsights {
                 tool_call_id,
                 tool_name,
                 args_preview,
+                summary,
             } => {
                 if let Some(step) = self
                     .trace_steps
@@ -209,6 +210,9 @@ impl SessionInsights {
                     if args_preview.is_some() {
                         step.args_preview = args_preview.clone();
                     }
+                    if summary.is_some() {
+                        step.summary = summary.clone();
+                    }
                 } else {
                     self.trace_steps.push(TraceStep {
                         tool_call_id: tool_call_id.clone(),
@@ -217,6 +221,7 @@ impl SessionInsights {
                         is_error: false,
                         duration_ms: None,
                         args_preview: args_preview.clone(),
+                        summary: summary.clone(),
                     });
                 }
             }
@@ -243,6 +248,7 @@ impl SessionInsights {
                         is_error: *is_error,
                         duration_ms: *duration_ms,
                         args_preview: None,
+                        summary: None,
                     });
                 }
             }
@@ -329,6 +335,7 @@ mod tests {
             tool_call_id: "c1".to_owned(),
             tool_name: "bash".to_owned(),
             args_preview: Some("{\"command\":\"ls\"}".to_owned()),
+            summary: None,
         });
         ins.handle_rpc_event(&PiRpcEvent::ToolTraceEnd {
             tool_call_id: "c1".to_owned(),
