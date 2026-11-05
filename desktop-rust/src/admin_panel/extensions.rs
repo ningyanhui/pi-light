@@ -44,6 +44,24 @@ pub fn parse_skill_description(text: &str) -> Option<String> {
     desc.filter(|d| !d.is_empty())
 }
 
+/// 去掉开头的 `---` frontmatter，只留正文（查看器里不把元数据当段落渲染）。
+pub fn strip_frontmatter(text: &str) -> &str {
+    let Some(rest) = text
+        .strip_prefix("---\r\n")
+        .or_else(|| text.strip_prefix("---\n"))
+    else {
+        return text;
+    };
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        offset += line.len();
+        if line.trim() == "---" {
+            return rest[offset..].trim_start();
+        }
+    }
+    text
+}
+
 pub fn skill_descriptions(items: &[ManagedItem]) -> BTreeMap<String, String> {
     items
         .iter()

@@ -178,7 +178,7 @@ pub(super) fn render_skills_page(
                                 .show(ui, |ui| {
                                     crate::markdown_ui::show_markdown(
                                         ui,
-                                        text,
+                                        strip_frontmatter(text),
                                         crate::markdown_ui::MarkdownView {
                                             streaming: false,
                                             show_role: false,
