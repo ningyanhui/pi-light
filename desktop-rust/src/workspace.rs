@@ -615,32 +615,38 @@ fn session_row(
             });
         });
     let resp = inner.response.interact(egui::Sense::click());
-    let menu_id = egui::Id::new(("dock_session_row_menu", index));
-    let menu_was_open = ui.data(|d| d.get_temp::<bool>(menu_id).unwrap_or(false));
-    let btn = egui::Rect::from_center_size(
-        egui::pos2(resp.rect.right() - 22.0, resp.rect.center().y),
-        egui::vec2(26.0, 24.0),
-    );
-    // Always create the child so egui's auto-ids (and the menu state) stay stable per row.
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
-    if selected || menu_was_open || ui.rect_contains_pointer(resp.rect) {
-        let open = {
-            let ui = &mut child;
-            ui.menu_button(
-                egui::RichText::new("⋯")
+    let popup_id = egui::Id::new(("dock_session_row_menu", index));
+    let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+    if selected || popup_open || ui.rect_contains_pointer(resp.rect) {
+        let btn = egui::Rect::from_center_size(
+            egui::pos2(resp.rect.right() - 22.0, resp.rect.center().y),
+            egui::vec2(26.0, 24.0),
+        );
+        let btn_resp = ui.new_child(egui::UiBuilder::new().max_rect(btn)).add(
+            egui::Button::new(
+                egui::RichText::new("\u{22ef}")
                     .size(16.0)
                     .color(theme::text_muted()),
-                |ui| {
-                    if let Some(next) = session_context_menu(ui, index) {
-                        action = Some(next);
-                    }
-                },
             )
-            .inner
-            .is_some()
-        };
-        if open != menu_was_open {
-            ui.data_mut(|d| d.insert_temp(menu_id, open));
+            .frame(popup_open),
+        );
+        if btn_resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+        let picked = egui::popup_below_widget(
+            ui,
+            popup_id,
+            &btn_resp,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                ui.set_min_width(140.0);
+                session_context_menu(ui, index)
+            },
+        )
+        .flatten();
+        if picked.is_some() {
+            action = picked;
+            ui.memory_mut(|m| m.close_popup());
         }
     }
     let hovered = resp.hovered();
