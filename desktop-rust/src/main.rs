@@ -1130,6 +1130,16 @@ impl eframe::App for PiLightApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
 
+        // Minimized windows report a zero-sized screen; laying out panels then
+        // yields negative widths and trips egui's size assertions.
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        let screen = ctx.screen_rect();
+        if minimized || screen.width() < 64.0 || screen.height() < 64.0 {
+            self.persist_sessions(false);
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            return;
+        }
+
         // M5′: 键盘导航（在面板渲染前消费按键，避免被 TextEdit 截获）
         if self.invoke.active {
             let mut up = false;
@@ -1678,7 +1688,7 @@ impl PiLightApp {
                                 && !self.workspace.switching
                                 && (!input.trim().is_empty() || !chips_empty);
                             let input_response = ui.add_sized(
-                                [ui.available_width() - 48.0, 36.0],
+                                [(ui.available_width() - 48.0).max(0.0), 36.0],
                                 egui::TextEdit::singleline(input)
                                     .hint_text("给 Pi 发消息…  / 命令 · @ 文件 · # 引用会话")
                                     .font(egui::FontId::proportional(14.5))
@@ -1802,7 +1812,9 @@ impl PiLightApp {
             .show(ctx, |ui| {
                 self.paint_main_backdrop(ui);
                 if empty && !is_streaming {
-                    self.show_chat_welcome(ui);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false; 2])
+                        .show(ui, |ui| self.show_chat_welcome(ui));
                     return;
                 }
 

@@ -439,7 +439,7 @@ pub fn show_dock(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                let seg_w = ((ui.available_width() - 6.0) / 3.0).floor();
+                let seg_w = ((ui.available_width() - 6.0) / 3.0).floor().max(0.0);
                 for (tab, label, icon) in [
                     (
                         DockTab::Sessions,

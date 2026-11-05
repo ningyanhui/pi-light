@@ -1043,7 +1043,7 @@ fn render_browse(ui: &mut egui::Ui, state: &mut ExtMarketState, result: &mut Mar
         let resp = ui.add(
             egui::TextEdit::singleline(&mut state.query)
                 .hint_text("搜索 Pi 包")
-                .desired_width(ui.available_width() - 72.0),
+                .desired_width((ui.available_width() - 72.0).max(40.0)),
         );
         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             search = true;
